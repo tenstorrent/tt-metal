@@ -155,8 +155,8 @@ void bind_moe_head(nb::module_& mod) {
                 (forward_chunks > 1) takes it. Each SP row holds every chunk's rows back to back, each chunk in main's
                 rotated layout; padding rows are not routed.
 
-        The head runs the call's rows as the row blocks its planner picked from its L1 fit (1 wherever the rows fit at
-        once): one program a chip whose kernels block over the blocks.
+        The head runs the call's rows as the row blocks its planner picked (plan_moe_head): one program a chip whose
+        kernels block over the blocks.
 
         Returns:
             MoEHeadOutputs: shared_expert_output, routing_rows, dispatch_buffer, route_words and the combine

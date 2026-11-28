@@ -139,7 +139,7 @@ class MoEBlock:
         )
         self.accumulators = self.plan.accumulators
         self.combine.accumulator_count = self.accumulators
-        # (the head picks its row blocks from its L1 fit; the tail follows its block layout)
+        # (the head picks its row blocks; the tail follows its block layout)
         fit = moe_block_utils.plan_moe_head(resources, dtypes, self.accumulators)
         if not fit:
             raise RuntimeError(f"MoEBlock: moe_head does not fit {chunk} tokens in one call: {fit.reason}")

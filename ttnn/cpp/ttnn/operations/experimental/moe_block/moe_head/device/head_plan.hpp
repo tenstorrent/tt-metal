@@ -115,9 +115,8 @@ struct HeadFit {
     std::vector<HeadPlanned> planned;  // best first
     std::string reason;
     std::optional<HeadPlanned> unconstrained;  // the cost model's pick with unlimited L1
-    std::string note;                          // what L1 forced
-    // the row blocks the head runs a call's rows as (plan_moe_head's pick: 1 wherever the rows fit at once, else the
-    // count with the least predicted time; HeadShape.row_blocks of the planned shape)
+    std::string note;                          // what L1 forced, or plan_moe_head's row-chunk preference
+    // the row blocks the head runs a call's rows as (plan_moe_head's pick; HeadShape.row_blocks of the planned shape)
     uint32_t row_blocks = 1;
 };
 

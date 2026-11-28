@@ -69,8 +69,9 @@ A call whose rows do not fit the head's L1 at once runs as k row blocks: one lau
 the call's rows (`device/kernels/row_block.hpp`: every kernel's `kernel_main` runs `row_block::begin` / its work /
 `row_block::end` in a plain `for` loop; k is each kernel's named compile-time arg `row_blocks`). The head's planner
 picks k (`plan_moe_head`, `HeadFit.row_blocks`): 1 wherever the rows fit, else the count whose plan fits with the least
-predicted time, among the counts that give every block whole tile rows and whole pages of every DRAM bank of x and the
-shared expert's output (the kernels step a block's stride a bank). Tests can force it
+predicted time; a pick of more than two row chunks a block gives way to the least predicted plan of at most two (any
+count, within 1.3x of its predicted time). The counts give every block whole tile rows and whole pages of every DRAM
+bank of x and the shared expert's output (the kernels step a block's stride a bank). Tests can force it
 (`MoEBlockConfig.force_head_row_blocks`, test only).
 
 The dispatch, the routed experts and the combine run once on the call's rows whatever k is, so every expert's weights

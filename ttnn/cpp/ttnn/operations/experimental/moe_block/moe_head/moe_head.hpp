@@ -36,7 +36,7 @@ int64_t moe_head_l1_free(MoEBlockResources& resources, std::optional<int64_t> l1
 
 // The MoE head's whole host plan on the block's resources, computed once and kept in the resources
 // ("moe_head/plan/..."): model_checks, then head_plan_fit for each row-block count the rows allow (HeadFit.row_blocks:
-// 1 wherever the rows fit at once, else the count with the least predicted time), at
+// 1 wherever the rows fit in at most two row chunks, else plan_moe_head's least predicted count), at
 // moe_head_l1_free(resources, l1_free) - the plan the op runs. cb_floor: the other static CBs under the head's arena
 // (default: the block's L1 plan's head_cb_floor when the resources hold one, else 0).
 const HeadFit& plan_moe_head(

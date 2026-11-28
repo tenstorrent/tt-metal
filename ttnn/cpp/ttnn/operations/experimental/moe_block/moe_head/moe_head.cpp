@@ -179,10 +179,20 @@ const HeadFit& plan_moe_head(
         options.l1_free = free_l1;
         options.cb_floor = floor;
         options.min_router_iterations = std::max<uint32_t>(1, resources.config().head_router_iterations);
-        // The row blocks: the call's rows at once wherever they fit, else the count whose plan fits with the least
-        // predicted time (blocks x a block's). The kernels block over the blocks in one program.
-        std::optional<HeadFit> first, best;
-        double best_us = 0;
+        // The row blocks. The pick: the call's rows at once wherever they fit, else the count whose plan fits with the
+        // least predicted time (blocks x a block's). A pick of more than kMaxRowChunks row chunks a block gives way to
+        // the least predicted layout of at most kMaxRowChunks chunks a block, over every count, within kRowChunksSlack
+        // of the pick's predicted time - unless the config forces the row blocks or the router iterations. Past two
+        // chunks a block the head runs slower than head_cost predicts (with more than two router iterations, the
+        // router's logits wait on its chain: the engine runs one iteration ahead). The kernels loop over the blocks in
+        // one program.
+        constexpr uint32_t kMaxRowChunks = 2;
+        constexpr double kRowChunksSlack = 1.3;  // (head_cost's error between the two kinds of layout)
+        const bool prefer_few_chunks =
+            !resources.config().force_head_row_blocks && resources.config().head_router_iterations <= 1;
+        std::optional<HeadFit> first, pick, preferred;
+        double pick_us = 0, preferred_us = 0;
+        bool preferred_moved = false;  // (its layout not its count's least predicted: its L1 note is another's)
         for (const uint32_t k : moe_head_l1_detail::row_block_counts(resources)) {
             const HeadShape shape =
                 moe_head_plan_detail::head_shape_of(resources, accumulators, dtypes.shared_weights, k);
@@ -194,17 +204,41 @@ const HeadFit& plan_moe_head(
             if (!fit.ok || fit.planned.empty()) {
                 continue;
             }
-            const double total_us = k * fit.planned[0].predicted_us;
-            if (!best || total_us < best_us) {
-                best = fit;
-                best_us = total_us;
+            // (this count's least predicted layout of at most kMaxRowChunks chunks, a copy with it in front)
+            const auto few = std::find_if(fit.planned.begin(), fit.planned.end(), [&](const HeadPlanned& p) {
+                return p.layout.row_chunks <= kMaxRowChunks;
+            });
+            if (prefer_few_chunks && few != fit.planned.end() && (!preferred || k * few->predicted_us < preferred_us)) {
+                preferred = fit;
+                preferred_moved = few != fit.planned.begin();
+                std::rotate(
+                    preferred->planned.begin(),
+                    preferred->planned.begin() + (few - fit.planned.begin()),
+                    preferred->planned.begin() + (few - fit.planned.begin()) + 1);
+                preferred_us = k * few->predicted_us;
             }
-            if (k == 1) {
-                break;  // (one block wherever the rows fit at once)
+            const bool one_block_fits = pick && pick->row_blocks == 1;
+            if (!one_block_fits && (!pick || k * fit.planned[0].predicted_us < pick_us)) {
+                pick_us = k * fit.planned[0].predicted_us;
+                pick = std::move(fit);
+            }
+            if (pick && pick->row_blocks == 1 &&
+                (!prefer_few_chunks || pick->planned[0].layout.row_chunks <= kMaxRowChunks)) {
+                break;  // (one block of few enough chunks, or no preference: the pick)
             }
         }
-        if (best) {
-            return *best;
+        if (pick && pick->planned[0].layout.row_chunks > kMaxRowChunks && preferred &&
+            preferred_us <= kRowChunksSlack * pick_us) {
+            const std::string l1_note = preferred_moved || preferred->note.empty() ? "" : "; " + preferred->note;
+            preferred->note = "at most " + std::to_string(kMaxRowChunks) +
+                              " row chunks a block preferred: " + std::to_string(preferred->row_blocks) + " x " +
+                              describe_layout(preferred->planned[0].layout) + " over " +
+                              std::to_string(pick->row_blocks) + " x " + describe_layout(pick->planned[0].layout) +
+                              l1_note;
+            return *preferred;
+        }
+        if (pick) {
+            return *pick;
         }
         if (!first) {
             first = HeadFit{};
