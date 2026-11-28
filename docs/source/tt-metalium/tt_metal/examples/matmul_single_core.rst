@@ -191,7 +191,7 @@ maps tiles in the row-major order of the matrices in DRAM to read into the circu
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp
+    // tt_metal/programming_examples/matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp
     void kernel_main() {
         // same arg indices as in reader_binary_diff_lenghts for compat
         uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -257,7 +257,7 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/matmul_single_core/kernels/compute/mm.cpp
+    // tt_metal/programming_examples/matmul/matmul_single_core/kernels/compute/mm.cpp
     void kernel_main() {
         const uint32_t Mt = get_compile_time_arg_val(0);
         const uint32_t Kt = get_compile_time_arg_val(1);
@@ -306,7 +306,7 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp
+    // tt_metal/programming_examples/matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp
 
     void kernel_main() {
         // Runtime arguments to write data back into the output buffer.
