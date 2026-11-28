@@ -520,8 +520,7 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
     golden_fn = ttnn.get_golden_function(ttnn_fn)
     out_pt = golden_fn(a_pt, b_pt)
 
-    status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
-    assert status >= 0.999
+    assert torch.equal(out_pt, tt_out)
 
 
 @pytest.mark.parametrize(
@@ -583,8 +582,7 @@ def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
     golden_fn = ttnn.get_golden_function(ttnn_fn)
     out_pt = golden_fn(a_pt, b_pt)
 
-    status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
-    assert status >= 0.999
+    assert torch.equal(out_pt, tt_out)
 
 
 binary_inplace_fns = {
@@ -1024,7 +1022,10 @@ def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
 
     output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    if torch_dtype == torch.int32:
+        assert torch.equal(torch_output_tensor, output_tensor)
+    else:
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(

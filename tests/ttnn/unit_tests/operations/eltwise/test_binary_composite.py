@@ -238,8 +238,9 @@ def test_binary_left_shift(input_shapes, device):
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+    # The documented shift range is [0, 31]; counts outside it are not part of the contract, so only in-range lanes are compared.
+    in_range = (in_data2 >= 0) & (in_data2 <= 31)
+    assert torch.equal(golden_tensor[in_range], output_tensor[in_range])
 
 
 @pytest.mark.parametrize(
@@ -263,8 +264,7 @@ def test_binary_right_shift(input_shapes, device):
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -287,8 +287,7 @@ def test_unary_left_shift(input_shapes, device):
         golden_tensor = golden_function(in_data1, scalar)
         output_tensor = ttnn.to_torch(output_tensor)
 
-        pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-        assert pcc >= 0.99, f"Failed for scalar={scalar}"
+        assert torch.equal(golden_tensor, output_tensor), f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -311,8 +310,7 @@ def test_unary_right_shift(input_shapes, device):
         golden_tensor = golden_function(in_data1, scalar)
         output_tensor = ttnn.to_torch(output_tensor)
 
-        pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-        assert pcc >= 0.99, f"Failed for scalar={scalar}"
+        assert torch.equal(golden_tensor, output_tensor), f"Failed for scalar={scalar}"
 
 
 # Kimi K3 betas: 4 for the gate half, 25 for the up half. These are the betas the fused SFPU kernel

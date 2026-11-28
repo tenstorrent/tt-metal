@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal, compare_pcc
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -27,8 +27,8 @@ def test_binary_lcm_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -51,8 +51,7 @@ def test_binary_lcm_pos(input_shapes, device):
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -75,8 +74,7 @@ def test_binary_lcm_neg(input_shapes, device):
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
