@@ -4,102 +4,135 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_polyval.h"
 #include "cmath_common.h"
 
-using namespace sfpi;
+namespace ckernel::sfpu {
 
-namespace ckernel {
-namespace sfpu {
+// i0(x), the modified Bessel function of the first kind, order 0. It is even, so both regions work on |x|:
+//   |x| <= 6:       1 + t * P(t), t = x^2, P a minimax fit for relative error
+//   |x| >  6:       exp(|x|) / sqrt(|x|) * Q(1/|x|) (A&S 9.7.1), 1/sqrt(2*pi) folded into Q
+//   |x| >  91.9008: +inf, the largest float32 x whose I0 is finite; +/-inf gives +inf, NaN gives NaN
+// Region 1 runs on every lane and the asymptotic result overwrites it where |x| > 6. Each piece is sized to
+// the DEST width (is_fp32_dest_acc_en), not the input format:
+//
+//                32-bit DEST                                  16-bit DEST
+//   P(t)         degree 8                                     degree 5
+//   exp(|x|)     _sfpu_exp_fp32_accurate_nonneg_unsafe_<8>    bit pattern of |x|/ln2 + 375
+//   1/sqrt(|x|)  magic seed, cubic, one Newton step           magic seed, cubic
+//   Q(u)         degree 5                                     degree 1
+//
+// Both exp forms return exp(|x|) * 2^-8 and Q carries the 2^8, so the result overflows where I0 does rather
+// than where exp does (88.72). APPROXIMATION_MODE selects nothing.
 
-// Series I0(x) = sum_k A<k> * t^k, t = x*x, A<k> = 1 / (4^k * (k!)^2), truncated after k = 11.
-struct I0Series {
-    static constexpr float A0 = 1.0f;
-    static constexpr float A1 = 0.25f;
-    static constexpr float A2 = 0.015625f;
-    static constexpr float A3 = 0.0004340277778f;
-    static constexpr float A4 = 0.000006781684028f;
-    static constexpr float A5 = 6.78E-08f;
-    static constexpr float A6 = 4.71E-10f;
-    static constexpr float A7 = 2.40E-12f;
-    static constexpr float A8 = 9.39E-15f;
-    static constexpr float A9 = 2.90E-17f;
-    static constexpr float A10 = 7.24E-20f;
-    static constexpr float A11 = 1.50E-22f;
-};
+// 16-bit DEST asymptotic region: exp(|x|) * 2^-8 * rsqrt_y * Q(1/|x|), rsqrt_y = 1/sqrt(|x|).
+inline sfpi::vFloat calculate_i0_asymptotic_bf16_(const sfpi::vFloat abs_x, const sfpi::vFloat rsqrt_y) {
+    // w = |x|/ln2 + 375 lies in [375, 512), so its fraction bits shifted left by 8 read as
+    // z = 2^(n-8) * m, n = floor(|x|/ln2), m in [1, 2); C(m) = 2^(m-1)/m is a cubic fit (8.7e-4).
+    const sfpi::vFloat w = abs_x * 1.442695f + 375.0f;
+    const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+    const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(sfpi::exman(w)) << 8);
+    const sfpi::vFloat c = PolynomialEvaluator::eval(
+        sfpi::setexp(z, 127), 1.775390625f, -1.376953125f, 0.70751953125f, -0.10650634765625f);
+    // Q * 2^8: degree 1, 4.9e-4 relative.
+    const sfpi::vFloat correction = inv_abs_x * 14.359375f + 102.0625f;
+    return z * c * rsqrt_y * correction;
+}
 
-/**
- * @brief Programs the state calculate_i0 reads: vConstFloatPrgm0-2 = I0Series::A5, A4, A3.
- * @note Run it after any other SFPU op's init and before calculate_i0: the programmable
- *       constant registers are shared with other ops' inits. calculate_i0 sets and
- *       restores ADDR_MOD_6 itself.
- */
+// The rsqrt seed and cubic-correction constants, held across the loop.
 inline void i0_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    vConstFloatPrgm0 = I0Series::A5;
-    vConstFloatPrgm1 = I0Series::A4;
-    vConstFloatPrgm2 = I0Series::A3;
+    sfpi::vConstIntPrgm0 = 0x5f1110a0;
+    sfpi::vConstFloatPrgm1 = 2.2825186f;
+    sfpi::vConstFloatPrgm2 = 2.2533049f;
 }
 
-/**
- * @brief I0(x) for ITERATIONS dest rows: the Horner chain of I0Series in t = x*x, evaluated for
- *        two rows per trip so the second row's SFPMADs fill the first row's latency shadow.
- *        A11..A9 stay in LREGs across the loop, A5..A3 come from vConstFloatPrgm0-2.
- * @tparam ITERATIONS: Dest rows to process; must be even.
- * @note Call i0_init first; this reads vConstFloatPrgm0-2 as it programs them. The paired store's
- *       ADDR_MOD_6 stride is set at entry and restored to the dest += 2 invariant at exit, as the
- *       throttled matmul does, so the two can be interleaved.
- */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_i0() {
-    static_assert(ITERATIONS % 2 == 0, "calculate_i0 processes two rows per trip");
-    // The paired store's advance: dest += 2 rows through ADDR_MOD_6, restored below.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * SFP_DESTREG_STRIDE}}.set(ADDR_MOD_6);
-    const vFloat a11 = I0Series::A11;
-    const vFloat a10 = I0Series::A10;
-    const vFloat a9 = I0Series::A9;
+    // The largest x whose I0 is finite in float32 (0x42b7cd31); on a 16-bit DEST, the largest such fp16 value.
+    constexpr float I0_MAX_INPUT = is_fp32_dest_acc_en ? 91.90076446533203f : 91.875f;
+    constexpr float I0_THRESHOLD = 6.0f;
 
-    // Not unrolled: sfpi rolls an unrolled body into the replay buffer from slot 0, and this
-    // body (38 instructions per trip) would fill all 32 slots, including the FPU's [16, 32) that
-    // the matmul MOP replays (math::replay_buf_offset).
-#pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d += 2) {
-        vFloat in0 = dst_reg[0];
-        vFloat in1 = dst_reg[1];
-        vFloat t0 = in0 * in0;
-        vFloat t1 = in1 * in1;
-        vFloat r0 = t0 * a11 + a10;
-        vFloat r1 = t1 * a11 + a10;
-        r0 = r0 * t0 + a9;
-        r1 = r1 * t1 + a9;
-        vFloat a = I0Series::A8;
-        r0 = r0 * t0 + a;
-        r1 = r1 * t1 + a;
-        a = I0Series::A7;
-        r0 = r0 * t0 + a;
-        r1 = r1 * t1 + a;
-        a = I0Series::A6;
-        r0 = r0 * t0 + a;
-        r1 = r1 * t1 + a;
-        r0 = r0 * t0 + vConstFloatPrgm0;  // A5
-        r1 = r1 * t1 + vConstFloatPrgm0;
-        r0 = r0 * t0 + vConstFloatPrgm1;  // A4
-        r1 = r1 * t1 + vConstFloatPrgm1;
-        r0 = r0 * t0 + vConstFloatPrgm2;  // A3
-        r1 = r1 * t1 + vConstFloatPrgm2;
-        a = I0Series::A2;
-        r0 = r0 * t0 + a;
-        r1 = r1 * t1 + a;
-        a = I0Series::A1;
-        r0 = r0 * t0 + a;
-        r1 = r1 * t1 + a;
-        dst_reg[0] = r0 * t0 + I0Series::A0;
-        dst_reg[1].mode(ADDR_MOD_2) = r1 * t1 + I0Series::A0;
+#pragma GCC unroll 1
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat abs_x = sfpi::abs(x);
+
+        // Region 1 and 1/sqrt(|x|) on every lane, interleaved to fill SFPMAD latency slots and scoped so their
+        // temporaries free LRegs before the asymptotic block. rsqrt: magic seed, then y * (k1 + c * (k2 + c)),
+        // c = -|x| * y^2 (2.0e-5 relative); a 32-bit DEST adds one Newton step (7.3e-8).
+        sfpi::vFloat val;
+        sfpi::vFloat rsqrt_y;
+        sfpi::vFloat q;  // Q(1/|x|), 32-bit DEST only
+        {
+            const sfpi::vFloat t = abs_x * abs_x;
+            const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
+            if constexpr (is_fp32_dest_acc_en) {
+                // Degree 8, 1.0e-8 relative; the t and t^2 terms are the exact Maclaurin 1/4 and 1/64.
+                sfpi::vFloat p = t * 1.4044321e-14f + 2.145839e-12f;
+                rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - rsqrt_i);
+                p = p * t + 4.7780996e-10f;
+                sfpi::vFloat c = abs_x * rsqrt_y;
+                p = p * t + 6.7723136e-08f;
+                c = (-rsqrt_y) * c;
+                p = p * t + 6.7822934e-06f;
+                sfpi::vFloat k = sfpi::vConstFloatPrgm2 + c;
+                p = p * t + 4.3402635e-04f;
+                k = c * k + sfpi::vConstFloatPrgm1;
+                p = p * t + 0.015625f;
+                rsqrt_y = rsqrt_y * k;
+                p = p * t + 0.25f;
+                c = abs_x * rsqrt_y;
+                const sfpi::vFloat half_y = sfpi::addexp(rsqrt_y, -1 /* exp */);
+                c = (-rsqrt_y) * c + 1.0f;
+                val = p * t + 1.0f;
+                rsqrt_y = c * half_y + rsqrt_y;
+
+                // Q(u) * 2^8, u = 1/|x| = rsqrt_y^2: degree 5, 3.4e-8 relative.
+                const sfpi::vFloat q5 = 159.0f;
+                const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+                q = PolynomialEvaluator::eval(inv_abs_x, 102.129196f, 12.770073f, 6.99609375f, 11.265625f, -24.25f, q5);
+            } else {
+                // Degree 5, 1.3e-4 relative.
+                sfpi::vFloat p = t * 1.2572855e-07f + 4.7385693e-06f;
+                rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - rsqrt_i);
+                p = p * t + 4.632473e-04f;
+                sfpi::vFloat c = abs_x * rsqrt_y;
+                p = p * t + 0.01546478271484375f;
+                c = (-rsqrt_y) * c;
+                p = p * t + 0.250244140625f;
+                sfpi::vFloat k = sfpi::vConstFloatPrgm2 + c;
+                val = p * t + 1.0f;
+                k = c * k + sfpi::vConstFloatPrgm1;
+                rsqrt_y = rsqrt_y * k;
+            }
+        }
+
+        // Asymptotic region; past I0_MAX_INPUT, abs_x * inf gives +inf and keeps NaN.
+        v_if(abs_x > I0_THRESHOLD) {
+            if constexpr (is_fp32_dest_acc_en) {
+                const sfpi::vFloat scale = rsqrt_y * q;
+                val = _sfpu_exp_fp32_accurate_nonneg_unsafe_<8>(abs_x) * scale;
+            } else {
+                val = calculate_i0_asymptotic_bf16_(abs_x, rsqrt_y);
+            }
+            v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
+            v_endif;
+        }
+        v_endif;
+
+        // Keyed on the DEST width so a bf16-in/float32-out call keeps float32.
+        if constexpr (!is_fp32_dest_acc_en) {
+            val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg++;
     }
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu

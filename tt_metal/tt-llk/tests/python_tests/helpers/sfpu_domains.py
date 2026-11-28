@@ -186,8 +186,10 @@ _OP_DOMAIN_REGISTRY: dict[
     MathOperation.Softsign: _u(-5.0, 5.0),
     MathOperation.Mish: _u(-5.0, 5.0),
     MathOperation.Selu: _u(-5.0, 5.0),
-    # i0 / i1: the kernels' polynomial fits hold on |x| <= 3.75.
-    MathOperation.I0: _u(-3.75, 3.75),
+    # i0: polynomial for |x| <= 6, asymptotic beyond, +inf past 91.9008. The wide tier reaches the
+    # overflow branch; the narrower ones stay under the format's own overflow (i0(8) = 427.6, i0(13) = 49444).
+    MathOperation.I0: _tiered((-8.0, 8.0), (-13.0, 13.0), (-95.0, 95.0)),
+    # i1: the kernel's polynomial fit holds on |x| <= 3.75.
     MathOperation.I1: _u(-3.75, 3.75),
     MathOperation.Erf: _u(-3.0, 3.0),
     MathOperation.Erfc: _u(-3.0, 3.0),

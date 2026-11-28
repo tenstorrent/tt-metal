@@ -275,19 +275,6 @@ _KNOWN_NONFINITE_LANES: dict[MathOperation, tuple[KnownNonfiniteLanes, ...]] = {
             why="inf where lgamma(x) is a top fp16 value, on a 16-bit Dest",
         ),
     ),
-    # #50465: i0 is a bare Taylor series with no large-|x| branch, so where i0 first
-    # overflows fp16 the truncated series still answers finite.
-    MathOperation.I0: (
-        KnownNonfiniteLanes(
-            issue=50465,
-            input=DataFormat.Float16,
-            output=DataFormat.Float16,
-            low=13.296875,
-            high=13.296875,
-            magnitude=True,
-            why="finite where i0(x) has just overflowed fp16: the series has no large-|x| branch",
-        ),
-    ),
     # #57215: the Float16 store carries exactly 2**16 to inf, and approximate sqrt lands
     # on 2**16 where the answer rounds to 65504.
     MathOperation.Sqrt: (
