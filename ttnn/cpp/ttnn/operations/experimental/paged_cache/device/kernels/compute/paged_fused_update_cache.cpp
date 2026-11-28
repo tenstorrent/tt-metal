@@ -10,6 +10,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
+#ifdef ROW_PATCH_BFP8
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#endif
 
 void kernel_main() {
     const auto has_work = get_arg(args::has_work);
@@ -30,6 +34,24 @@ void kernel_main() {
 
     // Which of the two inputs this instance serves is structural: the factory places one compute
     // kernel per input shard grid, and each binds only its own input buffer.
+#ifdef ROW_PATCH_BFP8
+    // Row patch (see the writer): the only conversion is the input heads tile, head h in row h, packed
+    // into the cache's bfp8 format, which gives each head row its own exponent and mantissa bytes.
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
+    in.wait_front(Wt);
+    for (uint32_t t = 0; t < Wt; ++t) {
+        tile_regs_acquire();
+        copy_tile(dfb::in, t, 0);
+        tile_regs_commit();
+        out.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, dfb::out);
+        tile_regs_release();
+        out.push_back(1);
+    }
+    in.pop_front(Wt);
+#else
     compute_kernel_hw_startup(dfb::in, dfb::untilized_in);
 
     // Untilize input (single block, init only - no uninit needed)
@@ -55,4 +77,5 @@ void kernel_main() {
 #endif
         compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(untilized_cache2, out, 1);
     }
+#endif
 }
