@@ -36,6 +36,9 @@ DramAddressInfo get_dram_address_and_size();
 // Function to compute physical constraints
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(distributed::MeshDevice& mesh_device);
 
+// True if the device's SoC descriptor lists a PCIe core
+bool has_pcie_core(distributed::MeshDevice& mesh_device);
+
 }  // namespace tt::tt_metal::unit_tests::dm
 
 #endif  // DM_COMMON_HPP

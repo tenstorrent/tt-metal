@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh/mesh_device.hpp>
 #include <tuple>
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
 
@@ -66,6 +67,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(distribute
     uint32_t max_transmittable_pages = max_transmittable_bytes / bytes_per_page;
 
     return {bytes_per_page, static_cast<uint32_t>(max_transmittable_bytes), max_transmittable_pages};
+}
+
+bool has_pcie_core(distributed::MeshDevice& mesh_device) {
+    const auto device_id = mesh_device.get_device_ids().front();
+    return !MetalContext::instance().get_cluster().get_soc_desc(device_id).get_cores(CoreType::PCIE).empty();
 }
 
 }  // namespace tt::tt_metal::unit_tests::dm
