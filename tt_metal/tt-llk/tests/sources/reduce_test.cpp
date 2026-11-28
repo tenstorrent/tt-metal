@@ -19,13 +19,23 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) && (POOL_TYPE != ckernel::PoolType::MAX);
+// Wormhole high-fidelity SUM/AVG REDUCE_COL opts into the whole-tile layout (col_whole_tile on the unpack and math
+// inits). LoFi keeps the per-face handoff: its math is not the bottleneck and the coarser handoff costs ~1 cycle/tile.
+#if defined(ARCH_WORMHOLE)
+static constexpr bool COL_WHOLE_TILE =
+    (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL) && (POOL_TYPE != ckernel::PoolType::MAX) && (MATH_FIDELITY != ckernel::MathFidelity::LoFi);
+#define REDUCE_COL_WHOLE_TILE_ARG , COL_WHOLE_TILE
+#else
+static constexpr bool COL_WHOLE_TILE = false;
+#define REDUCE_COL_WHOLE_TILE_ARG
+#endif
 
-// Swapped 4-face REDUCE_ROW posts one SrcA/SrcB handoff per tile; every other path posts one per data face.
-// Must match _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
+// Swapped 4-face REDUCE_ROW and whole-tile REDUCE_COL post one SrcA/SrcB handoff per tile; every other path posts one
+// per data face. Must match _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
 inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    return (IS_SWAPPED_REDUCE_ROW && num_faces == ckernel::MAX_NUM_FACES) ? 1 : num_faces;
+    return ((IS_SWAPPED_REDUCE_ROW && num_faces == ckernel::MAX_NUM_FACES) || COL_WHOLE_TILE) ? 1 : num_faces;
 }
 
 #ifdef LLK_TRISC_UNPACK
@@ -88,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TILE_SIZE_UNPACK_A,
                 TILE_SIZE_UNPACK_B);
         }
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape, scaler_shape);
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM REDUCE_COL_WHOLE_TILE_ARG>(tensor_shape, scaler_shape);
         PROFILER_SYNC();
     }
     {
@@ -145,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY REDUCE_COL_WHOLE_TILE_ARG>(tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -173,7 +183,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
                     {
-                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en>(
+                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en REDUCE_COL_WHOLE_TILE_ARG>(
                             IS_REDUCE_TO_ONE ? 0 : tile /*dst_index*/, tensor_shape);
                     }
                     if constexpr (sync_with_pack)
