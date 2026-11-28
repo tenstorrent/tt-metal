@@ -12,6 +12,7 @@
 #include "scalar.h"
 #include "sync.h"
 #include "utils/gpr.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::atomic
@@ -32,6 +33,9 @@ inline constexpr std::uint8_t LockHeld                  = 1;
 // Template operands are rejected at compile time in every build; hal::gpr(index) operands are checked by require.
 template <std::uint32_t Index>
 inline constexpr bool is_valid_static_gpr = Index == hal::detail::DynamicGprIndex || Index < hal::detail::GprCount;
+
+template <std::uint32_t Index>
+inline constexpr bool is_static_gpr = Index != hal::detail::DynamicGprIndex;
 } // namespace detail
 
 /** @brief Select the hardware-managed FIFO pointer encoded by a low-level ATINCGETPTR descriptor. */
@@ -68,7 +72,7 @@ struct FetchIncrement
      * @note Invalid constant expressions are rejected. Enable LLK assertions to diagnose
      *       invalid runtime fields; disabled assertions add no runtime overhead.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const;
+    [[nodiscard]] constexpr hal::Operation operation() const;
 };
 
 /**
@@ -97,7 +101,7 @@ struct FifoAcquire
      * @note Invalid constant expressions are rejected. Enable LLK assertions to diagnose
      *       invalid runtime fields; disabled assertions add no runtime overhead.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const;
+    [[nodiscard]] constexpr hal::Operation operation() const;
 };
 
 /**
@@ -132,7 +136,7 @@ struct CompareSet
      * @note Invalid constant expressions are rejected. Enable LLK assertions to diagnose
      *       invalid runtime fields; disabled assertions add no runtime overhead.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const;
+    [[nodiscard]] constexpr hal::Operation operation() const;
 };
 
 /**
@@ -154,7 +158,7 @@ struct MaskedWrite
      * @note Invalid constant expressions are rejected. Enable LLK assertions to diagnose
      *       invalid runtime fields; disabled assertions add no runtime overhead.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const;
+    [[nodiscard]] constexpr hal::Operation operation() const;
 };
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
@@ -202,7 +206,7 @@ struct Counter
          * @param data: GPR supplying the addend and receiving the pre-increment value.
          */
         template <std::uint32_t DataIndex>
-        [[nodiscard]] constexpr std::uint32_t fetch_add(hal::Gpr<DataIndex> data) const;
+        [[nodiscard]] constexpr hal::Operation fetch_add(hal::Gpr<DataIndex> data) const;
     };
 
     hal::Gpr<AddressIndex> address;
@@ -275,7 +279,7 @@ struct Fifo
          * @param result: GPR receiving the raw pre-increment read counter.
          */
         template <std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-        [[nodiscard]] constexpr std::uint32_t pop(hal::Gpr<ResultIndex> result) const;
+        [[nodiscard]] constexpr hal::Operation pop(hal::Gpr<ResultIndex> result) const;
 
         /**
          * @brief Encode a runtime-increment read-counter advance without issuing it.
@@ -285,7 +289,7 @@ struct Fifo
          * @param increment_log2: Logarithm of the increment, in [0, CapacityLog2].
          */
         template <std::uint32_t ResultIndex>
-        [[nodiscard]] constexpr std::uint32_t pop(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
+        [[nodiscard]] constexpr hal::Operation pop(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
 
         /**
          * @brief Encode a write-counter advance for MOP use without issuing it.
@@ -295,7 +299,7 @@ struct Fifo
          * @param result: GPR receiving the raw pre-increment write counter.
          */
         template <std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-        [[nodiscard]] constexpr std::uint32_t push(hal::Gpr<ResultIndex> result) const;
+        [[nodiscard]] constexpr hal::Operation push(hal::Gpr<ResultIndex> result) const;
 
         /**
          * @brief Encode a runtime-increment write-counter advance without issuing it.
@@ -305,7 +309,7 @@ struct Fifo
          * @param increment_log2: Logarithm of the increment, in [0, CapacityLog2].
          */
         template <std::uint32_t ResultIndex>
-        [[nodiscard]] constexpr std::uint32_t push(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
+        [[nodiscard]] constexpr hal::Operation push(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
 
         /**
          * @brief Encode a FIFO-state wait for MOP use without issuing it.
@@ -315,7 +319,7 @@ struct Fifo
          * @param result: GPR receiving the raw read counter for Empty or write counter for Full.
          */
         template <FifoState State, std::uint32_t ResultIndex>
-        [[nodiscard]] constexpr std::uint32_t wait_while(hal::Gpr<ResultIndex> result) const;
+        [[nodiscard]] constexpr hal::Operation wait_while(hal::Gpr<ResultIndex> result) const;
     };
 
     hal::Gpr<AddressIndex> control_address;
@@ -417,9 +421,9 @@ struct Lock
         std::uint8_t word;
 
         /** @brief Encode acquire (free to held) for MOP use without issuing it. */
-        [[nodiscard]] constexpr std::uint32_t acquire() const;
+        [[nodiscard]] constexpr hal::Operation acquire() const;
         /** @brief Encode release (held to free) for MOP use without issuing it. */
-        [[nodiscard]] constexpr std::uint32_t release() const;
+        [[nodiscard]] constexpr hal::Operation release() const;
 
         /**
          * @brief Encode a compare-and-set for MOP use without issuing it.
@@ -428,7 +432,7 @@ struct Lock
          * @tparam Set: Whole-word replacement value, in [0, 15].
          */
         template <std::uint8_t Compare, std::uint8_t Set>
-        [[nodiscard]] constexpr std::uint32_t compare_set() const;
+        [[nodiscard]] constexpr hal::Operation compare_set() const;
 
         /**
          * @brief Encode a runtime-value compare-and-set without issuing it.
@@ -436,7 +440,7 @@ struct Lock
          * @param compare: Whole-word comparison value, in [0, 15].
          * @param set: Whole-word replacement value, in [0, 15].
          */
-        [[nodiscard]] constexpr std::uint32_t compare_set(std::uint8_t compare, std::uint8_t set) const;
+        [[nodiscard]] constexpr hal::Operation compare_set(std::uint8_t compare, std::uint8_t set) const;
     };
 
     hal::Gpr<AddressIndex> address;
@@ -582,18 +586,6 @@ inline constexpr __attribute__((always_inline)) std::uint32_t checked_encode(con
     return encode(descriptor);
 }
 
-// Object methods issue known encodings immediately and runtime encodings through the buffer.
-inline __attribute__((always_inline)) void issue(const std::uint32_t encoding)
-{
-    if (__builtin_constant_p(encoding))
-    {
-        TTI_INSN(encoding);
-    }
-    else
-    {
-        TT_INSN(encoding);
-    }
-}
 } // namespace detail
 
 /** @brief Return whether a fetch-increment descriptor can be encoded without truncation. */
@@ -651,27 +643,27 @@ constexpr bool is_valid(const Lock<AddressIndex> lock)
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t FetchIncrement<AddressIndex, DataIndex>::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation FetchIncrement<AddressIndex, DataIndex>::operation() const
 {
-    return detail::checked_encode(*this);
+    return hal::detail::make_operation(detail::checked_encode(*this));
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t FifoAcquire<AddressIndex, DataIndex>::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation FifoAcquire<AddressIndex, DataIndex>::operation() const
 {
-    return detail::checked_encode(*this);
+    return hal::detail::make_operation(detail::checked_encode(*this));
 }
 
 template <std::uint32_t AddressIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t CompareSet<AddressIndex>::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation CompareSet<AddressIndex>::operation() const
 {
-    return detail::checked_encode(*this);
+    return hal::detail::make_operation(detail::checked_encode(*this));
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t MaskedWrite<AddressIndex, DataIndex>::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation MaskedWrite<AddressIndex, DataIndex>::operation() const
 {
-    return detail::checked_encode(*this);
+    return hal::detail::make_operation(detail::checked_encode(*this));
 }
 
 template <std::uint32_t AddressIndex>
@@ -716,8 +708,8 @@ inline __attribute__((always_inline)) bool is_valid_fifo_batch(const FifoAcquire
 
     // Complete earlier scalar work before reading the address through the RISC GPR window.
     sync::wait::stall<sync::StallTarget::Scalar, sync::StallCondition::ScalarIdle>();
-    ckernel::tensix_sync();
-    const std::uint32_t line_address = ckernel::regfile[operation.address.index];
+    sync::wait::thread_idle();
+    const std::uint32_t line_address = scalar::read<scalar::Access::MMIO>(operation.address);
 
     // Blackhole's noncoherent L0 must be flushed before observing externally updated L1.
     asm volatile("fence" ::: "memory");
@@ -733,15 +725,29 @@ inline __attribute__((always_inline)) bool is_valid_fifo_batch(const FifoAcquire
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void issue_fifo_update(const FifoAcquire<AddressIndex, ResultIndex> descriptor)
+inline __attribute__((always_inline)) void check_fifo_update(const FifoAcquire<AddressIndex, ResultIndex> descriptor)
 {
-    const std::uint32_t encoding = descriptor.operation();
     LLK_ASSERT(
         is_valid_fifo_batch(descriptor),
         descriptor.pointer == FifoPointer::Read ? "FIFO pop requires valid counters and enough occupied slots"
                                                 : "FIFO push requires valid counters and enough free slots");
-    issue(encoding);
 }
+
+template <std::uint32_t AddressIndex, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void issue_fifo_update(const FifoAcquire<AddressIndex, ResultIndex> descriptor)
+{
+    check_fifo_update(descriptor);
+    hal::run(descriptor.operation());
+}
+
+// A FIFO update whose GPRs and increment are compile-time constants issues as an immediate instruction.
+template <auto Descriptor>
+inline __attribute__((always_inline)) void issue_fifo_update()
+{
+    check_fifo_update(Descriptor);
+    hal::detail::run_immediate<Descriptor.operation()>();
+}
+
 } // namespace detail
 
 template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
@@ -752,7 +758,7 @@ inline __attribute__((always_inline)) void Counter<WidthBits, AddressIndex>::set
 
 template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
 template <std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Counter<WidthBits, AddressIndex>::Operations::fetch_add(const hal::Gpr<DataIndex> data) const
+inline constexpr __attribute__((always_inline)) hal::Operation Counter<WidthBits, AddressIndex>::Operations::fetch_add(const hal::Gpr<DataIndex> data) const
 {
     static_assert(WidthBits >= 1u && WidthBits <= detail::CounterWidthMax, "ATINCGET counter width must be in [1, 32]");
     static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATINCGET address GPR index must be in [0, 63]");
@@ -764,7 +770,7 @@ template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
 template <std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void Counter<WidthBits, AddressIndex>::fetch_add(const hal::Gpr<DataIndex> data) const
 {
-    detail::issue(operation().fetch_add(data));
+    hal::run(operation().fetch_add(data));
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
@@ -775,14 +781,14 @@ inline __attribute__((always_inline)) void Fifo<CapacityLog2, AddressIndex>::set
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Fifo<CapacityLog2, AddressIndex>::Operations::pop(const hal::Gpr<ResultIndex> result) const
+inline constexpr __attribute__((always_inline)) hal::Operation Fifo<CapacityLog2, AddressIndex>::Operations::pop(const hal::Gpr<ResultIndex> result) const
 {
     return detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Read, IncrementLog2>(control_address, result).operation();
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Fifo<CapacityLog2, AddressIndex>::Operations::pop(
+inline constexpr __attribute__((always_inline)) hal::Operation Fifo<CapacityLog2, AddressIndex>::Operations::pop(
     const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2) const
 {
     return detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Read>(control_address, result, increment_log2).operation();
@@ -792,7 +798,15 @@ template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
 inline __attribute__((always_inline)) void Fifo<CapacityLog2, AddressIndex>::pop(const hal::Gpr<ResultIndex> result) const
 {
-    detail::issue_fifo_update(detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Read, IncrementLog2>(control_address, result));
+    if constexpr (detail::is_static_gpr<AddressIndex> && detail::is_static_gpr<ResultIndex>)
+    {
+        detail::issue_fifo_update<detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Read, IncrementLog2>(
+            hal::Gpr<AddressIndex> {}, hal::Gpr<ResultIndex> {})>();
+    }
+    else
+    {
+        detail::issue_fifo_update(detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Read, IncrementLog2>(control_address, result));
+    }
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
@@ -804,14 +818,14 @@ inline __attribute__((always_inline)) void Fifo<CapacityLog2, AddressIndex>::pop
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Fifo<CapacityLog2, AddressIndex>::Operations::push(const hal::Gpr<ResultIndex> result) const
+inline constexpr __attribute__((always_inline)) hal::Operation Fifo<CapacityLog2, AddressIndex>::Operations::push(const hal::Gpr<ResultIndex> result) const
 {
     return detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Write, IncrementLog2>(control_address, result).operation();
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Fifo<CapacityLog2, AddressIndex>::Operations::push(
+inline constexpr __attribute__((always_inline)) hal::Operation Fifo<CapacityLog2, AddressIndex>::Operations::push(
     const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2) const
 {
     return detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Write>(control_address, result, increment_log2).operation();
@@ -821,7 +835,15 @@ template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
 inline __attribute__((always_inline)) void Fifo<CapacityLog2, AddressIndex>::push(const hal::Gpr<ResultIndex> result) const
 {
-    detail::issue_fifo_update(detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Write, IncrementLog2>(control_address, result));
+    if constexpr (detail::is_static_gpr<AddressIndex> && detail::is_static_gpr<ResultIndex>)
+    {
+        detail::issue_fifo_update<detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Write, IncrementLog2>(
+            hal::Gpr<AddressIndex> {}, hal::Gpr<ResultIndex> {})>();
+    }
+    else
+    {
+        detail::issue_fifo_update(detail::fifo_update_descriptor<CapacityLog2, FifoPointer::Write, IncrementLog2>(control_address, result));
+    }
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
@@ -833,7 +855,8 @@ inline __attribute__((always_inline)) void Fifo<CapacityLog2, AddressIndex>::pus
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <FifoState State, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Fifo<CapacityLog2, AddressIndex>::Operations::wait_while(const hal::Gpr<ResultIndex> result) const
+inline constexpr __attribute__((always_inline)) hal::Operation Fifo<CapacityLog2, AddressIndex>::Operations::wait_while(
+    const hal::Gpr<ResultIndex> result) const
 {
     static_assert(CapacityLog2 <= detail::FifoCapacityLog2Max, "ATINCGETPTR FIFO capacity logarithm must be in [0, 15] for readiness probes");
     static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATINCGETPTR address GPR index must be in [0, 63]");
@@ -847,7 +870,14 @@ template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <FifoState State, std::uint32_t ResultIndex>
 inline __attribute__((always_inline)) void Fifo<CapacityLog2, AddressIndex>::wait_while(const hal::Gpr<ResultIndex> result) const
 {
-    detail::issue(operation().template wait_while<State>(result));
+    if constexpr (detail::is_static_gpr<AddressIndex> && detail::is_static_gpr<ResultIndex>)
+    {
+        hal::detail::run_immediate<Operations {hal::Gpr<AddressIndex> {}}.template wait_while<State>(hal::Gpr<ResultIndex> {})>();
+    }
+    else
+    {
+        hal::run(operation().template wait_while<State>(result));
+    }
 }
 
 template <std::uint32_t AddressIndex>
@@ -857,13 +887,13 @@ inline __attribute__((always_inline)) void Lock<AddressIndex>::set_address(const
 }
 
 template <std::uint32_t AddressIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>::Operations::acquire() const
+inline constexpr __attribute__((always_inline)) hal::Operation Lock<AddressIndex>::Operations::acquire() const
 {
     return compare_set<detail::LockFree, detail::LockHeld>();
 }
 
 template <std::uint32_t AddressIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>::Operations::release() const
+inline constexpr __attribute__((always_inline)) hal::Operation Lock<AddressIndex>::Operations::release() const
 {
     return compare_set<detail::LockHeld, detail::LockFree>();
 }
@@ -871,18 +901,18 @@ inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void Lock<AddressIndex>::acquire() const
 {
-    detail::issue(operation().acquire());
+    hal::run(operation().acquire());
 }
 
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void Lock<AddressIndex>::release() const
 {
-    detail::issue(operation().release());
+    hal::run(operation().release());
 }
 
 template <std::uint32_t AddressIndex>
 template <std::uint8_t Compare, std::uint8_t Set>
-inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>::Operations::compare_set() const
+inline constexpr __attribute__((always_inline)) hal::Operation Lock<AddressIndex>::Operations::compare_set() const
 {
     static_assert(Compare < detail::CompareSetValueLimit, "ATCAS compare value must fit in four bits");
     static_assert(Set < detail::CompareSetValueLimit, "ATCAS replacement value must fit in four bits");
@@ -890,7 +920,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>
 }
 
 template <std::uint32_t AddressIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>::Operations::compare_set(
+inline constexpr __attribute__((always_inline)) hal::Operation Lock<AddressIndex>::Operations::compare_set(
     const std::uint8_t compare, const std::uint8_t set) const
 {
     static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATCAS address GPR index must be in [0, 63]");
@@ -901,13 +931,13 @@ template <std::uint32_t AddressIndex>
 template <std::uint8_t Compare, std::uint8_t Set>
 inline __attribute__((always_inline)) void Lock<AddressIndex>::compare_set() const
 {
-    detail::issue(operation().template compare_set<Compare, Set>());
+    hal::run(operation().template compare_set<Compare, Set>());
 }
 
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void Lock<AddressIndex>::compare_set(const std::uint8_t compare, const std::uint8_t set) const
 {
-    detail::issue(operation().compare_set(compare, set));
+    hal::run(operation().compare_set(compare, set));
 }
 
 /**
@@ -926,8 +956,7 @@ inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIn
     static_assert(DataIndex != hal::detail::DynamicGprIndex, "immediate masked write requires hal::gpr<Index>() for its data quad");
     constexpr MaskedWrite<AddressIndex, DataIndex> descriptor {hal::Gpr<AddressIndex> {}, hal::Gpr<DataIndex> {}, GranuleMask};
     static_assert(is_valid(descriptor), "invalid atomic descriptor");
-    constexpr std::uint32_t encoding = descriptor.operation();
-    TTI_INSN(encoding);
+    hal::detail::run_immediate<descriptor.operation()>();
 }
 
 /**
@@ -949,7 +978,7 @@ inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIn
     static_assert(detail::is_valid_static_gpr<DataIndex>, "ATSWAP data GPR index must be in [0, 63]");
     static_assert(DataIndex == hal::detail::DynamicGprIndex || DataIndex % detail::GprsPerQuad == 0u, "ATSWAP data GPR must be four-aligned");
     const MaskedWrite<AddressIndex, DataIndex> descriptor {address, data, granule_mask};
-    TT_INSN(descriptor.operation());
+    hal::run(descriptor.operation());
 }
 
 } // namespace hal::atomic

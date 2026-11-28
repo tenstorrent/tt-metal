@@ -29,8 +29,11 @@ namespace hal::cfg::detail
  */
 inline volatile std::uint32_t tt_reg_ptr* state_cfg_bank()
 {
-    const std::uint32_t bank_offset = (ckernel::cfg_state_id == 0) ? 0u : StateCfgWordCount;
-    return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE) + bank_offset;
+    if (ckernel::cfg_state_id == 0)
+    {
+        return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
+    }
+    return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE) + StateCfgWordCount;
 }
 
 } // namespace hal::cfg::detail

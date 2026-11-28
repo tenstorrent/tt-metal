@@ -10,6 +10,8 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/helpers.h"
+#include "utils/memory_ordering.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::sync
@@ -141,6 +143,10 @@ inline constexpr SemaphoreCondition operator&(const SemaphoreCondition lhs, cons
 
 namespace detail
 {
+// TTSync: PC_BUF_BASE word offsets of the issuing TRISC's done checks.
+inline constexpr std::uint32_t CoprocessorDoneCheck = 1;
+inline constexpr std::uint32_t MopExpanderDoneCheck = 2;
+
 constexpr bool is_valid(const Access access)
 {
     return access == Access::MMIO || access == Access::Tensix;
@@ -237,60 +243,58 @@ namespace mutex
 
 /** @brief Encode ATGETM without issuing it. */
 template <Mutex M>
-inline constexpr std::uint32_t acquire_operation()
+inline constexpr hal::Operation acquire_operation()
 {
     static_assert(detail::is_valid(M), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATGETM(hal::to_underlying(M));
+    return hal::detail::make_operation(TT_OP_ATGETM(hal::to_underlying(M)));
 }
 
 /** @brief Encode a runtime-selected ATGETM without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t acquire_operation(const Mutex mutex)
+inline constexpr __attribute__((always_inline)) hal::Operation acquire_operation(const Mutex mutex)
 {
     hal::detail::require(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATGETM(hal::to_underlying(mutex));
+    return hal::detail::make_operation(TT_OP_ATGETM(hal::to_underlying(mutex)));
 }
 
 /** @brief Acquire a compile-time-selected mutex with one immediate ATGETM. */
 template <Mutex M>
 inline __attribute__((always_inline)) void acquire()
 {
-    TTI_INSN((acquire_operation<M>()));
+    hal::detail::run_immediate<acquire_operation<M>()>();
 }
 
 /** @brief Acquire a runtime-selected mutex through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void acquire(const Mutex mutex)
 {
-    LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    TT_ATGETM(hal::to_underlying(mutex));
+    hal::run(acquire_operation(mutex));
 }
 
 /** @brief Encode ATRELM without issuing it. */
 template <Mutex M>
-inline constexpr std::uint32_t release_operation()
+inline constexpr hal::Operation release_operation()
 {
     static_assert(detail::is_valid(M), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATRELM(hal::to_underlying(M));
+    return hal::detail::make_operation(TT_OP_ATRELM(hal::to_underlying(M)));
 }
 
 /** @brief Encode a runtime-selected ATRELM without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t release_operation(const Mutex mutex)
+inline constexpr __attribute__((always_inline)) hal::Operation release_operation(const Mutex mutex)
 {
     hal::detail::require(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATRELM(hal::to_underlying(mutex));
+    return hal::detail::make_operation(TT_OP_ATRELM(hal::to_underlying(mutex)));
 }
 
 /** @brief Release a compile-time-selected mutex with one immediate ATRELM. */
 template <Mutex M>
 inline __attribute__((always_inline)) void release()
 {
-    TTI_INSN((release_operation<M>()));
+    hal::detail::run_immediate<release_operation<M>()>();
 }
 
 /** @brief Release a runtime-selected mutex through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void release(const Mutex mutex)
 {
-    LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    TT_ATRELM(hal::to_underlying(mutex));
+    hal::run(release_operation(mutex));
 }
 
 } // namespace mutex
@@ -300,22 +304,22 @@ namespace semaphore
 
 /** @brief Encode SEMINIT for the selected semaphores without issuing it. */
 template <std::uint32_t Initial, std::uint32_t Maximum, Semaphore First, Semaphore... Others>
-inline constexpr std::uint32_t init_operation()
+inline constexpr hal::Operation init_operation()
 {
     static_assert(Initial < 16u, "SEMINIT initial value must fit in four bits");
     static_assert(Maximum < 16u, "SEMINIT maximum value must fit in four bits");
     static_assert(Initial <= Maximum, "SEMINIT initial value must not exceed the maximum");
-    return TT_OP_SEMINIT(Maximum, Initial, (detail::semaphore_mask<First, Others...>()));
+    return hal::detail::make_operation(TT_OP_SEMINIT(Maximum, Initial, (detail::semaphore_mask<First, Others...>())));
 }
 
 /** @brief Encode SEMINIT for a semaphore or braced list of semaphores without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(
+inline constexpr __attribute__((always_inline)) hal::Operation init_operation(
     const detail::SemaphoreSet semaphores, const std::uint32_t initial, const std::uint32_t maximum)
 {
     hal::detail::require(initial < 16u, "SEMINIT initial value must fit in four bits");
     hal::detail::require(maximum < 16u, "SEMINIT maximum value must fit in four bits");
     hal::detail::require(initial <= maximum, "SEMINIT initial value must not exceed the maximum");
-    return TT_OP_SEMINIT(maximum, initial, semaphores.mask());
+    return hal::detail::make_operation(TT_OP_SEMINIT(maximum, initial, semaphores.mask()));
 }
 
 /**
@@ -327,39 +331,39 @@ inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(
 template <std::uint32_t Initial, std::uint32_t Maximum, Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void init()
 {
-    TTI_INSN((init_operation<Initial, Maximum, First, Others...>()));
+    hal::detail::run_immediate<init_operation<Initial, Maximum, First, Others...>()>();
 }
 
 /** @brief Initialize a semaphore or braced list of semaphores through Tensix. */
 inline __attribute__((always_inline)) void init(const detail::SemaphoreSet semaphores, const std::uint32_t initial, const std::uint32_t maximum)
 {
-    TT_INSN(init_operation(semaphores, initial, maximum));
+    hal::run(init_operation(semaphores, initial, maximum));
 }
 
 /** @brief Encode SEMPOST for the selected semaphores without issuing it. */
 template <Semaphore First, Semaphore... Others>
-inline constexpr std::uint32_t post_operation()
+inline constexpr hal::Operation post_operation()
 {
-    return TT_OP_SEMPOST((detail::semaphore_mask<First, Others...>()));
+    return hal::detail::make_operation(TT_OP_SEMPOST((detail::semaphore_mask<First, Others...>())));
 }
 
 /** @brief Encode SEMPOST for a semaphore or braced list of semaphores without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t post_operation(const detail::SemaphoreSet semaphores)
+inline constexpr __attribute__((always_inline)) hal::Operation post_operation(const detail::SemaphoreSet semaphores)
 {
-    return TT_OP_SEMPOST(semaphores.mask());
+    return hal::detail::make_operation(TT_OP_SEMPOST(semaphores.mask()));
 }
 
 /** @brief Increment compile-time-selected semaphores atomically through Tensix. */
 template <Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void post()
 {
-    TTI_INSN((post_operation<First, Others...>()));
+    hal::detail::run_immediate<post_operation<First, Others...>()>();
 }
 
 /** @brief Increment a semaphore or braced list of semaphores atomically through Tensix. */
 inline __attribute__((always_inline)) void post(const detail::SemaphoreSet semaphores)
 {
-    TT_INSN(post_operation(semaphores));
+    hal::run(post_operation(semaphores));
 }
 
 /** @brief Increment one compile-time-selected semaphore through the chosen access path. */
@@ -396,28 +400,28 @@ inline __attribute__((always_inline)) void post(const Semaphore semaphore)
 
 /** @brief Encode SEMGET for the selected semaphores without issuing it. */
 template <Semaphore First, Semaphore... Others>
-inline constexpr std::uint32_t get_operation()
+inline constexpr hal::Operation get_operation()
 {
-    return TT_OP_SEMGET((detail::semaphore_mask<First, Others...>()));
+    return hal::detail::make_operation(TT_OP_SEMGET((detail::semaphore_mask<First, Others...>())));
 }
 
 /** @brief Encode SEMGET for a semaphore or braced list of semaphores without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const detail::SemaphoreSet semaphores)
+inline constexpr __attribute__((always_inline)) hal::Operation get_operation(const detail::SemaphoreSet semaphores)
 {
-    return TT_OP_SEMGET(semaphores.mask());
+    return hal::detail::make_operation(TT_OP_SEMGET(semaphores.mask()));
 }
 
 /** @brief Decrement compile-time-selected semaphores atomically through Tensix. */
 template <Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void get()
 {
-    TTI_INSN((get_operation<First, Others...>()));
+    hal::detail::run_immediate<get_operation<First, Others...>()>();
 }
 
 /** @brief Decrement a semaphore or braced list of semaphores atomically through Tensix. */
 inline __attribute__((always_inline)) void get(const detail::SemaphoreSet semaphores)
 {
-    TT_INSN(get_operation(semaphores));
+    hal::run(get_operation(semaphores));
 }
 
 /** @brief Decrement one compile-time-selected semaphore through the chosen access path. */
@@ -474,65 +478,87 @@ namespace wait
 
 /** @brief Encode STALLWAIT without issuing it. */
 template <StallTarget Targets, StallCondition Conditions>
-inline constexpr std::uint32_t stall_operation()
+inline constexpr hal::Operation stall_operation()
 {
     static_assert(detail::is_valid(Targets), "STALLWAIT target mask must fit in nine bits");
     static_assert(detail::is_valid(Conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    return TT_OP_STALLWAIT(hal::to_underlying(Targets), hal::to_underlying(Conditions));
+    return hal::detail::make_operation(TT_OP_STALLWAIT(hal::to_underlying(Targets), hal::to_underlying(Conditions)));
 }
 
 /** @brief Encode a runtime-selected STALLWAIT without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t stall_operation(const StallTarget targets, const StallCondition conditions)
+inline constexpr __attribute__((always_inline)) hal::Operation stall_operation(const StallTarget targets, const StallCondition conditions)
 {
     hal::detail::require(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
     hal::detail::require(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    return TT_OP_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
+    return hal::detail::make_operation(TT_OP_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions)));
 }
 
 /** @brief Install a compile-time STALLWAIT in the current thread's wait gate. */
 template <StallTarget Targets, StallCondition Conditions>
 inline __attribute__((always_inline)) void stall()
 {
-    TTI_INSN((stall_operation<Targets, Conditions>()));
+    hal::detail::run_immediate<stall_operation<Targets, Conditions>()>();
 }
 
 /** @brief Install a runtime STALLWAIT through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void stall(const StallTarget targets, const StallCondition conditions)
 {
-    LLK_ASSERT(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
-    LLK_ASSERT(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    TT_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
+    hal::run(stall_operation(targets, conditions));
 }
 
 /** @brief Encode SEMWAIT for the selected semaphores without issuing it. */
 template <StallTarget Targets, SemaphoreCondition Conditions, Semaphore First, Semaphore... Others>
-inline constexpr std::uint32_t semaphore_operation()
+inline constexpr hal::Operation semaphore_operation()
 {
     static_assert(detail::is_valid(Targets), "SEMWAIT target mask must fit in nine bits");
     static_assert(detail::is_valid(Conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    return TT_OP_SEMWAIT(hal::to_underlying(Targets), (detail::semaphore_mask<First, Others...>()), hal::to_underlying(Conditions));
+    return hal::detail::make_operation(
+        TT_OP_SEMWAIT(hal::to_underlying(Targets), (detail::semaphore_mask<First, Others...>()), hal::to_underlying(Conditions)));
 }
 
 /** @brief Encode SEMWAIT for a semaphore or braced list of semaphores without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t semaphore_operation(
+inline constexpr __attribute__((always_inline)) hal::Operation semaphore_operation(
     const StallTarget targets, const detail::SemaphoreSet semaphores, const SemaphoreCondition conditions)
 {
     hal::detail::require(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
     hal::detail::require(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    return TT_OP_SEMWAIT(hal::to_underlying(targets), semaphores.mask(), hal::to_underlying(conditions));
+    return hal::detail::make_operation(TT_OP_SEMWAIT(hal::to_underlying(targets), semaphores.mask(), hal::to_underlying(conditions)));
 }
 
 /** @brief Install a compile-time SEMWAIT for the selected semaphores in the current thread's wait gate. */
 template <StallTarget Targets, SemaphoreCondition Conditions, Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void semaphore()
 {
-    TTI_INSN((semaphore_operation<Targets, Conditions, First, Others...>()));
+    hal::detail::run_immediate<semaphore_operation<Targets, Conditions, First, Others...>()>();
 }
 
 /** @brief Install SEMWAIT for a semaphore or braced list of semaphores through Tensix. */
 inline __attribute__((always_inline)) void semaphore(const StallTarget targets, const detail::SemaphoreSet semaphores, const SemaphoreCondition conditions)
 {
-    TT_INSN(semaphore_operation(targets, semaphores, conditions));
+    hal::run(semaphore_operation(targets, semaphores, conditions));
+}
+
+/**
+ * @brief Block the issuing TRISC until its Tensix thread has no instruction in flight.
+ *
+ * Unlike @ref stall, which holds back later Tensix instructions, this stops the RISC itself, so its
+ * later MMIO accesses (CFG stores, GPR window, mailboxes) are ordered after the thread's earlier work.
+ * @note A SEMWAIT latched at the Wait Gate is not in flight; to wait for its condition, push an
+ *       instruction that the wait blocks before calling this.
+ */
+inline __attribute__((always_inline)) void thread_idle()
+{
+    hal::detail::store_blocking(&ckernel::pc_buf_base[detail::CoprocessorDoneCheck], 0);
+}
+
+/**
+ * @brief Block the issuing TRISC until its MOP expander has finished expanding earlier MOPs.
+ *
+ * Call before reprogramming the MOP configuration while a MOP may still be expanding.
+ */
+inline __attribute__((always_inline)) void mop_expander_idle()
+{
+    hal::detail::store_blocking(&ckernel::pc_buf_base[detail::MopExpanderDoneCheck], 0);
 }
 
 } // namespace wait
@@ -545,7 +571,7 @@ struct MutexAcquire
 {
     Mutex selector;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return mutex::acquire_operation(selector);
     }
@@ -556,7 +582,7 @@ struct MutexRelease
 {
     Mutex selector;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return mutex::release_operation(selector);
     }
@@ -569,7 +595,7 @@ struct SemaphoreInit
     std::uint32_t initial;
     std::uint32_t maximum;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return semaphore::init_operation(semaphores, initial, maximum);
     }
@@ -580,7 +606,7 @@ struct SemaphorePost
 {
     detail::SemaphoreSet semaphores;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return semaphore::post_operation(semaphores);
     }
@@ -591,7 +617,7 @@ struct SemaphoreGet
 {
     detail::SemaphoreSet semaphores;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return semaphore::get_operation(semaphores);
     }
@@ -603,7 +629,7 @@ struct StallWait
     StallTarget targets;
     StallCondition conditions;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return wait::stall_operation(targets, conditions);
     }
@@ -616,10 +642,91 @@ struct SemaphoreWait
     detail::SemaphoreSet semaphores;
     SemaphoreCondition conditions;
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return wait::semaphore_operation(targets, semaphores, conditions);
     }
 };
+
+/**
+ * @brief Select the RISC at the other end of a mailbox.
+ */
+enum class Riscv : std::uint8_t
+{
+    Brisc  = 0,
+    Unpack = 1,
+    Math   = 2,
+    Pack   = 3
+};
+
+/**
+ * @brief Exchange 32-bit values between RISC cores through the Tensix tile mailboxes.
+ *
+ * Each pair of RISCs has a FIFO of up to four values in each direction; one RISC's four outgoing
+ * mailboxes hold at most four values in total. A write to a full mailbox stalls the writer, and a
+ * read waits until a value arrives. The NoC and the Tensix coprocessor cannot reach the mailboxes.
+ *
+ * @code
+ * mailbox::write<Riscv::Math>(dest_offset);                       // unpack -> math
+ * const std::uint32_t offset = mailbox::read<Riscv::Unpack>();    // on math: unpack -> math
+ * @endcode
+ */
+namespace mailbox
+{
+
+namespace detail
+{
+constexpr bool is_valid(const Riscv riscv)
+{
+    return hal::to_underlying(riscv) <= hal::to_underlying(Riscv::Pack);
+}
+} // namespace detail
+
+/** @brief Send a value to RISC To, waiting while its mailboxes from this RISC are full. */
+template <Riscv To>
+inline __attribute__((always_inline)) void write(const std::uint32_t value)
+{
+    static_assert(detail::is_valid(To), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    ckernel::mailbox_base[hal::to_underlying(To)][0] = value;
+}
+
+/** @brief Send a value to a runtime-selected RISC. */
+inline __attribute__((always_inline)) void write(const Riscv to, const std::uint32_t value)
+{
+    LLK_ASSERT(detail::is_valid(to), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    ckernel::mailbox_base[hal::to_underlying(to)][0] = value;
+}
+
+/** @brief Take the next value sent by RISC From, waiting until one arrives. */
+template <Riscv From>
+[[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read()
+{
+    static_assert(detail::is_valid(From), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return hal::detail::load_blocking(&ckernel::mailbox_base[hal::to_underlying(From)][0]);
+}
+
+/** @brief Take the next value sent by a runtime-selected RISC, waiting until one arrives. */
+[[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read(const Riscv from)
+{
+    LLK_ASSERT(detail::is_valid(from), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return hal::detail::load_blocking(&ckernel::mailbox_base[hal::to_underlying(from)][0]);
+}
+
+/** @brief Return whether RISC From has sent a value that is not read yet, without waiting. */
+template <Riscv From>
+[[nodiscard]] inline __attribute__((always_inline)) bool has_data()
+{
+    static_assert(detail::is_valid(From), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return ckernel::mailbox_base[hal::to_underlying(From)][1] > 0;
+}
+
+/** @brief Return whether a runtime-selected RISC has sent a value that is not read yet, without waiting. */
+[[nodiscard]] inline __attribute__((always_inline)) bool has_data(const Riscv from)
+{
+    LLK_ASSERT(detail::is_valid(from), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return ckernel::mailbox_base[hal::to_underlying(from)][1] > 0;
+}
+
+} // namespace mailbox
 
 } // namespace hal::sync

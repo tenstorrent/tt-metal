@@ -9,6 +9,9 @@
 
 #include "ckernel.h"
 #include "llk_assert.h"
+#include "sync.h"
+#include "utils/helpers.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::mop
@@ -50,7 +53,7 @@ constexpr bool is_nop(const std::uint32_t instruction)
 
 constexpr bool is_valid_count(const std::uint32_t count)
 {
-    return ckernel::is_valid(count, COUNT_WIDTH);
+    return hal::detail::is_valid(count, COUNT_WIDTH);
 }
 
 /**
@@ -290,17 +293,13 @@ struct cfg<detail::Template1Plan<HasEndOp>>
      * @param last: Iteration whose final inner op is replaced, values = <last_outer/last_inner>.
      * @param instruction: Encoded instruction issued instead.
      * @note Without a patch, both last-iteration ops repeat the last op of the inner loop body.
-     *       A last_inner patch needs an outer count above 1.
+     *       With an outer count of 1 a last_inner op is not issued until @ref update raises the count.
      */
     template <std::uint32_t Word>
     [[nodiscard]] constexpr cfg patch(const Field<Word> last, const std::uint32_t instruction) const
     {
         static_assert(Word == detail::LOOP0_LAST_WORD || Word == detail::LOOP1_LAST_WORD, "Template 1 MOP patch replaces last_outer or last_inner");
         hal::detail::require(inner_count != 0, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
-        if constexpr (Word == detail::LOOP1_LAST_WORD)
-        {
-            hal::detail::require(outer_count != 1, "Template 1 MOP last_inner op is never issued with an outer count of 1");
-        }
 
         cfg patched = *this;
         if constexpr (Word == detail::LOOP0_LAST_WORD)
@@ -433,7 +432,7 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template0Pl
     const std::uint32_t skip_a0 = config.skip_a0;
     const std::uint32_t skip_b  = config.skip_b;
 
-    ckernel::mop_sync();
+    hal::sync::wait::mop_expander_idle();
 
     mop_cfg[1] = flags;
     if constexpr (HasB)
@@ -457,48 +456,34 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template0Pl
 /**
  * @brief Program this thread's MopCfg with a Template 1 configuration.
  *
- * Writes the counts, StartOp and EndOp0 always; EndOp1 only when the configuration has end
- * ops, and the inner-loop and last-iteration ops only when the inner count is nonzero.
- * Skipped words keep their previous values, which the expander does not read.
+ * Writes every MopCfg word, as ckernel_template::program() does, except EndOp1, which only a
+ * configuration with end ops writes; the expander does not read the skipped word. Plain inline,
+ * not always_inline, with the shape of ckernel_template::program(), so GCC makes the same
+ * inline-or-outline choice for each caller as it does for production's.
  *
  * @param config: Configuration built by @ref loop, optionally patched with @ref cfg::patch.
  * @note Waits for the preceding MOP expansion before writing. Run it with
  *       @ref Runner<MopTemplate::Template1>.
  */
 template <bool HasEndOp>
-inline __attribute__((always_inline)) void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
+inline void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    // Copy the configuration into scalars before the sync; reading the aggregate between the
-    // volatile MopCfg accesses forces it onto the stack instead of into registers.
-    const std::uint32_t outer_count   = config.outer_count;
-    const std::uint32_t inner_count   = config.inner_count;
-    const std::uint32_t start_op      = config.start_op;
-    const std::uint32_t end_op        = config.end_op;
-    const std::uint32_t second_end_op = config.second_end_op;
-    const std::uint32_t op            = config.op;
-    const std::uint32_t alternate_op  = config.alternate_op;
-    const std::uint32_t last_outer_op = config.last_outer_op;
-    const std::uint32_t last_inner_op = config.last_inner_op;
+    hal::sync::wait::mop_expander_idle();
 
-    ckernel::mop_sync();
-
-    mop_cfg[0] = outer_count;
-    mop_cfg[1] = inner_count;
-    mop_cfg[2] = start_op;
-    mop_cfg[3] = end_op;
+    mop_cfg[0] = config.outer_count;
+    mop_cfg[1] = config.inner_count;
+    mop_cfg[2] = config.start_op;
+    mop_cfg[3] = config.end_op;
     if constexpr (HasEndOp)
     {
-        mop_cfg[4] = second_end_op;
+        mop_cfg[4] = config.second_end_op;
     }
-    if (inner_count != 0)
-    {
-        mop_cfg[5] = op;
-        mop_cfg[6] = alternate_op;
-        mop_cfg[7] = last_outer_op;
-        mop_cfg[8] = last_inner_op;
-    }
+    mop_cfg[5] = config.op;
+    mop_cfg[6] = config.alternate_op;
+    mop_cfg[7] = config.last_outer_op;
+    mop_cfg[8] = config.last_inner_op;
 }
 
 // ---------------- Updates ----------------
@@ -514,9 +499,8 @@ inline constexpr std::uint32_t occurrences = (0u + ... + static_cast<std::uint32
  *
  * @param updates: Distinct words built with @ref outer_count, @ref inner_count, @ref last_outer or @ref last_inner.
  * @note Program a Template 1 configuration with @ref program first. MopCfg is write-only, so
- *       the new words are not checked against it: keep a programmed inner count of 0 at 0, since
- *       an empty inner loop leaves its op words unwritten, and keep the result clear of the count
- *       anomaly and the unsupported EndOp1 read rejected by @ref loop. An outer count of 0 is rejected.
+ *       the new words are not checked against it: keep the result clear of the count anomaly and
+ *       the unsupported EndOp1 read rejected by @ref loop. An outer count of 0 is rejected.
  */
 template <std::uint32_t... Words>
 inline __attribute__((always_inline)) void update(const Update<Words>... updates)
@@ -530,7 +514,7 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
     (hal::detail::require(!detail::is_count_word(Words) || detail::is_valid_count(updates.value), "Template 1 MOP loop count must fit in 10 bits"), ...);
     (hal::detail::require(Words != detail::OUTER_COUNT_WORD || updates.value != 0, "Template 1 MOP configuration issues nothing"), ...);
 
-    ckernel::mop_sync();
+    hal::sync::wait::mop_expander_idle();
 
     ((mop_cfg[Words] = updates.value), ...);
 }
@@ -571,7 +555,7 @@ struct Runner;
  * @brief Issue a Template 0 MOP expansion, or describe one and encode it with @ref operation.
  *
  * `Runner<MopTemplate::Template0> {.count = 3, .mask = faces}.operation()` returns the MOP instruction
- * the matching run would issue, for issuing later with TT_INSN.
+ * the matching run would issue, for issuing later with hal::run.
  */
 template <>
 struct Runner<MopTemplate::Template0>
@@ -583,12 +567,12 @@ private:
 
     static constexpr bool is_valid_count(const std::uint32_t count)
     {
-        return ckernel::is_valid(count - 1, COUNT_WIDTH);
+        return hal::detail::is_valid(count - 1, COUNT_WIDTH);
     }
 
     static constexpr bool reads_mask_high(const std::uint32_t count, const std::uint32_t mask)
     {
-        return count > MASK_LO_WIDTH || !ckernel::is_valid(mask, MASK_LO_WIDTH);
+        return count > MASK_LO_WIDTH || !hal::detail::is_valid(mask, MASK_LO_WIDTH);
     }
 
 public:
@@ -602,7 +586,7 @@ public:
      * @note With @ref MaskHigh::Auto, count must be at most 16 and mask must fit in 16 bits, since the
      *       encoding cannot carry the MOP_CFG that writes the high mask bits.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const
+    [[nodiscard]] constexpr hal::Operation operation() const
     {
         hal::detail::require(is_valid_count(count), "MOP encoded count must fit in 7 bits");
         if (mask_high == MaskHigh::Auto)
@@ -611,7 +595,7 @@ public:
                 !reads_mask_high(count, mask),
                 "Template 0 MOP operation cannot write the high mask bits; write them with configure_mask_high and set mask_high to MaskHigh::Preset");
         }
-        return TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+        return hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO));
     }
 
     /**
@@ -622,7 +606,7 @@ public:
     template <std::uint32_t Mask>
     inline __attribute__((always_inline)) static void configure_mask_high()
     {
-        TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
+        hal::detail::run_immediate<TT_OP_MOP_CFG(Mask >> MASK_LO_WIDTH)>();
     }
 
     /**
@@ -632,7 +616,7 @@ public:
      */
     inline __attribute__((always_inline)) static void configure_mask_high(const std::uint32_t mask)
     {
-        TT_MOP_CFG(mask >> MASK_LO_WIDTH);
+        hal::run(hal::detail::make_operation(TT_OP_MOP_CFG(mask >> MASK_LO_WIDTH)));
     }
 
     /**
@@ -652,7 +636,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
+        hal::detail::run_immediate<TT_OP_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO)>();
     }
 
     /**
@@ -672,7 +656,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
+        hal::run(hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO)));
     }
 
     /**
@@ -693,7 +677,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
+        hal::run(hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO)));
     }
 
     /**
@@ -713,7 +697,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+        hal::run(hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO)));
     }
 };
 
@@ -730,13 +714,13 @@ struct Runner<MopTemplate::Template1>
      */
     inline __attribute__((always_inline)) static void run()
     {
-        TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
+        hal::detail::run_immediate<TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/)>();
     }
 
     /** @brief Encode @ref run as a MOP instruction. */
-    [[nodiscard]] static constexpr std::uint32_t operation()
+    [[nodiscard]] static constexpr hal::Operation operation()
     {
-        return TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
+        return hal::detail::make_operation(TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/));
     }
 };
 

@@ -35,7 +35,7 @@ inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t
 {
     LLK_ASSERT(section < F.count, "section index out of range for this register");
     LLK_ASSERT(value <= ThreadCfgWordMask, "prepacked thread CFG value exceeds 16 bits");
-    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
+    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value);
 }
 
 /**
@@ -68,13 +68,14 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
 {
     rmwcib_check_address<Addr>();
 
-    const std::uint32_t write_data = value << Shamt;
+    // Take each byte from the unshifted value, so a field above bit 8 masks instead of shifting up and back down.
+    const auto byte = [value](const std::uint32_t lsb) -> std::uint32_t { return (lsb >= Shamt ? value >> (lsb - Shamt) : value << (Shamt - lsb)) & 0xffu; };
 
     if constexpr ((Mask & 0x000000ffu) != 0u)
     {
         if constexpr ((RuntimeMask & 0x000000ffu) != 0u)
         {
-            TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, Addr);
+            TT_RMWCIB0((Mask >> 0) & 0xffu, byte(0), Addr);
         }
         else
         {
@@ -85,7 +86,7 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
     {
         if constexpr ((RuntimeMask & 0x0000ff00u) != 0u)
         {
-            TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, Addr);
+            TT_RMWCIB1((Mask >> 8) & 0xffu, byte(8), Addr);
         }
         else
         {
@@ -96,7 +97,7 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
     {
         if constexpr ((RuntimeMask & 0x00ff0000u) != 0u)
         {
-            TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, Addr);
+            TT_RMWCIB2((Mask >> 16) & 0xffu, byte(16), Addr);
         }
         else
         {
@@ -107,7 +108,7 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
     {
         if constexpr ((RuntimeMask & 0xff000000u) != 0u)
         {
-            TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, Addr);
+            TT_RMWCIB3((Mask >> 24) & 0xffu, byte(24), Addr);
         }
         else
         {
@@ -187,8 +188,10 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
     else if constexpr (Scope == RegisterScope::Thread)
     {
         // SETC16 replaces the complete thread word. Bits absent from Mask are
-        // written as zero, matching the existing single-field API.
-        TT_SETC16(Addr, ((value << Shamt) & Mask) & ThreadCfgWordMask);
+        // written as zero, matching the existing single-field API. Field values
+        // are checked against their widths, so the data reaches SETC16 unmasked.
+        static_assert((Mask & ~ThreadCfgWordMask) == 0u, "thread CFG fields must lie in the low 16 bits of their word");
+        TT_SETC16(Addr, value << Shamt);
     }
     else
     {

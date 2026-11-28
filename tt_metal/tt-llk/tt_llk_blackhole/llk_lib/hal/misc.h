@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::misc
@@ -33,10 +34,10 @@ struct ResourceDeclaration
     std::uint16_t linger_time      = 1; // 4-bit linger shift-register mask, not a cycle count
 
     /** @brief Encode the operation. */
-    constexpr std::uint32_t operation() const;
+    constexpr hal::Operation operation() const;
 
     /** @brief Encode the operation. */
-    constexpr std::uint32_t get_operation() const
+    constexpr hal::Operation get_operation() const
     {
         return operation();
     }
@@ -71,7 +72,7 @@ struct FlushTdma
 {
     FlushScope scope = FlushScope::All;
 
-    constexpr std::uint32_t operation() const;
+    constexpr hal::Operation operation() const;
 };
 
 /**
@@ -83,17 +84,17 @@ struct FlushTdma
  * @note Discouraged: use only when strictly required, and read the ISA documentation first.
  */
 template <FlushScope Scope = FlushScope::All>
-constexpr std::uint32_t flush_tdma_operation()
+constexpr hal::Operation flush_tdma_operation()
 {
     static_assert(static_cast<std::uint32_t>(Scope) < 16u, "TDMA flush selection is 4 bits");
-    return TT_OP_FLUSHDMA(static_cast<std::uint32_t>(Scope));
+    return hal::detail::make_operation(TT_OP_FLUSHDMA(static_cast<std::uint32_t>(Scope)));
 }
 
 /** @brief Drain the TDMA engine or a subset of it, blocking until idle (FLUSHDMA). */
 template <FlushScope Scope = FlushScope::All>
 inline __attribute__((always_inline)) void flush_tdma()
 {
-    TTI_INSN((flush_tdma_operation<Scope>()));
+    hal::detail::run_immediate<flush_tdma_operation<Scope>()>();
 }
 
 /**
@@ -102,21 +103,21 @@ inline __attribute__((always_inline)) void flush_tdma()
  * @note Discouraged: use only when strictly required. No ISA documentation exists and the
  *       instruction metadata carries "fixme; remove instr?"; confirm the behavior before use.
  */
-constexpr std::uint32_t reset_tdma_operation()
+constexpr hal::Operation reset_tdma_operation()
 {
-    return TT_OP_RSTDMA;
+    return hal::detail::make_operation(TT_OP_RSTDMA);
 }
 
 /** @brief Soft-reset the TDMA engine (RSTDMA). */
 inline __attribute__((always_inline)) void reset_tdma()
 {
-    TTI_INSN(reset_tdma_operation());
+    hal::detail::run_immediate<reset_tdma_operation()>();
 }
 
 /** @brief Encode RSTDMA without resetting the TDMA engine. */
 struct ResetTdma
 {
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return reset_tdma_operation();
     }
@@ -128,21 +129,21 @@ struct ResetTdma
  * @note Reserved for future use with no documented behavior; wrapped for encoding
  *       completeness only.
  */
-constexpr std::uint32_t tbuf_command_operation()
+constexpr hal::Operation tbuf_command_operation()
 {
-    return TT_OP_TBUFCMD;
+    return hal::detail::make_operation(TT_OP_TBUFCMD);
 }
 
 /** @brief Issue the reserved TBUFCMD instruction. */
 inline __attribute__((always_inline)) void tbuf_command()
 {
-    TTI_INSN(tbuf_command_operation());
+    hal::detail::run_immediate<tbuf_command_operation()>();
 }
 
 /** @brief Encode TBUFCMD without issuing the reserved instruction. */
 struct TbufCommand
 {
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
         return tbuf_command_operation();
     }
@@ -187,34 +188,33 @@ constexpr bool is_valid(const ResourceDeclaration declaration)
     return detail::is_valid(declaration);
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t ResourceDeclaration::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation ResourceDeclaration::operation() const
 {
     hal::detail::require(instruction_class < 16u, "RESOURCEDECL instruction class is 4 bits");
     hal::detail::require(resources < (1u << 9), "RESOURCEDECL resource mask is 9 bits");
     hal::detail::require(linger_time < (1u << 4), "RESOURCEDECL linger time is 4 bits");
-    return TT_OP_RESOURCEDECL(linger_time, resources, instruction_class);
+    return hal::detail::make_operation(TT_OP_RESOURCEDECL(linger_time, resources, instruction_class));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t FlushTdma::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation FlushTdma::operation() const
 {
     hal::detail::require(detail::is_valid(*this), "TDMA flush selection is 4 bits");
-    return TT_OP_FLUSHDMA(static_cast<std::uint8_t>(scope));
+    return hal::detail::make_operation(TT_OP_FLUSHDMA(static_cast<std::uint8_t>(scope)));
 }
 
 /** @brief Issue a compile-time descriptor as one immediate instruction. */
-template <auto Operation>
+template <auto Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    static_assert(detail::is_valid(Operation), "invalid descriptor");
-    constexpr std::uint32_t operation = Operation.operation();
-    TTI_INSN(operation);
+    static_assert(detail::is_valid(Descriptor), "invalid descriptor");
+    hal::detail::run_immediate<Descriptor.operation()>();
 }
 
 /** @brief Issue a runtime-selected descriptor. */
-template <typename Operation>
-inline __attribute__((always_inline)) void run(const Operation descriptor)
+template <typename Descriptor>
+inline __attribute__((always_inline)) void run(const Descriptor descriptor)
 {
-    TT_INSN(descriptor.operation());
+    hal::run(descriptor.operation());
 }
 
 } // namespace hal::misc

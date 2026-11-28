@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "../utils/gpr.h"
+#include "../utils/helpers.h"
 #include "access_types.h"
 #include "ckernel_ops.h"
 #include "detail/mmio_read.h"
@@ -207,7 +208,9 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
+            static_assert((F.mask(S) & ~detail::ThreadCfgWordMask) == 0u, "thread CFG field must lie in the low 16 bits of its word");
+            // The value is checked against the field width above, so it reaches SETC16 unmasked, as in production.
+            TT_SETC16(cfg_word_addr, value << F.shamt(S));
         }
         else
         {
@@ -345,6 +348,35 @@ inline __attribute__((always_inline)) void write(const std::array<std::uint32_t,
 {
     static_assert(A == Access::MMIO, "array writes require Access::MMIO");
     detail::write_array_mmio<detail::word_anchor<Anchor>, S, Count>(detail::state_cfg_bank(), values);
+}
+
+/*************************************************************************************************
+ * In-order arithmetic
+ ************************************************************************************************/
+
+/**
+ * @brief Add a Scratch::val section to a whole state-CFG word, in order with Tensix instructions (CFGSHIFTMASK).
+ *
+ * @tparam Anchor: Whole-word state-CFG field, or a field group whose Raw Field is used.
+ * @tparam S: Register section.
+ * @tparam Scratch: Scratch::val section to add.
+ * @tparam Completion: Wait appends a NOP for a next instruction that reads the word; defaults to Deferred.
+ */
+template <const auto& Anchor, Sec S, ScratchSec Scratch, WrcfgCompletion Completion = WrcfgCompletion::Deferred>
+inline __attribute__((always_inline)) void add_scratch()
+{
+    constexpr const Field& F = detail::word_anchor<Anchor>;
+    static_assert(F.scope == RegisterScope::State, "add_scratch requires a state-CFG destination");
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    static_assert(F.shamt(S) == 0 && F.mask(S) == 0xffffffffu, "add_scratch requires a field covering a whole 32-bit CFG word");
+    static_assert(F.addr32(S) < detail::StateCfgWordCount, "CFG write destination lies outside its register scope");
+
+    TTI_CFGSHIFTMASK(
+        1 /*disable_mask_on_old_val*/, 0b011 /*operation: add*/, 31 /*mask_width*/, 0 /*right_cshift_amt*/, hal::to_underlying(Scratch), F.addr32(S));
+    if constexpr (Completion == WrcfgCompletion::Wait)
+    {
+        TTI_NOP;
+    }
 }
 
 } // namespace hal::cfg
