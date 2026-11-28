@@ -32,6 +32,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_STREAM_NARROW)
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, !is_fp32_dest_acc_en
+#else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t CT_DIM             = params.CT_DIM;
@@ -57,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
             0 /* transpose */,
             CT_DIM,
             RT_DIM,
@@ -134,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
             TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, CT_DIM, RT_DIM);
-        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {
@@ -154,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                        _llk_math_wait_for_dest_available_<dest_sync>();
                     }
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
@@ -162,7 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }
@@ -195,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {
@@ -216,11 +221,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     for (std::uint32_t i = 0; i < CT_DIM; i++)
                     {
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[phase * CT_DIM + i]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[phase * CT_DIM + i]));
                     }
                     if constexpr (sync_with_math)
                     {
-                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

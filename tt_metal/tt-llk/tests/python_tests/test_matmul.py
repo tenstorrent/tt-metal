@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import List
 
 import pytest
 import torch
 from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
@@ -25,10 +27,12 @@ from helpers.matmul_sweep import (
     matmul_pack_form,
 )
 from helpers.param_config import (
+    build_param_id,
     flat_axes,
     input_output_formats,
     max_dest_tiles,
     parametrize,
+    parametrize_smoke,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -38,12 +42,26 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_DYN_SWITCH,
+    MATMUL_FORM_KEYS,
+    MATMUL_FUNC_BLOCKS,
+    MATMUL_K_LOOP,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
+    MATMUL_STREAM_Z,
+    MATMUL_UNPACK_TTSYNC,
+    MATMUL_UNPACK_TTSYNC_EXCL,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    matmul_main_form,
+    matmul_two_row_off,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -100,10 +118,52 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 
 MATMUL_AXIS_NAMES = ("formats", "dest_acc", "ct_dim", "rt_dim", "kt_dim")
 
+# Blackhole builds one ELF per block shape (its compile-time block keys), where the run-time dims of main shared one per
+# format: 1 in 16 combinations run on the block keys, one per format, accumulate mode and fidelity in smoke and the rest of
+# them nightly; the others run nightly on main's form, which shares one ELF per format as main did. Every id keeps main's name.
+MATMUL_SMOKE_STRIDE = 16
 
-@parametrize(
-    math_fidelity=ALL_MATH_FIDELITIES,
-    **flat_axes(MATMUL_AXIS_NAMES, ALL_MATMUL_COMBINATIONS),
+
+class _MainFormKt(int):
+    """kt_dim of a nightly test_matmul id: the block runs main's form (see matmul_main_form)."""
+
+
+def _matmul_params():
+    names = ("math_fidelity", *MATMUL_AXIS_NAMES)
+    blackhole = get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    params = []
+    smoke_cells = set()
+    for offset, math_fidelity in enumerate(ALL_MATH_FIDELITIES):
+        for i, combination in enumerate(ALL_MATMUL_COMBINATIONS):
+            values = (math_fidelity, *combination)
+            param_id = build_param_id(names, values)
+            cell = (math_fidelity, str(combination[0]), combination[1])
+            if not blackhole:
+                params.append(pytest.param(*values, id=param_id))
+            elif (i + offset) % MATMUL_SMOKE_STRIDE == 0:
+                smoke = cell not in smoke_cells
+                smoke_cells.add(cell)
+                params.append(
+                    pytest.param(
+                        *values,
+                        id=param_id,
+                        marks=() if smoke else pytest.mark.nightly,
+                    )
+                )
+            else:
+                params.append(
+                    pytest.param(
+                        *values[:-1],
+                        _MainFormKt(values[-1]),
+                        id=param_id,
+                        marks=pytest.mark.nightly,
+                    )
+                )
+    return params
+
+
+@pytest.mark.parametrize(
+    "math_fidelity,formats,dest_acc,ct_dim,rt_dim,kt_dim", _matmul_params()
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
@@ -114,8 +174,14 @@ def test_matmul(
     rt_dim,
     kt_dim,
     boot_mode=BootMode.DEFAULT,
+    row_mop=False,
     transpose=False,
+    unpack_ttsync=False,
     dest_sync=DestSync.Half,
+    unpack_ttsync_excl=False,
+    source="sources/matmul_test.cpp",
+    dyn_switch=None,
+    blocks=1,
 ):
     torch_format = format_dict[formats.output_format]
 
@@ -159,7 +225,7 @@ def test_matmul(
         input_B_format=formats.input_format,
     )
 
-    if formats.input_format != DataFormat.Bfp8_b:
+    if not formats.input_format.is_block_float():
         tilized_A = tilize_block(
             src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
         )
@@ -171,30 +237,120 @@ def test_matmul(
         tilized_A = src_A
         tilized_B = src_B
 
-    configuration = TestConfig(
-        "sources/matmul_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-            DEST_SYNC(dest_sync),
-            THROTTLE_LEVEL(),
-            MATMUL_PACK_BLOCK(
-                matmul_pack_form(
-                    formats,
-                    dest_sync,
-                    math_fidelity,
-                    matmul_dims.rt_dim,
-                    matmul_dims.ct_dim,
-                    matmul_dims.kt_dim,
-                )
+    # the two-row scheme runs on the plain block of matmul_test.cpp only
+    two_row_off = (
+        row_mop
+        or unpack_ttsync
+        or transpose
+        or source != "sources/matmul_test.cpp"
+        or matmul_two_row_off(
+            formats,
+            dest_sync,
+            matmul_dims.kt_dim,
+            k_loop=MATMUL_K_LOOP.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
             ),
-        ],
+        )
+    )
+    templates = [
+        MATH_FIDELITY(math_fidelity),
+        *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),
+        PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+        DEST_SYNC(dest_sync),
+        THROTTLE_LEVEL(),
+        *([MATMUL_ROW_MOP()] if row_mop else []),
+        *([MATMUL_DYN_SWITCH()] if dyn_switch else []),
+        *([MATMUL_FUNC_BLOCKS()] if blocks > 1 else []),
+        *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
+        *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
+        *(
+            []
+            if unpack_ttsync
+            else MATMUL_UNPACK_TTSYNC.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
+                dest_sync,
+                two_row_off,
+            )
+        ),
+        *MATMUL_STREAM_NARROW.for_block(
+            formats,
+            dest_acc,
+            dest_sync,
+            matmul_dims.ct_dim,
+            matmul_dims.rt_dim,
+            math_fidelity=math_fidelity,
+        ),
+        *MATMUL_REUSE_DIR.for_block(
+            formats,
+            math_fidelity,
+            matmul_dims.ct_dim,
+            matmul_dims.rt_dim,
+            dest_sync,
+            two_row_off,
+        ),
+        *MATMUL_STREAM_Z.for_block(
+            formats,
+            dest_acc,
+            dest_sync,
+            matmul_dims.ct_dim,
+            matmul_dims.rt_dim,
+            math_fidelity=math_fidelity,
+            kt_dim=matmul_dims.kt_dim,
+            two_row_off=two_row_off,
+        ),
+        *MATMUL_K_LOOP.for_block(
+            formats,
+            dest_acc,
+            math_fidelity,
+            matmul_dims.ct_dim,
+            matmul_dims.rt_dim,
+            matmul_dims.kt_dim,
+        ),
+        *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
+        *MATMUL_FORM_KEYS.for_block(
+            formats,
+            matmul_dims.kt_dim,
+            matmul_dims.ct_dim,
+            matmul_dims.rt_dim,
+            math_fidelity=math_fidelity,
+            dest_sync=dest_sync,
+            dest_acc=dest_acc,
+            unfuse_one_tile=True,
+            two_row_off=two_row_off,
+        ),
+        MATMUL_PACK_BLOCK(
+            matmul_pack_form(
+                formats,
+                dest_sync,
+                math_fidelity,
+                matmul_dims.rt_dim,
+                matmul_dims.ct_dim,
+                matmul_dims.kt_dim,
+            )
+        ),
+    ]
+    # the nightly ids of test_matmul run main's form, unless LLK_SWEEP_ALL=1 asks for every keyed build
+    if isinstance(kt_dim, _MainFormKt) and os.environ.get("LLK_SWEEP_ALL") != "1":
+        templates = matmul_main_form(templates)
+    configuration = TestConfig(
+        source,
+        formats,
+        templates=templates,
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-            LOOP_FACTOR(1),
+            LOOP_FACTOR(blocks),
             UNPACK_TRANS_FACES(Transpose.Yes if transpose else Transpose.No),
         ],
         variant_stimuli=StimuliConfig(
@@ -205,13 +361,16 @@ def test_matmul(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
+            tile_count_res=matmul_dims.output_tile_cnt * blocks,
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
     )
 
     res_from_L1 = configuration.run().result
+
+    if blocks > 1:
+        golden_tensor = torch.cat([golden_tensor] * blocks)
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -222,6 +381,80 @@ def test_matmul(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# The math thread's row MOP (one MOP per reuse row, Blackhole only) on every block shape, fidelity and DEST mode.
+ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
+    input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
+    ),
+    DEST_ACC_MODES,
+)
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@pytest.mark.llk_sweep
+@parametrize(
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    **flat_axes(MATMUL_AXIS_NAMES, ROW_MOP_COMBINATIONS),
+)
+def test_matmul_row_mop(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim):
+    test_matmul(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, row_mop=True)
+
+
+# The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape; full
+# sync also runs it with the 8-bit stream.
+@skip_for_wormhole
+@pytest.mark.nightly
+@pytest.mark.llk_sweep
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    **flat_axes(MATMUL_AXIS_NAMES, ROW_MOP_COMBINATIONS),
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_matmul_unpack_ttsync(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, dest_sync
+):
+    test_matmul(
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        unpack_ttsync=True,
+        dest_sync=dest_sync,
+    )
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@pytest.mark.llk_sweep
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    **flat_axes(MATMUL_AXIS_NAMES, ROW_MOP_COMBINATIONS),
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_matmul_unpack_ttsync_excl(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, dest_sync
+):
+    test_matmul(
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        unpack_ttsync=True,
+        dest_sync=dest_sync,
+        unpack_ttsync_excl=True,
+    )
 
 
 # in1 transposed tile by tile (SDPA's Q K^T), with the per-tile MOP and with the row MOP.
@@ -253,11 +486,287 @@ TRANSPOSE_COMBINATIONS = [
 
 @skip_for_wormhole
 @pytest.mark.nightly
+@pytest.mark.llk_sweep
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
     **flat_axes(MATMUL_AXIS_NAMES, TRANSPOSE_COMBINATIONS),
+    row_mop=[False, True],
 )
-def test_matmul_transpose(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim):
+def test_matmul_transpose(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, row_mop
+):
     test_matmul(
-        math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, transpose=True
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        row_mop=row_mop,
+        transpose=True,
+    )
+
+
+# Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack
+# MOP's zmask must cover the whole row.
+FULL_SYNC_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
+FULL_SYNC_BLOCKS = [
+    ((rt * 32, kt * 32), (kt * 32, ct * 32))
+    for rt, ct, kt in [(1, 16, 2), (16, 1, 2), (2, 8, 2), (8, 2, 2), (4, 4, 2)]
+]
+
+
+# Wormhole's unpack AB matmul MOP zmask covers 8 tiles in config context 1, short of the 16-tile rows here.
+# Smoke pairs LoFi with Float16_b and HiFi2 with Bfp8_b on every block, the nightly runs the rest.
+@skip_for_wormhole
+@parametrize_smoke(
+    lambda math_fidelity, formats, dims: (math_fidelity == MathFidelity.LoFi)
+    == (formats == FULL_SYNC_FORMATS[0]),
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=FULL_SYNC_FORMATS,
+    dims=FULL_SYNC_BLOCKS,
+)
+def test_matmul_full_sync(math_fidelity, formats, dims):
+    torch_format = format_dict[formats.output_format]
+    input_A_dimensions = list(dims[0])
+    input_B_dimensions = list(dims[1])
+
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_A_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_B_dimensions,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
+    )
+
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
+
+    generate_golden = get_golden_generator(MatmulGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        src_B,
+        formats.output_format,
+        math_fidelity,
+        input_A_dimensions=input_A_dimensions,
+        input_B_dimensions=input_B_dimensions,
+        tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    )
+
+    if formats.input_format != DataFormat.Bfp8_b:
+        tilized_A = tilize_block(
+            src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
+        )
+        tilized_B = tilize_block(
+            src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
+        )
+    else:
+        tilized_A = src_A
+        tilized_B = src_B
+
+    configuration = TestConfig(
+        "sources/matmul_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            DEST_SYNC(DestSync.Full),
+            THROTTLE_LEVEL(),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                DestAccumulation.No,
+                DestSync.Full,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                math_fidelity=math_fidelity,
+            ),
+            *MATMUL_K_LOOP.for_block(
+                formats,
+                DestAccumulation.No,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
+            ),
+            *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
+            *MATMUL_FORM_KEYS.for_block(
+                formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    DestSync.Full,
+                    math_fidelity,
+                    matmul_dims.rt_dim,
+                    matmul_dims.ct_dim,
+                    matmul_dims.kt_dim,
+                )
+            ),
+        ],
+        runtimes=[
+            NUM_FACES(),
+            TILE_COUNT(matmul_dims.output_tile_cnt),
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            LOOP_FACTOR(1),
+            UNPACK_TRANS_FACES(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            formats.input_format,
+            tilized_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=matmul_dims.output_tile_cnt,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
+
+
+# The 8-bit stream (Blackhole, full sync with a 16-bit DEST) on every block shape.
+STREAM_NARROW_COMBINATIONS = generate_format_aware_matmul_combinations(
+    [
+        fmt
+        for fmt in MATMUL_FORMATS
+        if fmt.input_format == DataFormat.Bfp8_b and not is_dest_acc_needed(fmt)
+    ],
+    [DestAccumulation.No],
+)
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@pytest.mark.llk_sweep
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    **flat_axes(MATMUL_AXIS_NAMES, STREAM_NARROW_COMBINATIONS),
+)
+def test_matmul_stream_narrow(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim):
+    test_matmul(
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        dest_sync=DestSync.Full,
+    )
+
+
+# A dynamic throttle change between k steps (matmul_dyn_switch_test.cpp: even steps run the form of the init, odd ones the
+# throttled tile MOP), re-initialised by the switch path (dyn_switch) and by the full init, against the golden, on the tile and
+# the row form, at both DEST syncs.
+DYN_SWITCH_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
+DYN_SWITCH_BLOCKS = [
+    ((rt * 32, kt * 32), (kt * 32, ct * 32))
+    for rt, ct, kt in [(1, 1, 5), (2, 2, 4), (1, 4, 3), (4, 1, 3), (2, 4, 4), (1, 8, 3)]
+]
+
+
+DYN_SWITCH_SMOKE_BLOCKS = [DYN_SWITCH_BLOCKS[1], DYN_SWITCH_BLOCKS[5]]
+
+
+# Smoke pairs LoFi with Float16_b and HiFi2 with Bfp8_b and each block with both syncs and both forms, the nightly runs the rest.
+def _dyn_switch_smoke(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+    return (math_fidelity == MathFidelity.LoFi) == (
+        formats == DYN_SWITCH_FORMATS[0]
+    ) and DYN_SWITCH_SMOKE_BLOCKS.index(dims) == (
+        (dest_sync == DestSync.Full) != row_mop
+    )
+
+
+@skip_for_wormhole
+@parametrize_smoke(
+    _dyn_switch_smoke,
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=DYN_SWITCH_FORMATS,
+    dims=DYN_SWITCH_SMOKE_BLOCKS,
+    dest_sync=[DestSync.Half, DestSync.Full],
+    row_mop=[False, True],
+    dyn_switch=[False, True],
+)
+def test_matmul_dyn_switch(
+    math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch
+):
+    _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch)
+
+
+@pytest.mark.nightly
+@pytest.mark.llk_sweep
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=DYN_SWITCH_FORMATS,
+    dims=[d for d in DYN_SWITCH_BLOCKS if d not in DYN_SWITCH_SMOKE_BLOCKS],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    row_mop=[False, True],
+    dyn_switch=[False, True],
+)
+def test_matmul_dyn_switch_rest(
+    math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch
+):
+    _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch)
+
+
+def _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+    rt_dim, kt_dim = (d // TILE_DIM for d in dims[0])
+    ct_dim = dims[1][1] // TILE_DIM
+    test_matmul(
+        math_fidelity,
+        formats,
+        DestAccumulation.No,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        row_mop=row_mop,
+        dest_sync=dest_sync,
+        source="sources/matmul_dyn_switch_test.cpp",
+        dyn_switch=dyn_switch,
+    )
+
+
+# Three output blocks of the same matmul on the real buffers, each packed to the next result tiles, on every config whose pack form is a block form: the
+# second and the third block take the W base programming and the W advance of llk_pack_block, which one pass never reaches.
+@pytest.mark.nightly
+@pytest.mark.llk_sweep
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    **flat_axes(MATMUL_AXIS_NAMES, ALL_MATMUL_COMBINATIONS),
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_matmul_blocks(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, dest_sync
+):
+    if matmul_pack_form(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim) == 0:
+        pytest.skip("per-tile pack")
+    test_matmul(
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        dest_sync=dest_sync,
+        blocks=3,
     )

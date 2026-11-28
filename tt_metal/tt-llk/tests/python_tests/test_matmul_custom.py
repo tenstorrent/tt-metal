@@ -27,7 +27,10 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     MATH_FIDELITY,
+    MATMUL_CUSTOM_CB_FORMATS,
+    MATMUL_CUSTOM_PACK32,
     NUM_FACES,
+    PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
     TILE_COUNT,
 )
@@ -136,7 +139,19 @@ def _run_matmul_custom(
             templates=[
                 MATH_FIDELITY(math_fidelity),
                 THROTTLE_LEVEL(throttle_level),
+                PACK_SRC_FROM_OUTPUT(),
                 DEST_SYNC(dest_sync),
+                MATMUL_CUSTOM_CB_FORMATS(
+                    math_fidelity,
+                    dest_sync,
+                    formats.input_format,
+                    formats.input_format,
+                    formats.output_format,
+                ),
+                MATMUL_CUSTOM_PACK32(
+                    in32=formats.input_format == DataFormat.Float32,
+                    out32=formats.output_format == DataFormat.Float32,
+                ),
             ],
             runtimes=[
                 NUM_FACES(),

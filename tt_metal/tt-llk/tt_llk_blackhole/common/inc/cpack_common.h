@@ -440,11 +440,58 @@ struct llk_pack_in32_api
     static constexpr bool value = false;
 };
 
+// Specialized from the kernel's pack formats (llk_pack_common_api.h): every pack output is 32 bit.
+template <int api>
+struct llk_pack_out32_api
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
 {
     return llk_pack_matmul_api<dep * 0 + 1>::value || llk_pack_matmul_api<dep * 0 + 2>::value || llk_pack_matmul_api<dep * 0 + 3>::value;
+}
+
+// Marks the matmul API's plain inits set as the kernel is parsed (matmul.h): completing llk_pack_shape_set<N> makes
+// llk_pack_shape_used(llk_pack_shape_tag<N>) callable. 5: an init with a constant block that is not tall, 6: one with a
+// constant tall block (rt >= 4, ct <= 2), 9: one with a constant one-row block of two or more tiles, 11: a call with a constant
+// kt of 1; a run-time block sets none.
+#define LLK_PACK_SHAPE_MARKS 1
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnon-template-friend"
+template <int>
+struct llk_pack_shape_tag
+{
+    friend auto llk_pack_shape_used(llk_pack_shape_tag);
+};
+#pragma GCC diagnostic pop
+// A probe that ran before a later mark keeps its earlier result, as on GCC 15; GCC 16 reports that as an error.
+#pragma GCC diagnostic push
+#if __GNUC__ >= 16
+#pragma GCC diagnostic ignored "-Wsfinae-incomplete"
+#endif
+template <int N>
+struct llk_pack_shape_set
+{
+    friend auto llk_pack_shape_used(llk_pack_shape_tag<N>)
+    {
+        return true;
+    }
+};
+
+#pragma GCC diagnostic pop
+// the probe depends on dep, so it reads the marks of the whole kernel (at the end of the unit)
+template <int N, std::uint32_t dep, typename = decltype(llk_pack_shape_used(llk_pack_shape_tag<N + 0 * dep>{}))>
+constexpr bool llk_pack_shape_marked(int)
+{
+    return true;
+}
+template <int N, std::uint32_t dep>
+constexpr bool llk_pack_shape_marked(...)
+{
+    return false;
 }
 
 // A LoFi fp32 DEST matmul whose in0 alone is 32 bit binds on its pack (a 32-bit output at the 32-bit rate, mm_r3_1), and
@@ -456,13 +503,24 @@ constexpr bool llk_pack_matmul_pack_bound()
            !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
-// A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST, at LoFi or with a 32-bit operand
-// an earlier pack start costs them L1 grants.
+// A custom matmul (no MOP) at LoFi with a 32-bit operand or output keeps the early release: its math does not wait on it there.
+template <std::uint32_t dep>
+constexpr bool llk_pack_custom_early()
+{
+    return llk_pack_matmul_api<dep * 0 + 3>::value && llk_pack_lofi_api<dep * 0 + 1>::value &&
+           (llk_pack_in32_api<dep * 0 + 1>::value || llk_pack_out32_api<dep * 0 + 1>::value);
+}
+
+// A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
+// costs them L1 grants. Only tall blocks lose them, so a kernel whose constant blocks are all not tall keeps the early start; at LoFi
+// a one-row block of two or more tiles (mark 9) loses them too (1xN Bfp8_b / Bfp4_b / Tf32-out +0.3..+1.5 cy/block, census 65c1c).
 template <std::uint32_t dep>
 constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
-    return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value || llk_pack_in32_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() &&
-           !llk_pack_norm_api<dep * 0 + 1>::value;
+    return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value &&
+           !(llk_pack_shape_marked<5, dep>(0) && !llk_pack_shape_marked<6, dep>(0) &&
+             !(llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<9, dep>(0) && !llk_pack_shape_marked<11, dep>(0))) &&
+           !llk_pack_custom_early<dep>();
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h, seven eltwise_unary headers and

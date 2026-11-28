@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "llk_size_mode.h"
+#include "api/compute/matmul_fe_mark.h"
 #include "sanitizer/api.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -75,9 +77,21 @@ inline void llk_math_dest_clear_region_end() {
     _llk_math_clear_dest_section_<DstSync::SyncFull, DST_ACCUM_MODE>();
 }
 
-template <bool is_fp32_dest_acc_en>
+// Only matmul_block kernels take the early base write: after RISC-issued SFPU work its MMIO-pushed SETC16 holds the
+// post (VCS pow_int 32x32: +16 cy per section), and a call of the cells of tag 21 keeps main's. The probe reads the
+// marks of the whole kernel.
+template <bool is_fp32_dest_acc_en, bool next_op_sets_base = false>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    using D = std::integral_constant<bool, is_fp32_dest_acc_en>;
+    // tag 21 is read in place: a local constexpr for it moved moe_fused_swiglu's math register allocation
+    constexpr bool matmul_block_kernel =
+        ckernel::matmul_fe_mark::is_used_d<7, D>(0) || ckernel::matmul_fe_mark::is_used_d<8, D>(0);
+    _llk_math_dest_section_done_<
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        false,
+        next_op_sets_base,
+        LLK_SIZE_MODE || !matmul_block_kernel || ckernel::matmul_fe_mark::is_used_d<21, D>(0)>();
 }
 
 template <bool is_fp32_dest_acc_en>

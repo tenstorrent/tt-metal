@@ -41,7 +41,20 @@
   "perf_unpack_a_bcast_eltwise": 9.1,
   "perf_unpack_tilize": 266.8,
   "perf_unpack_transpose": 10.8,
-  "perf_vif_equiv_sweep": 6.4
+  "perf_vif_equiv_sweep": 6.4,
+  "perf_matmul_cov2": 0.0,
+  "perf_matmul_cov3": 0.0,
+  "perf_matmul_grid": 0.0,
+  "perf_matmul_grid2": 0.0,
+  "perf_matmul_grid2_tiny": 0.0,
+  "perf_matmul_llkx": 0.0,
+  "perf_matmul_llkx_sr": 0.0,
+  "perf_matmul_llkx_a4": 0.0,
+  "perf_matmul_llkx_math": 0.0,
+  "perf_matmul_mix": 0.0,
+  "perf_math_matmul_cov": 1.0,
+  "perf_matmul_forms": 1.0,
+  "perf_matmul_ttsync_excl": 1.0
  },
  "blackhole": {
   "perf_block_max8": 292.6,
@@ -123,6 +136,21 @@
   "perf_pack_cov3": 5.6,
   "perf_pack_grid": 1.9,
   "perf_pack_grid_rows": 1.0,
-  "perf_pack_llkx": 1.7
+  "perf_pack_llkx": 1.7,
+  "perf_matmul_cov2": 400.0,
+  "perf_matmul_cov3": 4900.0,
+  "perf_matmul_grid": 54000.0,
+  "perf_matmul_grid2": 44000.0,
+  "perf_matmul_grid2_tiny": 8000.0,
+  "perf_matmul_llkx": 1500.0,
+  "perf_matmul_llkx_sr": 1500.0,
+  "perf_matmul_llkx_a4": 1500.0,
+  "perf_matmul_llkx_math": 1500.0,
+  "perf_matmul_mix": 14400.0,
+  "perf_matmul_row_mop": 1.0,
+  "perf_matmul_unpack_ttsync": 1.0,
+  "perf_math_matmul_cov": 1.0,
+  "perf_matmul_forms": 1.0,
+  "perf_matmul_ttsync_excl": 1.0
  }
 }

@@ -12,10 +12,16 @@ from helpers.llk_params import (
     DestSync,
     Transpose,
 )
+from helpers.matmul_prod_census import (
+    is_production_key,
+    perf_gate_applies,
+    perf_gate_selection,
+)
 from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
+    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -32,11 +38,21 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_FORM_KEYS,
+    MATMUL_K_LOOP,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
+    MATMUL_STREAM_Z,
+    MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    matmul_two_row_off,
 )
 
 # Cold start, functional-max inner dim, and reuse/bandwidth.
@@ -111,25 +127,77 @@ def matmul_combos(
 MATMUL_AXIS_NAMES = ("formats", "dest_acc", "dest_sync", "ct_dim", "rt_dim", "kt_dim")
 
 
+def matmul_block_combos(formats, dest_acc):
+    """matmul_combos as (formats, dest_acc, dest_sync, (in0 dims, in1 dims)), the shape the Blackhole block sweeps name their ids by."""
+    return [
+        (
+            fmt,
+            acc,
+            sync,
+            (
+                [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+            ),
+        )
+        for fmt, acc, sync, ct_dim, rt_dim, kt_dim in matmul_combos(formats, dest_acc)
+    ]
+
+
+PERF_MATMUL_COMBOS = matmul_combos(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ]
+    ),
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if is_dest_acc_needed(formats)
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    ),
+)
+
+
+def _gate_key(p):
+    (formats, dest_acc, dest_sync, ct_dim, rt_dim, kt_dim), fid = p
+    return is_production_key(
+        fid,
+        dest_sync == DestSync.Half,
+        dest_acc == DestAccumulation.Yes,
+        formats.input_format,
+        formats.input_format,
+        formats.output_format,
+        rt_dim,
+        ct_dim,
+        kt_dim,
+    )
+
+
+def _gate_family(p):
+    (formats, dest_acc, dest_sync, *_dims), fid = p
+    return (fid, dest_sync, dest_acc, formats.input_format, formats.output_format)
+
+
+_PERF_GATE = perf_gate_selection(
+    [(c, f) for c in PERF_MATMUL_COMBOS for f in ALL_MATH_FIDELITIES],
+    _gate_key,
+    _gate_family,
+    lambda p: (repr(p[0]), p[1]),
+)
+
+
+def perf_gate_keep(params) -> bool:
+    """The perf CI runner's ids on Blackhole (helpers/matmul_prod_census.py)."""
+    combo = tuple(params[axis] for axis in MATMUL_AXIS_NAMES)
+    return (
+        not perf_gate_applies() or (repr(combo), params["math_fidelity"]) in _PERF_GATE
+    )
+
+
 @pytest.mark.perf
 @parametrize(
-    **flat_axes(
-        MATMUL_AXIS_NAMES,
-        matmul_combos(
-            formats=input_output_formats(
-                [
-                    DataFormat.Float16_b,
-                    DataFormat.Float32,
-                    DataFormat.Bfp8_b,
-                ]
-            ),
-            dest_acc=lambda formats: (
-                [DestAccumulation.Yes]
-                if is_dest_acc_needed(formats)
-                else [DestAccumulation.No, DestAccumulation.Yes]
-            ),
-        ),
-    ),
+    **flat_axes(MATMUL_AXIS_NAMES, PERF_MATMUL_COMBOS),
     math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
@@ -155,6 +223,14 @@ def test_perf_matmul(
     # Cap L1 stimuli so K=32 dest-fill Float32 does not overflow Tensix L1.
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
+    two_row_off = matmul_two_row_off(
+        formats,
+        dest_sync,
+        dims.kt_dim,
+        k_loop=MATMUL_K_LOOP.for_block(
+            formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
+        ),
+    )
 
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
@@ -162,13 +238,74 @@ def test_perf_matmul(
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
-            # The gate measures the per-tile pack of ttnn's run-time-count pack_block (the matmul head's test runs production's,
-            # per tile here); test_matmul and test_math_matmul keep the block forms.
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+            ),
+            *MATMUL_REUSE_DIR.for_block(
+                formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync, two_row_off
+            ),
+            *MATMUL_STREAM_Z.for_block(
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+                kt_dim=dims.kt_dim,
+                two_row_off=two_row_off,
+            ),
+            *MATMUL_UNPACK_TTSYNC.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                dims.ct_dim,
+                dims.rt_dim,
+                dims.kt_dim,
+                dest_sync,
+                two_row_off,
+            ),
+            *MATMUL_K_LOOP.for_block(
+                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
+            ),
+            *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
+            *MATMUL_ROW_MOP.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                dims.kt_dim,
+                two_row_off=two_row_off,
+            ),
+            *MATMUL_FORM_KEYS.for_block(
+                formats,
+                dims.kt_dim,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=dest_sync,
+                dest_acc=dest_acc,
+                unfuse_one_tile=True,
+                two_row_off=two_row_off,
+            ),
             MATMUL_PACK_BLOCK(
-                0,
-                in32=formats.input_format == DataFormat.Float32,
+                matmul_pack_form(
+                    formats,
+                    dest_sync,
+                    math_fidelity,
+                    dims.rt_dim,
+                    dims.ct_dim,
+                    dims.kt_dim,
+                )
             ),
         ],
         runtimes=[

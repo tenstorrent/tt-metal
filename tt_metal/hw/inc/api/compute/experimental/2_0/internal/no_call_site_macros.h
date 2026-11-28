@@ -10,3 +10,5 @@
 #undef pack_tile
 #undef pack_block
 #undef pack_reconfig_data_format
+#undef matmul_block
+#undef matmul_block_init

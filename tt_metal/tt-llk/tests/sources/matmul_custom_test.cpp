@@ -24,6 +24,25 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
+#ifdef ARCH_BLACKHOLE
+// production's rule (matmul_custom.h) on the CB formats the JIT would give this kernel: main's unpack
+static_assert(
+    ckernel::matmul_custom_main_unpack_kernel(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, matmul_custom_cb_formats) == MATMUL_CUSTOM_MAIN_UNPACK,
+    "MATMUL_CUSTOM_CB_FORMATS must mirror matmul_custom_main_unpack_kernel");
+#endif
+#if defined(ARCH_BLACKHOLE) && MATMUL_CUSTOM_MAIN_UNPACK
+#include "llk_unpack_AB_matmul_main_lib.h"
+#define MATMUL_CUSTOM_UNPACK mm_main::
+#define MATMUL_CUSTOM_UNPACK_ARGS
+#elif defined(ARCH_BLACKHOLE)
+// matmul_custom.h: per row, the row mask of 8 tiles
+#define MATMUL_CUSTOM_UNPACK
+#define MATMUL_CUSTOM_UNPACK_ARGS 0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), false, 8u
+#else
+#define MATMUL_CUSTOM_UNPACK
+#define MATMUL_CUSTOM_UNPACK_ARGS
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -55,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(
+        MATMUL_CUSTOM_UNPACK _llk_unpack_AB_matmul_init_<>(
             0 /* transpose */,
             CT_DIM,
             RT_DIM,
@@ -84,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    _llk_unpack_AB_matmul_<>(
+                    MATMUL_CUSTOM_UNPACK _llk_unpack_AB_matmul_<MATMUL_CUSTOM_UNPACK_ARGS>(
                         L1_ADDRESS(buffer_A[0]),
                         L1_ADDRESS(buffer_B[0]),
                         j,
@@ -186,6 +205,20 @@ struct llk_pack_lofi_api<1>
 {
     static constexpr bool value = MATH_FIDELITY == ckernel::MathFidelity::LoFi;
 };
+#ifdef MATMUL_CUSTOM_IN32
+template <>
+struct llk_pack_in32_api<1>
+{
+    static constexpr bool value = true;
+};
+#endif
+#ifdef MATMUL_CUSTOM_OUT32
+template <>
+struct llk_pack_out32_api<1>
+{
+    static constexpr bool value = true;
+};
+#endif
 } // namespace ckernel::packer
 #endif
 

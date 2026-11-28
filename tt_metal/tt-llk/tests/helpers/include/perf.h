@@ -495,7 +495,8 @@ inline void _perf_math_stream_clear_valid(std::uint32_t iterations)
 }
 
 template <PerfRunType RUN_TYPE>
-inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
+inline void _perf_unpack_matmul_mock(
+    std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1, std::uint32_t reuse_dir = 0)
 {
 #if defined(ARCH_WORMHOLE)
     if constexpr (perf_mock_mop<RUN_TYPE>())
@@ -509,11 +510,14 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
         {
             for (std::uint32_t j = 0; j < kt_dim; j++)
             {
-                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
-                const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
+                // reuse_dir 1 and 2 force the held operand regardless of the block shape; 4 holds two rows of in0, 6 two columns of in1 (two_row)
+                [[maybe_unused]] const bool two_row = reuse_dir == 4 || reuse_dir == 6;
+                const bool reuse_b                  = reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
+                const std::uint32_t reuse_reg       = reuse_b ? ckernel::SrcB : ckernel::SrcA;
+                const std::uint32_t reuse_loop      = reuse_b ? rt_dim : ct_dim;
 
-                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
-                const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
+                const std::uint32_t reload_reg  = reuse_b ? ckernel::SrcA : ckernel::SrcB;
+                const std::uint32_t reload_loop = reuse_b ? ct_dim : rt_dim;
 
 #ifdef ARCH_WORMHOLE
 
@@ -556,9 +560,14 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
                  *   SRCA, SRCB * RT_DIM, SRCA, SRCB * RT_DIM, ...
                  */
 
-                for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter++)
+                // two_row: two held tiles, then the streamed ones (each serves both held tiles); one held tile for an odd last one
+                const std::uint32_t reuse_step = two_row ? 2 : 1;
+                for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += reuse_step)
                 {
-                    _perf_unpack_set_valid(reuse_reg);
+                    for (std::uint32_t i = 0; i < std::min(reuse_step, reuse_loop - reuse_iter); i++)
+                    {
+                        _perf_unpack_set_valid(reuse_reg);
+                    }
 
                     for (std::uint32_t i = 0; i < reload_loop; i++)
                     {
@@ -572,7 +581,8 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
 }
 
 template <PerfRunType RUN_TYPE>
-inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
+inline void _perf_math_matmul_mock(
+    std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1, std::uint32_t reuse_dir = 0)
 {
 #if defined(ARCH_WORMHOLE)
     if constexpr (perf_mock_mop<RUN_TYPE>())
@@ -586,11 +596,14 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         {
             for (std::uint32_t j = 0; j < kt_dim; j++)
             {
-                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
-                const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
+                // reuse_dir 1 and 2 force the held operand regardless of the block shape; 4 holds two rows of in0, 6 two columns of in1 (two_row)
+                [[maybe_unused]] const bool two_row = reuse_dir == 4 || reuse_dir == 6;
+                const bool reuse_b                  = reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
+                const std::uint32_t reuse_reg       = reuse_b ? ckernel::SrcB : ckernel::SrcA;
+                const std::uint32_t reuse_loop      = reuse_b ? rt_dim : ct_dim;
 
-                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
-                const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
+                const std::uint32_t reload_reg  = reuse_b ? ckernel::SrcA : ckernel::SrcB;
+                const std::uint32_t reload_loop = reuse_b ? ct_dim : rt_dim;
 
 #ifdef ARCH_WORMHOLE
 
@@ -633,14 +646,19 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
                  *  SRCB * RT_DIM, SRCA, SRCB * RT_DIM, SRCA, ...
                  */
 
-                for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter++)
+                // two_row: the streamed tiles, then two held tiles; one held tile for an odd last one
+                const std::uint32_t reuse_step = two_row ? 2 : 1;
+                for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += reuse_step)
                 {
                     for (std::uint32_t i = 0; i < reload_loop; i++)
                     {
                         _perf_math_clear_valid(reload_reg);
                     }
 
-                    _perf_math_clear_valid(reuse_reg);
+                    for (std::uint32_t i = 0; i < std::min(reuse_step, reuse_loop - reuse_iter); i++)
+                    {
+                        _perf_math_clear_valid(reuse_reg);
+                    }
                 }
 #endif
             }

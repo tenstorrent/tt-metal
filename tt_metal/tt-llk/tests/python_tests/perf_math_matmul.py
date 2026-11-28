@@ -12,7 +12,13 @@ from helpers.llk_params import (
     DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
+    MathFidelity,
     StochasticRounding,
+)
+from helpers.matmul_prod_census import (
+    is_production_key,
+    perf_gate_applies,
+    perf_gate_selection,
 )
 from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
@@ -22,6 +28,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
     matmul_config_columns,
     matmul_config_from_axes,
+    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
@@ -41,8 +48,16 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_FORM_KEYS,
+    MATMUL_IN1_ALT,
+    MATMUL_K_LOOP,
+    MATMUL_MAIN_ROW_MOP,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
     MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
+    MATMUL_STREAM_Z,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -51,6 +66,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    matmul_two_row_off,
 )
 
 MATMUL_FORMATS = input_output_formats(
@@ -213,19 +229,59 @@ ALL_TEST_PARAMS = list(
 )
 
 
-@pytest.mark.perf
-@parametrize(
-    **flat_axes(
-        (
-            "math_fidelity",
-            *PERF_MATMUL_CONFIG_AXES,
-            "throttle",
-            "num_blocks",
-            "row_mop",
-        ),
-        ALL_TEST_PARAMS,
-    )
+PERF_MATH_MATMUL_AXES = (
+    "math_fidelity",
+    *PERF_MATMUL_CONFIG_AXES,
+    "throttle",
+    "num_blocks",
+    "row_mop",
 )
+
+
+def _gate_key(row):
+    (in0_tile_r_dim, _), _ = row["input_tile_dimensions"]
+    return in0_tile_r_dim == TILE_DIM and is_production_key(
+        row["math_fidelity"],
+        row["dest_sync"] == DestSync.Half,
+        row["dest_acc"] == DestAccumulation.Yes,
+        row["formats"].input_format,
+        row["formats"].input_format,
+        row["formats"].output_format,
+        row["rt_dim"],
+        row["ct_dim"],
+        row["kt_dim"],
+    )
+
+
+def _gate_family(row):
+    return (
+        row["math_fidelity"],
+        row["dest_sync"],
+        row["dest_acc"],
+        row["formats"].input_format,
+        row["formats"].output_format,
+    )
+
+
+def _gate_ident(row):
+    return repr(tuple(row[axis] for axis in PERF_MATH_MATMUL_AXES))
+
+
+_PERF_GATE = perf_gate_selection(
+    (dict(zip(PERF_MATH_MATMUL_AXES, p)) for p in ALL_TEST_PARAMS),
+    _gate_key,
+    _gate_family,
+    _gate_ident,
+)
+
+
+def perf_gate_keep(params) -> bool:
+    """The perf CI runner's ids on Blackhole (helpers/matmul_prod_census.py)."""
+    return not perf_gate_applies() or _gate_ident(params) in _PERF_GATE
+
+
+@pytest.mark.perf
+@parametrize(**flat_axes(PERF_MATH_MATMUL_AXES, ALL_TEST_PARAMS))
 def test_perf_math_matmul(
     math_fidelity,
     formats,
@@ -266,6 +322,15 @@ def test_perf_math_matmul(
         kt_dim,
         unpack_transpose_faces,
     )
+    run_perf_math_matmul(
+        math_fidelity, matmul_config, throttle, num_blocks, row_mop, perf_report
+    )
+
+
+def run_perf_math_matmul(
+    math_fidelity, matmul_config, throttle, num_blocks, row_mop, perf_report
+):
+    formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
     in1_dimensions = matmul_config.tile_dimensions.in1_dimensions
     transpose = matmul_config.face_layout_config.unpack_transpose_faces
@@ -282,21 +347,140 @@ def test_perf_math_matmul(
         * matmul_config.tile_dimensions.kt_dim
     )
 
+    k_loop = MATMUL_K_LOOP.for_block(
+        formats,
+        matmul_config.dest_acc,
+        math_fidelity,
+        matmul_config.tile_dimensions.ct_dim,
+        matmul_config.tile_dimensions.rt_dim,
+        matmul_config.tile_dimensions.kt_dim,
+        matmul_config.tile_dimensions.in0_tile_r_dim,
+        matmul_config.tile_dimensions.in0_tile_c_dim,
+        matmul_config.tile_dimensions.in1_tile_r_dim,
+        matmul_config.tile_dimensions.in1_tile_c_dim,
+        dest_sync=matmul_config.dest_sync,
+        throttle=throttle,
+    )
+    two_row_off = matmul_two_row_off(
+        formats,
+        matmul_config.dest_sync,
+        matmul_config.tile_dimensions.kt_dim,
+        throttle,
+        (
+            matmul_config.tile_dimensions.in0_tile_r_dim,
+            matmul_config.tile_dimensions.in0_tile_c_dim,
+            matmul_config.tile_dimensions.in1_tile_r_dim,
+            matmul_config.tile_dimensions.in1_tile_c_dim,
+        ),
+        k_loop,
+    )
+
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.dest_acc,
+                throttle,
+                matmul_config.face_layout_config.unpack_transpose_faces,
+                MATMUL_PHASE_ELIDE.keeps_requested(
+                    matmul_config.tile_dimensions,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                ),
+            ),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
-            # The gate measures the per-tile pack of ttnn's run-time-count pack_block (the matmul head's test runs production's,
-            # per tile here); test_matmul and test_math_matmul keep the block forms.
-            MATMUL_PACK_BLOCK(
-                0,
-                in32=formats.input_format == DataFormat.Float32,
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                matmul_config.dest_acc,
+                matmul_config.dest_sync,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
             ),
-            MATMUL_ROW_MOP(row_mop),
+            *MATMUL_REUSE_DIR.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.dest_sync,
+                two_row_off,
+            ),
+            *MATMUL_STREAM_Z.for_block(
+                formats,
+                matmul_config.dest_acc,
+                matmul_config.dest_sync,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
+                in1_faces=num_faces_in1,
+                in1_partial=matmul_config.face_layout_config.partial_face_in1,
+                kt_dim=matmul_config.tile_dimensions.kt_dim,
+                throttle=throttle,
+                two_row_off=two_row_off,
+            ),
+            *k_loop,
+            *(
+                MATMUL_ROW_MOP.for_block(
+                    formats,
+                    matmul_config.dest_acc,
+                    math_fidelity,
+                    matmul_config.dest_sync,
+                    matmul_config.tile_dimensions.ct_dim,
+                    matmul_config.tile_dimensions.rt_dim,
+                    matmul_config.tile_dimensions.kt_dim,
+                    num_blocks,
+                    two_row_off=two_row_off,
+                )
+                if math_fidelity == MathFidelity.LoFi
+                and matmul_config.dest_sync == DestSync.Full
+                else []
+            ),
+            *MATMUL_FORM_KEYS.for_block(
+                formats,
+                matmul_config.tile_dimensions.kt_dim,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=matmul_config.dest_sync,
+                in0_r_dim=matmul_config.tile_dimensions.in0_tile_r_dim,
+                unfuse_cells=True,
+                dest_acc=matmul_config.dest_acc,
+                throttle=throttle,
+                sections=num_blocks,
+                two_row_off=two_row_off,
+            ),
+            *MATMUL_IN1_ALT.for_tiles(
+                formats,
+                matmul_config.dest_acc,
+                math_fidelity,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                matmul_config.tile_dimensions.in0_tile_c_dim,
+                matmul_config.tile_dimensions.in1_tile_r_dim,
+                matmul_config.tile_dimensions.in1_tile_c_dim,
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                    matmul_config.tile_dimensions.rt_dim,
+                    matmul_config.tile_dimensions.ct_dim,
+                    matmul_config.tile_dimensions.kt_dim,
+                    matmul_config.tile_dimensions.in0_tile_r_dim,
+                    matmul_config.tile_dimensions.in1_tile_c_dim,
+                    throttle,
+                    dense_pages=True,
+                )
+            ),
+            MATMUL_MAIN_ROW_MOP(row_mop),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),

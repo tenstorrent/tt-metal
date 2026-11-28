@@ -186,8 +186,9 @@ inline void calculate_exponential_polynomial() {
     }
 }
 
+// Forced: GCC's inliner drops it in the larger SDPA kernels, adding a call and an un-unrolled loop per tile.
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en>
-inline void calculate_exponential_first_column() {
+__attribute__((always_inline)) inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {

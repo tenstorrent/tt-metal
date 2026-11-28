@@ -58,6 +58,30 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
+// G2h: a production key of compile-time block keys whose class polls runs the ttsync unpack on its cell (llk_matmul_forms.h
+// matmul_kernel_ttsync_block, as the front end's matmul_fe_ttsync_cell); in1 is the test's A operand, in0 its B. minimal_matmul
+// (MATMUL_PACK_TILES) passes run-time dims and keeps the class rule
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && !defined(MATMUL_PACK_TILES) && !defined(MATMUL_TTSYNC_BLOCK_PROD)
+#define MATMUL_TTSYNC_BLOCK_PROD                                                                                                           \
+    ckernel::matmul_kernel_ttsync_block(                                                                                                   \
+        MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS, MATMUL_PK_IN_B, MATMUL_PK_IN_A, \
+        MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_KT, MATMUL_PK_THROTTLE, MATMUL_PK_L1ACC)
+#elif !defined(MATMUL_TTSYNC_BLOCK_PROD)
+#define MATMUL_TTSYNC_BLOCK_PROD false
+#endif
+// minimal_matmul (MATMUL_PACK_TILES): the firmware's enable condition for a kernel whose plain calls have run-time ct and rt: the class
+// rule, or tag 5 of matmul_fe_cell_mark (matmul_fe_rt_ttsync_kt: a one-tile block at kt 64 is a ttsync cell, under the LoFi operand-mix gate)
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && defined(MATMUL_PACK_TILES)
+#define MATMUL_PROD_KTTSYNC                                                                                                                        \
+    (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) ||            \
+     ((MATH_FIDELITY != ckernel::MathFidelity::LoFi || dest_sync != ckernel::DstSync::SyncHalf || !ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS)) && \
+      ckernel::matmul_kernel_ttsync_block(                                                                                                        \
+          MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS, MATMUL_PK_IN_B, MATMUL_PK_IN_A, 1, 1, 64, \
+          MATMUL_PK_THROTTLE, false)))
+#else
+#define MATMUL_PROD_KTTSYNC 0
+#endif
+
 __attribute__((noinline)) int main(void) // not in the naked _start (no stack frame) when a kernel is built with LTO
 {
 #if defined(ARCH_QUASAR) && !defined(TT_METAL_TTSIM)
@@ -113,6 +137,15 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
 
         ckernel::fence_compiler();
 
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && (defined(MATMUL_UNPACK_TTSYNC) || defined(MATMUL_UNPACK_TTSYNC_EXCL))
+        _llk_unpack_AB_matmul_ttsync_enable_();
+#elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
+        // as the firmware
+        if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) || MATMUL_TTSYNC_BLOCK_PROD || MATMUL_PROD_KTTSYNC)
+        {
+            _llk_unpack_AB_matmul_ttsync_enable_();
+        }
+#endif
         run_kernel(temp_args);
 
         ckernel::fence_compiler();
@@ -121,6 +154,16 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
     }
 
     llk_perf::read_last_zone();
+
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && (defined(MATMUL_UNPACK_TTSYNC) || defined(MATMUL_UNPACK_TTSYNC_EXCL))
+    _llk_unpack_AB_matmul_ttsync_restore_();
+#elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
+    // as the firmware
+    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) || MATMUL_TTSYNC_BLOCK_PROD || MATMUL_PROD_KTTSYNC)
+    {
+        _llk_unpack_AB_matmul_ttsync_restore_();
+    }
+#endif
 
 #if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !(defined(TT_METAL_TTSIM) && defined(COVERAGE))
     ckernel::store_blocking(mailbox, ckernel::KERNEL_COMPLETE); // landed before BRISC can reset this core (_start)

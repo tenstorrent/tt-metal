@@ -179,6 +179,38 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, pack_block_coun
 }
 #endif
 
+/**
+ * Full sync only: issues the destination words of the next block pack ahead of `tile_regs_wait`; same arguments as `pack_block<ntiles>`.
+ * Call it after the output reserve, then `pack_block_prepared<ntiles>` with the same arguments and no other pack in between.
+ */
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepare(std::uint32_t ifrom_dst, std::uint32_t icb) {
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block_prepare<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb)));
+#endif
+}
+
+/**
+ * `pack_block<ntiles>` after `pack_block_prepare<ntiles>` of the same block.
+ */
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb) {
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block_prepared<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb)));
+#else
+    pack_block<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb);
+#endif
+}
+
+// With the count as a function argument, as pack_block: nothing to issue early, and the pack is main's loop.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_prepare(std::uint32_t, std::uint32_t, std::uint32_t) {}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
+}
+
 // clang-format off
 /**
  * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it

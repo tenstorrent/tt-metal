@@ -302,12 +302,35 @@ inline void math_dest_wait()
     TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
 }
 
+// main's section flip: kernels bound by the kernel config buffer keep its code size
+template <bool next_op_sets_base = false>
 inline void dest_section_flip()
 {
     update_dest_offset_id();
-    std::uint32_t base_addr = get_dest_buffer_base();
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+    if constexpr (next_op_sets_base)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    }
+    else
+    {
+        std::uint32_t base_addr = get_dest_buffer_base();
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+    }
+}
+
+// next_op_sets_base: the successor writes DEST_TARGET_REG_CFG_MATH_Offset itself (set_dst_write_addr: base plus tile index), so the base write is dead.
+// The base write goes ahead of the drain stall: math and SFPU take the DEST base at issue, so the draining section keeps its own.
+template <bool next_op_sets_base = false>
+inline void dest_section_post_flip()
+{
+    update_dest_offset_id();
+    if constexpr (!next_op_sets_base)
+    {
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+    }
+    TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    TTI_SEMPOST(semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
 template <DstStart Dst>
