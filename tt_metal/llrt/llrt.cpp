@@ -613,8 +613,10 @@ void wait_until_cores_done(
 
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
-        // host-driven transactions through.
-        if (rtoptions.get_watcher_enabled() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        // host-driven transactions through. UMD clocks a simulator only on host accesses, so there the delay just
+        // stalls the cores being waited on.
+        if (!is_simulator &&
+            (rtoptions.get_watcher_enabled() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
