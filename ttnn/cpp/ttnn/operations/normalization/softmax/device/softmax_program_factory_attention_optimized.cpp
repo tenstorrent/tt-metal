@@ -372,6 +372,10 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     if (!use_large_kernel && mask_padded_data) {
         compute_defines["MASK_PADDED_DATA"] = "1";
     }
+    if (in0_cb_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en && mask_padded_data && !has_mask &&
+        arch != tt::ARCH::QUASAR) {
+        compute_defines["PAD_COLS_NEG_INF"] = std::to_string(32 - num_datum_padded);
+    }
 
     // ---- Reader kernel ----
     Group<DFBBinding> reader_bindings = {
