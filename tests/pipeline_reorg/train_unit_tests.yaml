@@ -43,10 +43,13 @@
 - name: tt-train cpp distributed unit tests
   # NIGHTLY tests already run in the nightly legs on bh_p100 and bh_p150b_civ2, so this leg skips them.
   # Multi-device tests must therefore not be named NIGHTLY, or they run nowhere.
+  # The second run takes the whole QuietBox as one 2x2 mesh for the DP x TP tests, which skip under 1x2.
   cmd: |
     mkdir -p generated/test_reports
     export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_1_2_line_line.textproto
-    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*" || exit $?
+    export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_2_2_line_line.textproto
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report_2x2.xml --gtest_filter="*Tp2x2*"
   skus:
     bh_quietbox_2:
       timeout: 25
