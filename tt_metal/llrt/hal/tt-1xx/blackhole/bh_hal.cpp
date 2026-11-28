@@ -194,6 +194,16 @@ public:
         return defines;
     }
 
+protected:
+    // TRISCs and NCRISC with Max_Req_Count 1. NCRISC is enabled here but not on Wormhole, because Blackhole has no
+    // IRAM and its NCRISC fetches kernels from L1 through the I$. BRISC is left off: on the blaze stages every
+    // enable combination containing it measured flat, so it buys nothing we can see.
+    //
+    // Depth 1 rather than the 4 Wormhole uses. Sweeping Max_Req_Count on the llama31 decoder-layer stage showed
+    // stage time rising monotonically with depth, about 0.4% from 1 to the maximum of 255.
+    std::optional<uint32_t> default_risc_prefetch_ctrl() const override { return 0x37; }
+
+public:
     std::vector<std::string> srcs(const Params& params) const override {
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
