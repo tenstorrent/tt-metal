@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_copy program: flat page ranges over the grid, one reader (NCRISC, NoC0) and one writer
-(BRISC, NoC1) per core, staged through one CB in coalesced bank runs.
+"""g6_copy program: bank-major page ranges, each on a core in the worker row of its DRAM bank's NoC0
+endpoint, one reader (NCRISC) and one writer (BRISC) per core, both on NoC0, staged through one CB.
 
 The module-level knobs are read at call time (tests override them with monkeypatch) and are part
 of the descriptor cache key.
@@ -47,6 +47,16 @@ BANK_AFFINITY = False
 # every core of a 28-page assignment opens on bank 0 or 4 (16x12x128x128 fp32: 73.9 -> 67.9 us).
 BANK_STAGGER = True
 
+# Placement (perf round tiny_placement). The NoC is a unidirectional torus: a DRAM round trip (read
+# request + response, write + ack, both on the issuing NoC) costs the full X ring whatever the column,
+# plus the full Y ring unless the core sits in the endpoint's row. So the only placement lever is the
+# row: a core in its bank's endpoint row skips the Y ring (p150b, 1 page: 905 -> 820 ns per aligned
+# kernel, 745 ns with both aligned) and its traffic never leaves that row (no cross-bank contention).
+# NoC0 endpoints of all 8 banks land on worker rows, NoC1 endpoints of banks 0 and 4 do not, so both
+# kernels use NoC0. Each bank's pages go to k = min(ceil(pages / banks), grid.x) cores: first the free
+# cores of the bank's row, then the rows no bank maps to (nearest first), never another bank's row.
+KERNEL_NOC = ttnn.NOC.NOC_0
+
 CB_PAGE_STAGING = 0
 
 # Per-stage device zones (kernels/g6_copy_stage_zones.hpp). Off by default: an executed zone costs
@@ -90,18 +100,74 @@ class _Plan:
     block_pages: int
     cb_depth_blocks: int
     read_trids: int
+    bank_major: bool = False
 
     @property
     def cb_pages(self):
         return self.cb_depth_blocks * self.block_pages
 
 
-def _plan(grid, tensor_pages, page_bytes, num_banks=8):
-    """Regime selection: the single source for the dispatch and for describe_plan()."""
+def _split(n, parts):
+    q, r = divmod(n, parts)
+    out, first = [], 0
+    for i in range(parts):
+        count = q + (1 if i < r else 0)
+        out.append((first, count))
+        first += count
+    return out
+
+
+def _bank_row_work(grid, tensor_pages, bank_rows):
+    """Bank-major positions: bank b's pages (q + (b < r) of them) over min(k, n_b) cores in row
+    bank_rows[b], overflow into the rows no bank maps to (nearest first), then any row."""
+    num_banks = len(bank_rows)
+    k = min(-(-tensor_pages // num_banks), grid.x)
+    q, r = divmod(tensor_pages, num_banks)
+    aligned = set(bank_rows)
+    used, work, j0 = set(), [], 0
+
+    def free_core(rows):
+        for y in rows:
+            for x in range(grid.x):
+                if (x, y) not in used:
+                    used.add((x, y))
+                    return ttnn.CoreCoord(x, y)
+        return None
+
+    for b in range(num_banks):
+        n_b = q + (1 if b < r else 0)
+        if n_b == 0:
+            continue
+        row = bank_rows[b]
+        spare = sorted((y for y in range(grid.y) if y not in aligned), key=lambda y: abs(y - row))
+        nearest = sorted(range(grid.y), key=lambda y: abs(y - row))
+        for first, count in _split(n_b, min(k, n_b)):
+            core = free_core([row]) or free_core(spare) or free_core(nearest)
+            work.append(_CoreWork(core, j0 + first, count, 0))
+        j0 += n_b
+    assert j0 == tensor_pages
+    return work
+
+
+def _plan(grid, tensor_pages, page_bytes, num_banks=8, bank_rows=None):
+    """Regime selection: the single source for the dispatch and for describe_plan().
+
+    bank_rows[b] is the logical worker row of DRAM bank b's NoC0 endpoint; given (and no MAX_CORES
+    cap), the pages are placed bank-major on those rows. Without it the flat row-wise split is used."""
     if page_bytes > L1_BUDGET_BYTES:
         raise RuntimeError(
             f"g6_copy: a {page_bytes} B page exceeds the {L1_BUDGET_BYTES} B of L1 per core left to the op"
         )
+
+    if (
+        bank_rows is not None
+        and MAX_CORES is None
+        and len(bank_rows) == num_banks
+        and all(0 <= y < grid.y for y in bank_rows)
+    ):
+        work = _bank_row_work(grid, tensor_pages, list(bank_rows))
+        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(w.core, w.core) for w in work])
+        return _finish_plan(grid, all_cores, work, tensor_pages, page_bytes, bank_major=True)
 
     grid_cores = grid.x * grid.y
     pool_cores = grid_cores if MAX_CORES is None else min(MAX_CORES, grid_cores)
@@ -129,7 +195,11 @@ def _plan(grid, tensor_pages, page_bytes, num_banks=8):
             _CoreWork(work[i].core, work[r].first_page, work[r].num_pages, work[i].walk_rotation)
             for i, r in enumerate(order)
         ]
+    return _finish_plan(grid, all_cores, work, tensor_pages, page_bytes, bank_major=BANK_AFFINITY)
 
+
+def _finish_plan(grid, all_cores, work, tensor_pages, page_bytes, bank_major):
+    """Block schedule for a work split (unchanged from the flat split)."""
     core_pages_max = max(w.num_pages for w in work)
     # The block extent the knobs ask for; None means "no cap" (the whole assignment).
     block_target = None
@@ -161,7 +231,12 @@ def _plan(grid, tensor_pages, page_bytes, num_banks=8):
         block_pages=block_pages,
         cb_depth_blocks=cb_depth_blocks,
         read_trids=read_trids,
+        bank_major=bank_major,
     )
+
+
+def _bank_rows(device):
+    return [c.y for c in ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)]
 
 
 def _num_dram_banks(device):
@@ -171,7 +246,10 @@ def _num_dram_banks(device):
 
 def _plan_for(tensor):
     grid = tensor.device().compute_with_storage_grid_size()
-    return _plan(grid, tensor.buffer_num_pages(), tensor.buffer_aligned_page_size(), _num_dram_banks(tensor.device()))
+    device = tensor.device()
+    return _plan(
+        grid, tensor.buffer_num_pages(), tensor.buffer_aligned_page_size(), _num_dram_banks(device), _bank_rows(device)
+    )
 
 
 def describe_plan(input_tensor):
@@ -179,9 +257,10 @@ def describe_plan(input_tensor):
     p = _plan_for(input_tensor)
     roles = {f"({x},{y})": "idle" for y in range(p.grid[1]) for x in range(p.grid[0])}
     for w in p.work:
-        roles[
-            f"({w.core.x},{w.core.y})"
-        ] = f"copy pages [{w.first_page},{w.first_page + w.num_pages}): reader NCRISC/NoC0 + writer BRISC/NoC1"
+        roles[f"({w.core.x},{w.core.y})"] = (
+            f"copy {'bank-major positions' if p.bank_major else 'pages'} [{w.first_page},{w.first_page + w.num_pages}): "
+            f"reader NCRISC/{_noc_name(p, True)} + writer BRISC/{_noc_name(p, False)}"
+        )
     return {
         "regime": "page_copy",
         "plan": p.plan,
@@ -197,9 +276,25 @@ def describe_plan(input_tensor):
         "block_bytes_knob": BLOCK_BYTES,
         "l1_bytes_per_core": p.cb_pages * p.page_bytes,
         "bank_stagger": BANK_STAGGER,
-        "bank_affinity": BANK_AFFINITY,
+        "bank_affinity": p.bank_major,
         "roles": roles,
     }
+
+
+def _noc_name(plan, reader):
+    if plan.bank_major:
+        return "NoC0" if KERNEL_NOC == ttnn.NOC.NOC_0 else "NoC1"
+    return "NoC0" if reader else "NoC1"
+
+
+def _dm_config(plan, reader):
+    """Reader NCRISC, writer BRISC; both on KERNEL_NOC on the bank-row plan, else the role defaults."""
+    if not plan.bank_major:
+        return ttnn.ReaderConfigDescriptor() if reader else ttnn.WriterConfigDescriptor()
+    config = ttnn.DataMovementConfigDescriptor()
+    config.processor = ttnn.DataMovementProcessor.RISCV_1 if reader else ttnn.DataMovementProcessor.RISCV_0
+    config.noc = KERNEL_NOC
+    return config
 
 
 def _kernel(source, tensor, plan, config):
@@ -214,7 +309,7 @@ def _kernel(source, tensor, plan, config):
     common_runtime_args[_CRTA_BLOCK_PAGES] = plan.block_pages
     common_runtime_args[_CRTA_READ_TRIDS] = plan.read_trids
     common_runtime_args[_CRTA_CB_DEPTH_BLOCKS] = plan.cb_depth_blocks
-    common_runtime_args[_CRTA_BANK_MAJOR] = int(BANK_AFFINITY)
+    common_runtime_args[_CRTA_BANK_MAJOR] = int(plan.bank_major)
     common_runtime_args[_CRTA_TENSOR_PAGES] = plan.tensor_pages
     return ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / source),
@@ -239,8 +334,8 @@ def _build(input_tensor, output_tensor, plan):
             )
         ],
     )
-    reader = _kernel(READER_KERNEL, input_tensor, plan, ttnn.ReaderConfigDescriptor())
-    writer = _kernel(WRITER_KERNEL, output_tensor, plan, ttnn.WriterConfigDescriptor())
+    reader = _kernel(READER_KERNEL, input_tensor, plan, _dm_config(plan, True))
+    writer = _kernel(WRITER_KERNEL, output_tensor, plan, _dm_config(plan, False))
     return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb_page_staging])
 
 
@@ -269,12 +364,17 @@ def get_program_descriptor(input_tensor, output_tensor):
         READ_TRIDS,
         BANK_AFFINITY,
         BANK_STAGGER,
+        KERNEL_NOC,
         _stage_zones(),
     )
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
         plan = _plan(
-            grid, input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size(), _num_dram_banks(device)
+            grid,
+            input_tensor.buffer_num_pages(),
+            input_tensor.buffer_aligned_page_size(),
+            _num_dram_banks(device),
+            _bank_rows(device),
         )
         descriptor = _build(input_tensor, output_tensor, plan)
         _DESCRIPTOR_CACHE[key] = descriptor

@@ -40,6 +40,14 @@ FLOAT32_SPECIAL_BITS = [
 ]  # fmt: skip
 
 
+def _expected_bank_row_cores(tensor_pages, grid, num_banks=8):
+    """Cores of the bank-row plan (Perf 1): bank b's q + (b < r) pages over min(k, n_b) cores,
+    k = min(ceil(pages / banks), grid.x)."""
+    k = min(-(-tensor_pages // num_banks), grid.x)
+    q, r = divmod(tensor_pages, num_banks)
+    return sum(min(k, q + (1 if b < r else 0)) for b in range(num_banks))
+
+
 def shape_id(shape):
     return "x".join(map(str, shape))
 
@@ -214,7 +222,7 @@ def test_g6_copy_plan(device, shape):
     block_target = max(1, plan_knobs.BLOCK_BYTES // plan["page_bytes"])
     assert plan["tensor_pages"] == x.buffer_num_pages()
     assert plan["page_bytes"] == x.buffer_aligned_page_size()
-    assert plan["num_cores"] == len(plan["core_pages"]) == min(x.buffer_num_pages(), grid.x * grid.y)
+    assert plan["num_cores"] == len(plan["core_pages"]) == _expected_bank_row_cores(x.buffer_num_pages(), grid)
     assert sum(plan["core_pages"]) == plan["tensor_pages"]
     assert max(plan["core_pages"]) - min(plan["core_pages"]) <= 1
     if max(plan["core_pages"]) <= block_target:

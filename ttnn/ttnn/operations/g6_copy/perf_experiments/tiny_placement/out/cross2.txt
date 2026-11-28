@@ -1,0 +1,17 @@
+# rows=80 expected=80 csv=/localdev/pmilojevic/campaign/bh-qb-15/slots/chip2/generated/profiler/reports/2026_11_28_12_59_29/ops_perf_results_2026_11_28_12_59_29.csv
+   10380  p9_bf16_1x8192x128 | op r0w1 | pages=1024 pb=2048 plan=streamed ok=True
+   10044  p9_bf16_1x8192x128 | placed k11 c88 r0w0 | pages=1024 pb=2048 plan=streamed ok=True
+   11405  p9_bf16_1x8192x128 | placed k13 c104 r0w0 | pages=1024 pb=2048 plan=streamed ok=True
+   13408  p9_bf16_1x8192x128 | placed k13 c104 r0w1 | pages=1024 pb=2048 plan=streamed ok=True
+   19000  p5_bf16_1x1x32x62080 | op r0w1 | pages=1940 pb=2048 plan=streamed ok=True
+   18358  p5_bf16_1x1x32x62080 | placed k11 c88 r0w0 | pages=1940 pb=2048 plan=streamed ok=True
+   21790  p5_bf16_1x1x32x62080 | placed k13 c104 r0w0 | pages=1940 pb=2048 plan=streamed ok=True
+   25807  p5_bf16_1x1x32x62080 | placed k13 c104 r0w1 | pages=1940 pb=2048 plan=streamed ok=True
+   30928  p1_f32_8x12x128x128 | op r0w1 | pages=1536 pb=4096 plan=streamed ok=True
+   28025  p1_f32_8x12x128x128 | placed k11 c88 r0w0 | pages=1536 pb=4096 plan=streamed ok=True
+   34549  p1_f32_8x12x128x128 | placed k13 c104 r0w0 | pages=1536 pb=4096 plan=streamed ok=True
+   44880  p1_f32_8x12x128x128 | placed k13 c104 r0w1 | pages=1536 pb=4096 plan=streamed ok=True
+   60415  p0_f32_16x12x128x128 | op r0w1 | pages=3072 pb=4096 plan=streamed ok=True
+   54677  p0_f32_16x12x128x128 | placed k11 c88 r0w0 | pages=3072 pb=4096 plan=streamed ok=True
+   70140  p0_f32_16x12x128x128 | placed k13 c104 r0w0 | pages=3072 pb=4096 plan=streamed ok=True
+   97722  p0_f32_16x12x128x128 | placed k13 c104 r0w1 | pages=3072 pb=4096 plan=streamed ok=True

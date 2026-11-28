@@ -49,6 +49,14 @@ ADVERSARIAL_ROWS = [
 ]
 
 
+def _expected_bank_row_cores(tensor_pages, grid, num_banks=8):
+    """Cores of the bank-row plan (Perf 1): bank b's q + (b < r) pages over min(k, n_b) cores,
+    k = min(ceil(pages / banks), grid.x)."""
+    k = min(-(-tensor_pages // num_banks), grid.x)
+    q, r = divmod(tensor_pages, num_banks)
+    return sum(min(k, q + (1 if b < r else 0)) for b in range(num_banks))
+
+
 def row_id(row):
     shape, dtype, layout = row
     return f"{'x'.join(map(str, shape))}-{str(dtype).split('.')[-1]}-{'TILE' if layout == _TILE else 'RM'}"
@@ -96,7 +104,7 @@ def test_g6_copy_plan_dtype_layout(device, row):
     assert plan == describe_plan(x), "the plan must be deterministic (BB-08)"
     assert plan["page_bytes"] == x.buffer_aligned_page_size()
     assert plan["tensor_pages"] == x.buffer_num_pages()
-    # The new paths stay on the full-grid page split.
-    assert plan["num_cores"] == min(x.buffer_num_pages(), grid.x * grid.y)
+    # Bank-row placement (Perf 1): each bank's pages on cores in that bank's NoC0 endpoint row.
+    assert plan["num_cores"] == _expected_bank_row_cores(x.buffer_num_pages(), grid)
     assert sum(plan["core_pages"]) == plan["tensor_pages"]
     assert plan["l1_bytes_per_core"] <= L1_BYTES_LEFT_BY_MODEL

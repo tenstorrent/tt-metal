@@ -1,2 +1,7 @@
 {"event":"breakdown","round":1,"cells":{"p14_bf16_1x1_tile":{"full":907,"no_read":463,"no_write":603,"no_noc":145,"empty":40},"p23_u32_32_rm":{"full":838,"no_read":439,"no_write":557,"no_noc":149,"empty":40},"p15_bf8b_40p":{"full":1064,"no_read":636,"no_write":754,"no_noc":318,"empty":204}},"ranked":["serial DRAM read latency ~460ns","serial write+ack ~320ns","scaffold ~105ns","launch spread ~4ns/core"],"note":"zones gated off; big shapes DRAM-bound at 89% roofline per R3","ts":"2026-11-28T12:50:43+01:00"}
 {"event":"graduation","idea":"operator candidate 1: gate stage zones behind G6C_STAGE_ZONES (env G6_COPY_STAGE_ZONES=1)","before_after_ns":{"p14":[1153,901],"p4":[1144,967],"p0":[61924,61131]},"golden":"42/42","unit":"355/355","ts":"2026-11-28T12:50:43+01:00"}
+{"event":"idea_verdict","idea":"single_risc_fused","verdict":"WIN","ts":"2026-11-28T13:54:17+01:00"}
+{"event":"idea_verdict","idea":"tiny_placement","verdict":"WIN","ts":"2026-11-28T13:54:17+01:00"}
+{"event":"idea_verdict","idea":"noc_issue_and_completion","verdict":"WIN","ts":"2026-11-28T13:54:17+01:00"}
+{"event":"idea_verdict","idea":"scaffold_trim","verdict":"WIN","ts":"2026-11-28T13:54:17+01:00"}
+{"event":"graduation","idea":"tiny_placement","before_after_ns":{"p14":[901,730],"p23":[844,670],"p8":[3313,3090],"p0":[61131,54680]},"golden":"42/42","unit":"355/355 (2 plan asserts updated)","ts":"2026-11-28T13:54:17+01:00"}

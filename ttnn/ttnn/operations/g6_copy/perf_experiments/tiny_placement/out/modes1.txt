@@ -1,0 +1,21 @@
+# rows=100 expected=100 csv=/localdev/pmilojevic/campaign/bh-qb-15/slots/chip2/generated/profiler/reports/2026_11_28_13_00_22/ops_perf_results_2026_11_28_13_00_22.csv
+    1055  p15_bf8b_5x1x32x256 | op r0w1 | pages=40 pb=1088 plan=one_block ok=True
+     924  p15_bf8b_5x1x32x256 | placed fill k5 c40 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+     914  p15_bf8b_5x1x32x256 | placed balanced k5 c40 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+     912  p15_bf8b_5x1x32x256 | placed aligned k5 c40 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+    1888  p19_bf16rm_16x3x2560 | op r0w1 | pages=48 pb=5120 plan=one_block ok=True
+    1726  p19_bf16rm_16x3x2560 | placed fill k6 c48 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    1716  p19_bf16rm_16x3x2560 | placed balanced k6 c48 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    1818  p19_bf16rm_16x3x2560 | placed aligned k6 c47 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    3006  p6_bf16_1x2048x128 | op r0w1 | pages=256 pb=2048 plan=one_block ok=True
+    2570  p6_bf16_1x2048x128 | placed fill k11 c88 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    2822  p6_bf16_1x2048x128 | placed balanced k11 c88 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    2973  p6_bf16_1x2048x128 | placed aligned k11 c77 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    8344  p2_f32_2x12x128x128 | op r0w1 | pages=384 pb=4096 plan=one_block ok=True
+    7598  p2_f32_2x12x128x128 | placed fill k11 c88 r0w0 | pages=384 pb=4096 plan=streamed ok=True
+    8581  p2_f32_2x12x128x128 | placed balanced k11 c88 r0w0 | pages=384 pb=4096 plan=streamed ok=True
+   10198  p2_f32_2x12x128x128 | placed aligned k11 c77 r0w0 | pages=384 pb=4096 plan=streamed ok=True
+   60644  p0_f32_16x12x128x128 | op r0w1 | pages=3072 pb=4096 plan=streamed ok=True
+   54796  p0_f32_16x12x128x128 | placed fill k11 c88 r0w0 | pages=3072 pb=4096 plan=streamed ok=True
+   76544  p0_f32_16x12x128x128 | placed balanced k11 c88 r0w0 | pages=3072 pb=4096 plan=streamed ok=True
+   79472  p0_f32_16x12x128x128 | placed aligned k11 c77 r0w0 | pages=3072 pb=4096 plan=streamed ok=True

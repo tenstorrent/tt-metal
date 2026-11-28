@@ -1,0 +1,57 @@
+# rows=280 expected=280 csv=/localdev/pmilojevic/campaign/bh-qb-15/slots/chip2/generated/profiler/reports/2026_11_28_12_57_37/ops_perf_results_2026_11_28_12_57_37.csv
+    1014  p16_bf16rm_1x3x2560 | op r0w1 | pages=3 pb=5120 plan=one_block ok=True
+    1053  p16_bf16rm_1x3x2560 | op r0w0 | pages=3 pb=5120 plan=one_block ok=True
+     866  p16_bf16rm_1x3x2560 | placed k1 c3 r0w0 | pages=3 pb=5120 plan=one_block ok=True
+    1020  p16_bf16rm_1x3x2560 | placed k1 c3 r0w1 | pages=3 pb=5120 plan=one_block ok=True
+    1222  p16_bf16rm_1x3x2560 | single c1 row-bank0 r0w0 | pages=3 pb=5120 plan=one_block ok=True
+    1001  p13_bf16_1x1x1x256 | op r0w1 | pages=8 pb=2048 plan=one_block ok=True
+    1044  p13_bf16_1x1x1x256 | op r0w0 | pages=8 pb=2048 plan=one_block ok=True
+     856  p13_bf16_1x1x1x256 | placed k1 c8 r0w0 | pages=8 pb=2048 plan=one_block ok=True
+    1027  p13_bf16_1x1x1x256 | placed k1 c8 r0w1 | pages=8 pb=2048 plan=one_block ok=True
+    1630  p13_bf16_1x1x1x256 | single c1 row-bank0 r0w0 | pages=8 pb=2048 plan=one_block ok=True
+    1396  p18_bf16rm_8x3x2560 | op r0w1 | pages=24 pb=5120 plan=one_block ok=True
+    1732  p18_bf16rm_8x3x2560 | op r0w0 | pages=24 pb=5120 plan=one_block ok=True
+    1490  p18_bf16rm_8x3x2560 | placed k1 c8 r0w0 | pages=24 pb=5120 plan=one_block ok=True
+    2570  p18_bf16rm_8x3x2560 | placed k1 c8 r0w1 | pages=24 pb=5120 plan=one_block ok=True
+    1338  p18_bf16rm_8x3x2560 | placed k2 c16 r0w0 | pages=24 pb=5120 plan=one_block ok=True
+    1200  p18_bf16rm_8x3x2560 | placed k3 c24 r0w0 | pages=24 pb=5120 plan=one_block ok=True
+    1685  p18_bf16rm_8x3x2560 | placed k3 c24 r0w1 | pages=24 pb=5120 plan=one_block ok=True
+    6897  p18_bf16rm_8x3x2560 | single c1 row-bank0 r0w0 | pages=24 pb=5120 plan=streamed ok=True
+    1080  p15_bf8b_5x1x32x256 | op r0w1 | pages=40 pb=1088 plan=one_block ok=True
+    1171  p15_bf8b_5x1x32x256 | op r0w0 | pages=40 pb=1088 plan=one_block ok=True
+     993  p15_bf8b_5x1x32x256 | placed k1 c8 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+    1420  p15_bf8b_5x1x32x256 | placed k1 c8 r0w1 | pages=40 pb=1088 plan=one_block ok=True
+     964  p15_bf8b_5x1x32x256 | placed k2 c16 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+     916  p15_bf8b_5x1x32x256 | placed k3 c24 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+     941  p15_bf8b_5x1x32x256 | placed k4 c32 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+     906  p15_bf8b_5x1x32x256 | placed k5 c40 r0w0 | pages=40 pb=1088 plan=one_block ok=True
+    1069  p15_bf8b_5x1x32x256 | placed k5 c40 r0w1 | pages=40 pb=1088 plan=one_block ok=True
+    2552  p15_bf8b_5x1x32x256 | single c1 row-bank0 r0w0 | pages=40 pb=1088 plan=streamed ok=True
+    1884  p19_bf16rm_16x3x2560 | op r0w1 | pages=48 pb=5120 plan=one_block ok=True
+    2492  p19_bf16rm_16x3x2560 | op r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    2366  p19_bf16rm_16x3x2560 | placed k1 c8 r0w0 | pages=48 pb=5120 plan=streamed ok=True
+    3944  p19_bf16rm_16x3x2560 | placed k1 c8 r0w1 | pages=48 pb=5120 plan=streamed ok=True
+    1934  p19_bf16rm_16x3x2560 | placed k2 c16 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    1870  p19_bf16rm_16x3x2560 | placed k3 c24 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    1741  p19_bf16rm_16x3x2560 | placed k4 c32 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    1790  p19_bf16rm_16x3x2560 | placed k5 c40 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    1680  p19_bf16rm_16x3x2560 | placed k6 c48 r0w0 | pages=48 pb=5120 plan=one_block ok=True
+    2234  p19_bf16rm_16x3x2560 | placed k6 c48 r0w1 | pages=48 pb=5120 plan=one_block ok=True
+   14062  p19_bf16rm_16x3x2560 | single c1 row-bank0 r0w0 | pages=48 pb=5120 plan=streamed ok=True
+    2948  p6_bf16_1x2048x128 | op r0w1 | pages=256 pb=2048 plan=one_block ok=True
+    4604  p6_bf16_1x2048x128 | op r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    4373  p6_bf16_1x2048x128 | placed k1 c8 r0w0 | pages=256 pb=2048 plan=streamed ok=True
+    7329  p6_bf16_1x2048x128 | placed k1 c8 r0w1 | pages=256 pb=2048 plan=streamed ok=True
+    3300  p6_bf16_1x2048x128 | placed k2 c16 r0w0 | pages=256 pb=2048 plan=streamed ok=True
+    3109  p6_bf16_1x2048x128 | placed k3 c24 r0w0 | pages=256 pb=2048 plan=streamed ok=True
+    3022  p6_bf16_1x2048x128 | placed k4 c32 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    3022  p6_bf16_1x2048x128 | placed k5 c40 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    2976  p6_bf16_1x2048x128 | placed k6 c48 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    2710  p6_bf16_1x2048x128 | placed k8 c64 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    2630  p6_bf16_1x2048x128 | placed k10 c80 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    3011  p6_bf16_1x2048x128 | placed k13 c104 r0w0 | pages=256 pb=2048 plan=one_block ok=True
+    3369  p6_bf16_1x2048x128 | placed k13 c104 r0w1 | pages=256 pb=2048 plan=one_block ok=True
+   60443  p0_f32_16x12x128x128 | op r0w1 | pages=3072 pb=4096 plan=streamed ok=True
+   88576  p0_f32_16x12x128x128 | op r0w0 | pages=3072 pb=4096 plan=streamed ok=True
+   78480  p0_f32_16x12x128x128 | placed k13 c104 r0w0 | pages=3072 pb=4096 plan=streamed ok=True
+   94994  p0_f32_16x12x128x128 | placed k13 c104 r0w1 | pages=3072 pb=4096 plan=streamed ok=True
