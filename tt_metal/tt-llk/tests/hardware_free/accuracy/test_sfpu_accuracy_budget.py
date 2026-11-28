@@ -545,15 +545,22 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.Lgamma,
         MathOperation.Digamma,
         MathOperation.Expm1Cw,
-        MathOperation.Polygamma,
     }
 )
+
+# The same, for an op one architecture's table alone holds on tolerance (as
+# _UNMEASURABLE_CELLS_ACKNOWLEDGED_ON): its other table gives it a step budget.
+ONLY_EVER_TOLERANCE_ON = {
+    ChipArchitecture.WORMHOLE: frozenset({MathOperation.Polygamma}),
+}
 
 
 def test_every_enrolled_op_reaches_its_step_budget():
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
-    assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
+    assert missing == ONLY_EVER_TOLERANCE | ONLY_EVER_TOLERANCE_ON.get(
+        MEASURED_ARCH, frozenset()
+    ), sorted(op.name for op in missing)
 
 
 # Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.

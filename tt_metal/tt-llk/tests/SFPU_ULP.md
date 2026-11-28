@@ -151,7 +151,9 @@ fp16 subnormals the pack does not reproduce.
      only is acknowledged in `_UNMEASURABLE_CELLS_ACKNOWLEDGED_ON[arch]`, and a wildcard
      acknowledgement that parks a different number of cells there is pinned in
      `_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON[arch]`; the other architecture's pass
-     fails a shared entry no row of its table needs as stale.
+     fails a shared entry no row of its table needs as stale. An enrolled op with no step
+     budget on one architecture's table only sits in `ONLY_EVER_TOLERANCE_ON[arch]`,
+     not in the shared `ONLY_EVER_TOLERANCE`.
 
 5. **Gate on it.** Re-run without `--ulp-emit`, then the host guards:
 
