@@ -91,12 +91,18 @@ def _input_mc(device, case):
     return ttnn.MemoryConfig(_SCHEME[case["scheme"]], ttnn.BufferType.L1, spec)
 
 
+_BITS = {torch.bfloat16: torch.int16, torch.float32: torch.int32}
+
+
 def _assert_bits_equal(actual, expected, what):
     assert tuple(actual.shape) == tuple(
         expected.shape
     ), f"{what}: shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    assert actual.dtype == expected.dtype == torch.bfloat16, f"{what}: dtype {actual.dtype}"
-    differ = actual.contiguous().view(torch.int16) != expected.contiguous().view(torch.int16)
+    # bfloat16 comes back as torch.bfloat16; bfloat8_b decodes to torch.float32. Compare the raw bits
+    # at whichever width came back (bf8b decode is a pure function of the page bytes).
+    assert actual.dtype == expected.dtype and actual.dtype in _BITS, f"{what}: dtype {actual.dtype} vs {expected.dtype}"
+    bits = _BITS[actual.dtype]
+    differ = actual.contiguous().view(bits) != expected.contiguous().view(bits)
     assert int(differ.sum()) == 0, f"{what}: {int(differ.sum())} of {differ.numel()} elements differ"
 
 

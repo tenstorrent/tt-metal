@@ -44,3 +44,4 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-28T01:55:33-05:00"}
 {"event":"test_run","status":"pass","tests":"impl_debug + acceptance + trace_replay on the tree left by the interrupted R3 attempt (common RT args only, on-device block derivation)","result":"87 passed","ts":"2026-11-28T01:55:33-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 4 passed 3 xfailed; probe_017 all schemes/dtypes/buffers/knobs bit-exact; p2 kernel 1434-1539ns","ts":"2026-11-28T13:35:34+01:00"}
+{"event":"test_run","status":"pass","refinement":1,"details":"unit 11 passed (7 acceptance + 4 precision bit-exact), golden 17/17, perf eager 4/4","ts":"2026-11-28T13:45:30+01:00"}

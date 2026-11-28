@@ -6,13 +6,12 @@
 Run under `scripts/run_safe_pytest.sh --profile <this file>` and summarize the ops CSV with
 `probes/perf_csv_summary.py <csv> <labels in test order>` (12 eager calls per group, first 2 dropped).
 
-Cases outside the current SUPPORTED (p1 before Refinement 1) are run with SUPPORTED widened for the
-test (monkeypatch), through the real entry point; `_knobs` pins a non-default plan.
+All cases are claimed in SUPPORTED (Refinement 1) and run through the real entry point; `_knobs`
+pins a non-default plan.
 """
 
 from __future__ import annotations
 
-import sys
 
 import pytest
 import torch
@@ -21,7 +20,6 @@ import ttnn
 from ttnn.operations.g6_sharded_to_interleaved import g6_sharded_to_interleaved
 from ttnn.operations.g6_sharded_to_interleaved.g6_sharded_to_interleaved_program_descriptor import Knobs
 
-op_module = sys.modules[g6_sharded_to_interleaved.__module__]
 
 EAGER_CALLS = 12
 
@@ -48,14 +46,6 @@ CASES = {
 KNOBS = {"default": Knobs(), "lanes2": Knobs(writer_lanes=2)}
 
 
-def _widen(monkeypatch):
-    widened = {k: list(v) for k, v in op_module.SUPPORTED.items()}
-    for axis, value in (("dtype", ttnn.bfloat8_b), ("in_scheme", "height_sharded"), ("buffer", "l1")):
-        if value not in widened[axis]:
-            widened[axis].append(value)
-    monkeypatch.setattr(op_module, "SUPPORTED", widened)
-
-
 def _input(device, case):
     shape, dtype, scheme, shard, grid, _ = case
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in grid])
@@ -67,8 +57,7 @@ def _input(device, case):
 
 @pytest.mark.parametrize("knobs", list(KNOBS))
 @pytest.mark.parametrize("name", list(CASES))
-def test_eager_calls(device, name, knobs, monkeypatch):
-    _widen(monkeypatch)
+def test_eager_calls(device, name, knobs):
     case = CASES[name]
     _, tt_input = _input(device, case)
     expected = ttnn.to_torch(tt_input)
@@ -87,11 +76,10 @@ TRACE_REPLAYS = 50
 @pytest.mark.use_module_device({"trace_region_size": 1 << 20})
 @pytest.mark.parametrize("knobs", list(KNOBS))
 @pytest.mark.parametrize("name", list(CASES))
-def test_trace_replay_ns_per_op(device, name, knobs, monkeypatch):
+def test_trace_replay_ns_per_op(device, name, knobs):
     """Host wall clock per op over replays of a TRACE_CALLS-call trace: what one call costs a traced model."""
     import time
 
-    _widen(monkeypatch)
     case = CASES[name]
     _, tt_input = _input(device, case)
     expected = ttnn.to_torch(tt_input).view(torch.int16)

@@ -57,14 +57,16 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0)
+# 2. SUPPORTED (Refinement 1: == TARGET). bfloat8_b only changes the page size (shared
+#    exponents travel verbatim as raw page bytes); height_sharded only changes the host-computed
+#    shard origin RT args; l1 only changes TensorAccessorArgs(output).
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "in_scheme": ["width_sharded"],
-    "buffer": ["dram"],
+    "in_scheme": ["width_sharded", "height_sharded"],
+    "buffer": ["dram", "l1"],
 }
 
 

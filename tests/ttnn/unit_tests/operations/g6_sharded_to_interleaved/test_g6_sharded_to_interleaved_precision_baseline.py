@@ -7,16 +7,13 @@ Scope (BB-22): the two production cases, each on its production shard spec and o
 "other" shard spec the spec's rules require. The op does no arithmetic, so the expected result
 is bit-exact; PCC / abs error / relative RMS / ULP / got-true ratio are recorded anyway.
 
-p1 cases (bfloat8_b, height sharded, L1 output) are outside the Phase 0 SUPPORTED. They are run
-with SUPPORTED widened for the duration of the test (``monkeypatch``), not through a gate bypass in
-the op, so Refinement 1 starts from a measured result. The ``path`` column of the printed table
-says which cells were claimed.
+All cases (p2 bf16 width -> DRAM, p1 bf8b height -> L1) are claimed in SUPPORTED since
+Refinement 1 and run through the real entry point.
 """
 
 from __future__ import annotations
 
 import math
-import sys
 
 import pytest
 import torch
@@ -26,7 +23,6 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from ttnn.operations.g6_sharded_to_interleaved import g6_sharded_to_interleaved
 
 # The package re-exports the function under the module's own name, so fetch the module object itself.
-op_module = sys.modules[g6_sharded_to_interleaved.__module__]
 
 TILE = 32
 
@@ -112,16 +108,8 @@ def _metrics(actual, expected):
 
 
 @pytest.mark.parametrize("case_id", list(CASES))
-def test_precision_baseline(device, case_id, monkeypatch):
+def test_precision_baseline(device, case_id):
     case = CASES[case_id]
-    claimed = case["dtype"] in op_module.SUPPORTED["dtype"]
-    if not claimed:
-        # Measure the not-yet-claimed production cell through the real entry point.
-        widened = {k: list(v) for k, v in op_module.SUPPORTED.items()}
-        widened["dtype"].append(ttnn.bfloat8_b)
-        widened["in_scheme"].append("height_sharded")
-        widened["buffer"].append("l1")
-        monkeypatch.setattr(op_module, "SUPPORTED", widened)
 
     torch_input = _make_input(case["shape"])
     tt_input = ttnn.from_torch(
@@ -132,7 +120,7 @@ def test_precision_baseline(device, case_id, monkeypatch):
     actual = ttnn.to_torch(out)
 
     m = _metrics(actual, expected)
-    path = "entry point (SUPPORTED)" if claimed else "entry point (SUPPORTED widened, pre-claim)"
+    path = "entry point (SUPPORTED)"
     print(
         f"\nPRECISION {case_id} shape={case['shape']} dtype={case['dtype']} path={path} "
         f"pcc={m['pcc']:.6f} max_abs={m['max_abs']} mean_abs={m['mean_abs']} rel_rms={m['rel_rms']} "

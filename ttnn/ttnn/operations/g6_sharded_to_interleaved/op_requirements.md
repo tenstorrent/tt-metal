@@ -24,7 +24,7 @@
 - **Compute config**: none (no compute kernel, no arithmetic)
 - **Golden baseline**: 13 / 17 cells passing (13 supported_pass, 4 xfail_expected, 0 loud), per `verifier_report.json`
 
-### [ ] Refinement 1 — Claim the Panoptic production contract: bfloat8_b, height_sharded, L1 output
+### [x] Refinement 1 — Claim the Panoptic production contract: bfloat8_b, height_sharded, L1 output
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, `"height_sharded"` to `SUPPORTED["in_scheme"]` and `"l1"` to `SUPPORTED["buffer"]`, so that SUPPORTED == TARGET. This lands the full contract of the perf-flagged `LOOSE_CASES[0]`: (1,128,256,32) bf8b, height (320,32) on two ranges, written to L1 interleaved. All three are **knob-turns** of the one owner-writes block operation:
 - the dtype only changes the page size (1088 B bf8b pages, shared exponents moved verbatim as raw bytes, never through unpack/pack);
