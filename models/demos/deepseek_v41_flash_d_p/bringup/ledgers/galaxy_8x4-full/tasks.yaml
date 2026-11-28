@@ -6419,3 +6419,57 @@ tasks:
       steady_tok_s_p*: '> 0'
       program_builds_after_warmup_serving*: == 0
       ids_uploads_per_chunk*: == 0
+- id: MB.QB
+  title: 'OWNER 2026-11-28: bring the batching branch''s wq_b bank layout (QB.1, FIX.42) and the tiny-op fusions that apply
+    to single requests (NC.9) to model_bringup; op-level checks only'
+  step: perf
+  role: perf
+  device: true
+  ab_mode: none
+  deps:
+  - MB.NCL
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/cpp/ttnn/operations
+  - ttnn/cpp/ttnn-nanobind
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.QB_layer.md
+  brief:
+    prior_work: 'dnijemcevic/model_bringup_batching commits: FIX.42 47b34099c19 (grouped_matmul G = 1 bank path, N sub-blocks;
+      probe), QB.1 3ca2cf6a70d (DS41_WQB_BANK default on, test_wqb_offon), NC.9 e19a95cdda7 (ids reorder into the embedding
+      reader, replay rotation and window carry copies fused).'
+    details: 'Cherry-pick (-x) the commits above where model_bringup has the same code; adapt only what this branch needs
+      (5120 chunk, 160 rows a chip: QB.1''s 160-row layout row 11 bw4 d3 wi1; no packed path). DS41_WQB_BANK default on, copies
+      as WOA_BANK_COPIES. OWNER rules: op-level checks only, no model load, no ladder (MB.QBL is the one end check). Gate
+      test tests/native/test_native_mb_qb.py (BATCH_SHARED, BATCH_LAYERS = "none"): wq_b bank vs today''s stock call at 160
+      rows (rel vs fp64 equal or better, repeats 0, no cache growth, device + host us), and each fusion vs today''s sequence
+      exact (repeats 0, no cache growth). Record native_mismatch_<fusion case>, native_repeat_<case>, native_cache_growth_<case>,
+      wqb_rel_<route>. Report results/MB.QB_layer.md.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_mb_qb.py
+    metrics:
+      native_mismatch_*: == 0
+      native_repeat_*: == 0
+      native_cache_growth_*: == 0
+- id: MB.QBL
+  title: 'OWNER 2026-11-28: performance assessment on model_bringup after MB.QB: the 5120 ladder (layers 0-20, 51200 .. 1024000)
+    + cold no-rebuild'
+  step: perf
+  device: true
+  deps:
+  - MB.QB
+  brief:
+    details: Measurement only (no agent). Compare with MB.NCL in the owner report.
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      steady_tok_s_p*: '> 0'
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0

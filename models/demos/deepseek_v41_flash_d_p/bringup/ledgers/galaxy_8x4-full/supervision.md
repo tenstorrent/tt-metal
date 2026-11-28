@@ -741,3 +741,4 @@
 - 06:50 MB.NCL PASS -> 315bf76b5ab (the one end check on model_bringup). 5120 ladder vs MB.9 steady tok/s: +5.2 / +6.3 / +1.5 / +3.0 / +6.4 / +4.3 / -1.4 % at 51200 / 131072 / 139264 / 262144 / 524288 / 786432 / 1024000; device ms flat (-0.1..-0.7); cold no-rebuild 0 builds; determinism 0.
 - 06:50 heartbeat: idle by design (MB.NCL done; FIX.42 held for the owner). Resident runner stopped (RAM freed). Heartbeat cron stopped.
 - 07:16 OWNER: the machine must not idle on a non-decision. FIX.42 (wq_b / wo_b C++ bank probe) was already owner-agreed (plan step 4, batching supervision 18:35): switching to batching to run it.
+- 10:02 (model_bringup) skill rule cherry-picked (676b43921c8), rebuilt. QUEUED MB.QB (wq_b bank QB.1 / FIX.42 + the single-request fusions of NC.9; op-level) and MB.QBL (5120 ladder + cold no-rebuild assessment); validate: valid.
