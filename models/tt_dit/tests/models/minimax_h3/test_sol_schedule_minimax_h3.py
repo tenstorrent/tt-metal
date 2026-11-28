@@ -45,7 +45,25 @@ def test_the_10eros_max_turbo_file_runs_sol_attn_by_default(monkeypatch, file, t
 @pytest.mark.parametrize(("hyperflow", "expected"), [(object(), _HF), (None, SolSchedule())])
 def test_turbo_pipeline_names_the_hyperflow_preset(monkeypatch, hyperflow, expected):
     pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1"}, MiniMaxH3TurboPipeline)
-    pipeline.hyperflow = hyperflow
+    pipeline.hyperflow, pipeline.lora_path = hyperflow, Path("/adapters/other.safetensors")
+    assert pipeline._requested_sol_schedule() == expected
+
+
+_LIGHTX2V = "/adapters/minimax_h3_fl2v_turbo_4step_v1.3_768p_bf16.safetensors"
+
+
+@pytest.mark.parametrize(
+    ("lora", "task", "env", "expected"),
+    [
+        (_LIGHTX2V, "t2va", {}, SolSchedule(max_frames=158)),  # with no switch set: clips up to 6 s
+        (_LIGHTX2V, "t2va", {"H3_SOL_ATTN": "0"}, None),
+        (_LIGHTX2V, "ref2va", {}, None),
+        ("/adapters/other.safetensors", "t2va", {}, None),
+    ],
+)
+def test_the_lightx2v_adapter_runs_sol_attn_by_default(monkeypatch, lora, task, env, expected):
+    pipeline = _pipeline(monkeypatch, env, MiniMaxH3TurboPipeline)
+    pipeline.hyperflow, pipeline.lora_path, pipeline.task = None, Path(lora), task
     assert pipeline._requested_sol_schedule() == expected
 
 

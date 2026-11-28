@@ -87,11 +87,14 @@ SOL_PRESETS = {
     "10eros-max": SolSchedule(tau=1.13, dense_steps=3, dense_layers=0),
     # NVIDIA's HyperFlow recipe: no sinks.
     "hyperflow": SolSchedule(sinks=False),
+    # The LightX2V 4-step adapter: 2 of its 4 forwards dense.
+    "lightx2v": SolSchedule(),
 }
 
 #: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset, each with the longest clip (frames) it then runs sparse.
 #: 10Eros-Max: at 6 s the served audio is level with dense; at 10 s it stays about 2 LU under, with fewer sound events.
-SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6)}
+#: LightX2V: at 6 s VBench, the side-by-side look and the served audio are level with dense, text and image jobs.
+SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6), "lightx2v": get_num_frames(6)}
 
 
 def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:

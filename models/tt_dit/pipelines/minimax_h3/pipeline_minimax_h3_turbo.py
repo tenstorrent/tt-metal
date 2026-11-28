@@ -50,6 +50,9 @@ TURBO_NUM_FORWARDS = (4, 8)
 HYPERFLOW_HOST_PREFIXES = ("time_embedder.", "endpoint_time_embedder.")
 _TIME_EMBEDDER_KEYS = ("linear_1.weight", "linear_1.bias", "linear_2.weight", "linear_2.bias")
 
+#: The LightX2V 4-step adapter, by file stem: the `policy.SOL_PRESETS` entry "lightx2v".
+LIGHTX2V_LORA_STEM = "minimax_h3_fl2v_turbo_4step_v1.3_768p_bf16"
+
 
 def bundle_base_timesteps(lora_path: Path) -> tuple[int, ...] | None:
     """The trained rungs of a FastVideo FastH3 bundle (`<root>/<variant>/adapter_model.safetensors` with the
@@ -294,7 +297,10 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         return self.hyperflow.endpoints(scheduler.sigmas), self.hyperflow.endpoints(audio_scheduler.sigmas)
 
     def _sol_preset(self) -> str | None:
-        return "hyperflow" if self.hyperflow is not None else None
+        if self.hyperflow is not None:
+            return "hyperflow"
+        # As for 10Eros-Max, not for ref2va: Sol-Attn is unmeasured with reference rows.
+        return "lightx2v" if self.lora_path.stem == LIGHTX2V_LORA_STEM and self.task == "t2va" else None
 
 
 __all__ = ["HYPERFLOW_HOST_PREFIXES", "TURBO_NUM_FORWARDS", "MiniMaxH3TurboPipeline"]
