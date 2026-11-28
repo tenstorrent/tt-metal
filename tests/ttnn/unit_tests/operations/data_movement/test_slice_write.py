@@ -6,6 +6,7 @@ import pytest
 
 import torch
 
+import math
 import random
 
 import ttnn
@@ -20,12 +21,14 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def _rand_shape(dim_size, choices=(8, 16, 32, 64, 128, 256)):
-    # Choose a reasonable size per dim (keeps DRAM/L1 happy)
-    ret = [random.choice(choices) for _ in range(dim_size)]
-    if dim_size > 5:
-        ret[: dim_size - 5] = [1 for _ in range(dim_size - 5)]  # rank 6+ tensors are too big
-    return ret
+def _rand_shape(dim_size, choices=(8, 16, 32, 64, 128, 256), max_numel=1 << 22):
+    # Choose a reasonable size per dim (keeps DRAM/L1 happy), at most max_numel elements in all
+    while True:
+        ret = [random.choice(choices) for _ in range(dim_size)]
+        if dim_size > 5:
+            ret[: dim_size - 5] = [1 for _ in range(dim_size - 5)]  # rank 6+ tensors are too big
+        if math.prod(ret) <= max_numel:
+            return ret
 
 
 def _rand_slice_params(
