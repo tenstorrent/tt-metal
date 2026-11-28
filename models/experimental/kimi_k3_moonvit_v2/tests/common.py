@@ -458,19 +458,20 @@ class Trace(_Trace):
     """`tt/trace.py`'s `Trace`, plus timing."""
 
     def time_replays(self, label: str, iterations: int = TRACE_ITERATIONS, warmup: int = TRACE_WARMUP) -> float:
-        """Seconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
+        """Milliseconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
         back with one wait for the device at the end, so that wait is spread over all of them (as the
-        CCL perf tests time their traces). Nothing is written or read in between. Logged, not asserted."""
+        CCL perf tests time their traces). Nothing is written or read in between. Logged and returned;
+        `test_full_size_model_trace_perf` asserts on the returned time."""
         for _ in range(warmup):
             self._execute()
         ttnn.synchronize_device(self.mesh_device)
-        start = time.perf_counter()
+        start_ns = time.perf_counter_ns()
         for _ in range(iterations):
             self._execute()
         ttnn.synchronize_device(self.mesh_device)
-        seconds = (time.perf_counter() - start) / iterations
-        logger.info(f"{label}: {seconds * 1e3:.3f} ms per traced replay ({iterations} replays)")
-        return seconds
+        milliseconds = (time.perf_counter_ns() - start_ns) / iterations / 1e6
+        logger.info(f"{label}: {milliseconds:.3f} ms per traced replay ({iterations} replays)")
+        return milliseconds
 
 
 def check_ring_layer(
@@ -486,12 +487,13 @@ def check_ring_layer(
     reference_call,
     state_prefixes: tuple[str, ...] | None = None,
     input_dtype=ttnn.bfloat16,
+    kernel_config=compute_kernel_config,
     relative_rmse: float,
     real_rows_from_each_chip: bool,
 ) -> None:
-    """`tt_class` (built like `TT_Vision_Attention`, loaded from encoder block `layer`, only the keys
-    starting with `state_prefixes` when given) on the ring against `reference_call(block, x, cu_seqlens,
-    max_seqlen, rope_freqs_cis)`. The device runs window-ordered rows.
+    """`tt_class` (built like `TT_Vision_Attention` with `kernel_config(mesh_device)`, loaded from encoder
+    block `layer`, only the keys starting with `state_prefixes` when given) on the ring against
+    `reference_call(block, x, cu_seqlens, max_seqlen, rope_freqs_cis)`. The device runs window-ordered rows.
 
     By default the golden is the bf16 block over every row, compared as a whole in raster order. With
     `real_rows_from_each_chip` (an image with real rows on every chip, at the production padded length)
@@ -501,9 +503,7 @@ def check_ring_layer(
     from models.experimental.kimi_k3_moonvit_v2.tests.goldens import to_fp32, use_sampled_attention
 
     parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
-    tt = tt_class(
-        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config(mesh_device)
-    )
+    tt = tt_class(config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=kernel_config(mesh_device))
     block = reference.vision_tower.encoder.blocks[layer]
     state = block.state_dict()
     if state_prefixes is not None:

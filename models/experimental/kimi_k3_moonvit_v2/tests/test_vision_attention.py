@@ -17,9 +17,10 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     check_ring_layer,
     padding_layout_grid,
 )
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import linear_kernel_config
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_attention import TT_Vision_Attention
 
-RELATIVE_RMSE = 0.025
+RELATIVE_RMSE = 0.055
 
 
 def check_vision_attention(mesh_device, sp_axis, num_links, config, reference, layer, grid, **kwargs) -> None:
@@ -34,6 +35,7 @@ def check_vision_attention(mesh_device, sp_axis, num_links, config, reference, l
         tt_class=TT_Vision_Attention,
         reference_call=lambda block, *args: block.attention_qkvpacked(*args),
         state_prefixes=("wqkv.", "wo."),
+        kernel_config=linear_kernel_config,
         relative_rmse=RELATIVE_RMSE,
         **kwargs,
     )

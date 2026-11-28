@@ -210,14 +210,35 @@ def resolve_parallel(
     return VisionParallel(sp_axis=sp.mesh_axis, sp_factor=sp.factor, ccl=ccl)
 
 
-def compute_kernel_config(mesh_device: ttnn.MeshDevice):
-    """HiFi4 with fp32 accumulation for every matmul: highest fidelity, no quantization."""
+def _kernel_config(mesh_device: ttnn.MeshDevice, fidelity: ttnn.MathFidelity, *, packer_l1_acc: bool = False):
     import ttnn
 
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
-        packer_l1_acc=False,
+        packer_l1_acc=packer_l1_acc,
     )
+
+
+def compute_kernel_config(mesh_device: ttnn.MeshDevice):
+    """HiFi4 with fp32 accumulation: the norms, patch embed and projector."""
+    import ttnn
+
+    return _kernel_config(mesh_device, ttnn.MathFidelity.HiFi4)
+
+
+def linear_kernel_config(mesh_device: ttnn.MeshDevice):
+    """HiFi3 with fp32 accumulation and packer L1 accumulation: the encoder's wqkv, wo, fc0 and fc1."""
+    import ttnn
+
+    return _kernel_config(mesh_device, ttnn.MathFidelity.HiFi3, packer_l1_acc=True)
+
+
+def sdpa_kernel_config(mesh_device: ttnn.MeshDevice):
+    """HiFi3 with fp32 accumulation: the ring attention op, which also uses its approximate exp
+    (`vision_attention.py`)."""
+    import ttnn
+
+    return _kernel_config(mesh_device, ttnn.MathFidelity.HiFi3)

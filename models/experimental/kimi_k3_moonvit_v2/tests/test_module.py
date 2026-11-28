@@ -19,7 +19,7 @@ import torch
 import ttnn
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tests.common import SYNTHETIC, device_config, random_patches
-from models.experimental.kimi_k3_moonvit_v2.tt import module, vision_model
+from models.experimental.kimi_k3_moonvit_v2.tt import module, vision_block, vision_model
 from models.experimental.kimi_k3_moonvit_v2.tt.device_input import DeviceInput
 from models.experimental.kimi_k3_moonvit_v2.tt.module import LoadingError, Module, Parameter, rename_substate
 
@@ -35,6 +35,7 @@ def host_parameters(monkeypatch):
 
     monkeypatch.setattr(Parameter, "load_torch_tensor", load_torch_tensor)
     monkeypatch.setattr(vision_model, "compute_kernel_config", lambda mesh_device: None)
+    monkeypatch.setattr(vision_block, "linear_kernel_config", lambda mesh_device: None)
     return SimpleNamespace(shape=(1, 1))
 
 

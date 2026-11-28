@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device, the 4-chip ring (one LoudBox row): full-size encoder layers, each on its own, the full 27-layer
-encoder and the full model against reference outputs saved by `goldens.py`, real weights only.
+encoder and the full model against reference outputs saved by `goldens.py`, real weights. Also
+`test_full_size_model_trace_perf`, random or real weights, which asserts the traced model's time and checks no output.
 
 Two image sizes (`SIZES`), each with its own saved outputs:
   256x256: 65,536 of the 67,584 padded rows real
@@ -13,13 +14,14 @@ The reference outputs are fp32 (`goldens.py`): the bf16 reference's own
 rounding is larger than the device's error in deeper layers. The CPU reference is slow at this
 length, so it is not recomputed here: generate it once per size with
 `python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid <H>x<W>`.
-The tests skip when `$MOONVIT_GOLDEN_DIR` is unset, or the saved outputs or the checkpoint are missing.
+The tests that check outputs skip when `$MOONVIT_GOLDEN_DIR` is unset, or the saved outputs or the
+checkpoint are missing; `test_full_size_model_trace_perf` needs no saved outputs.
 
 Every chip holds real rows (16,896 on chips 0-2; on chip 3, 14,848 at 256x256 and 16,632 at 510x132),
 so besides the PCC over the whole image each chip's real rows (in window order, as the device splits
 it) are checked on their own; a wrong chip cannot hide behind three right ones.
 
-The `_trace` variants are the traced perf tests: they capture the same forward in a trace, check its
+The other `_trace` variants are the traced perf tests: they capture the same forward in a trace, check its
 first replay (it must equal the untraced run exactly and pass the same checks), then time back-to-back
 replays on the saved input. The layer one runs TRACE_LAYER only, twice per replay, so that back-to-back
 replays alternate CCL slots (`layer_forward(twice=True)`).
@@ -38,7 +40,10 @@ import ttnn
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
 from models.experimental.kimi_k3_moonvit_v2.tests import goldens
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    LOUDBOX_SHAPE,
     REAL,
+    RING_SIZE,
+    SYNTHETIC,
     ALL_LAYERS,
     RING,
     RING_TRACE,
@@ -72,6 +77,15 @@ LAYER_RELATIVE_RMSE = 0.03
 ENCODER_PCC = 0.99
 ENCODER_RELATIVE_RMSE = 0.15
 MODEL_RELATIVE_RMSE = 0.17
+# `test_full_size_model_trace_perf`: the largest grid the processor makes, and the (lower, upper) limits on
+# one traced replay of the model there per system mesh, with headroom around the current time so run-to-run
+# noise does not fail it. Falling below the lower limit means the model got faster (or skipped work): check
+# it and tighten both limits.
+# CI runs this test on `bh_sc1`, the 8 kW (power-capped) Galaxy pool; the ring joint SDPA perf job runs on the
+# 14 kW pool, `bh_sc1_high_power`.
+PERF_SIZE = SIZES["510x132"]
+GALAXY_SHAPE = (8, RING_SIZE)
+MODEL_TRACE_LIMIT_MS = {LOUDBOX_SHAPE: (2800, 3100), GALAXY_SHAPE: (3750, 4150)}
 
 
 @pytest.fixture(params=list(SIZES.values()), ids=list(SIZES))
@@ -221,8 +235,8 @@ def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, referenc
         out = to_host(trace.replay(), mesh_device, sp_axis, config, size)
         assert_same_as_untraced(untraced, out, f"layer {layer}")
         check_layer(saved, out, config, parallel, size, layer, "traced ")
-        seconds = trace.time_replays(f"full-size {size[0]}x{size[1]} layer {layer}, run twice")
-        logger.info(f"full-size {size[0]}x{size[1]} layer {layer}: {seconds / 2 * 1e3:.3f} ms per traced layer")
+        milliseconds = trace.time_replays(f"full-size {size[0]}x{size[1]} layer {layer}, run twice")
+        logger.info(f"full-size {size[0]}x{size[1]} layer {layer}: {milliseconds / 2:.3f} ms per traced layer")
 
 
 def encoder_inputs(mesh_device, sp_axis, num_links, config, reference, size):
@@ -307,8 +321,8 @@ def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, refere
 
 
 def model_inputs(mesh_device, sp_axis, num_links, config, reference, size):
-    """`(model, pixels, grid_thws)`: the full model with the checkpoint's weights, and the pixels
-    `goldens.py` used."""
+    """`(model, pixels, grid_thws)`: the full model with `reference`'s weights (the checkpoint's, or random
+    ones for the perf test), and the pixels `goldens.py` used."""
     sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
     tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
     tt.load_torch_state_dict(reference.state_dict())
@@ -379,3 +393,31 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
             f"(host prep + input writes {(written - start) * 1e3:.1f} ms, traced replay "
             f"{(ran - written) * 1e3:.1f} ms, gather {(done - ran) * 1e3:.1f} ms)"
         )
+
+
+@RING_TRACE
+@SYNTHETIC
+@REAL
+def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, reference):
+    """`test_full_size_model_trace` on PERF_SIZE, for time only: no saved outputs,
+    no output checks. Asserts the time per replay is within the system mesh's MODEL_TRACE_LIMIT_MS."""
+    system_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+    if system_shape not in MODEL_TRACE_LIMIT_MS:
+        pytest.skip(f"no time limit for system mesh {system_shape}")
+    lower_limit_ms, upper_limit_ms = MODEL_TRACE_LIMIT_MS[system_shape]
+    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference, PERF_SIZE)
+    inputs = tt.prepare_inputs(pixels, grid_thws)
+
+    def forward():
+        return tt(**inputs)
+
+    # Untraced first: compiles the programs and allocates the ring attention buffers (`Trace`).
+    ttnn.deallocate(forward())
+
+    with Trace(mesh_device, forward) as trace:
+        milliseconds = trace.time_replays(
+            f"full-size {PERF_SIZE[0]}x{PERF_SIZE[1]} model ({config.num_hidden_layers} layers, merger, " "projector)"
+        )
+    assert (
+        lower_limit_ms <= milliseconds <= upper_limit_ms
+    ), f"{milliseconds:.1f} ms per traced replay outside [{lower_limit_ms}, {upper_limit_ms}] ms on {system_shape}"

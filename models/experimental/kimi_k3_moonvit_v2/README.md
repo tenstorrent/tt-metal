@@ -9,7 +9,9 @@ on a LoudBox (2x4) the tests use the first row. Patches are put in window order 
 window's four patches consecutive), padded to 67,584 rows and split along the ring, so the merger is a
 reshape on each chip. Attention is ring attention with the padding masked; everything else is
 sequence parallel. Weights are bf16 and replicated. Activations are currently bf16 in DRAM, except the encoder's
-residual stream, which is fp32 (`tt/vision_block.py`). Matmuls are currently HiFi4 with fp32 accumulation.
+residual stream, which is fp32 (`tt/vision_block.py`). All matmuls accumulate in fp32. The encoder's
+linears (wqkv, wo, fc0, fc1) are HiFi3 with packer L1 accumulation, and ring attention is HiFi3 with
+the approximate exp (`tt/model_config.py`); the norms, patch embed and projector are HiFi4.
 
 ## Structure
 
@@ -126,7 +128,12 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests -m simulator
 ```
 
 Ring tests (`ring1x4`) run on row 0 of any system mesh 4 chips wide (LoudBox 2x4, Galaxy 8x4) and skip
-elsewhere. CI (Blaze models prefill, `kimi_k3_moonvit`) runs `-m synthetic -k real_rows_from_each_chip` on a Galaxy.
+elsewhere. CI (Blaze models prefill, `kimi_k3_moonvit`) runs `-m real -k "real_rows_from_each_chip or
+model_trace_perf or small_image"` on a Galaxy, with the MXFP4 checkpoint on Weka (`KIMI_K3_HF_MODEL`, set in the job);
+`test_vision_model_small_image` runs the full model on a 48x48-patch
+image against an fp32 CPU reference computed in the test; `test_full_size_model_trace_perf` (random or real weights) asserts the traced model's
+time on the largest processor grid is within the system mesh's `MODEL_TRACE_LIMIT_MS` (lower and upper) and checks no output.
+CI runs it on `bh_sc1`, the 8 kW (power-capped) Galaxy pool.
 Row-wise tests run on one P150 (`p150`) standing in for one ring chip: it runs that chip's 16,896-row
 quarter of the padded sequence (`MeshRows`).
 
