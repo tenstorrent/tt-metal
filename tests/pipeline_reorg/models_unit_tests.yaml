@@ -1732,6 +1732,16 @@
     export HF_HOME=/mnt/weka/model-weights/video/huggingface
     export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # CPU contracts explicitly cover off and A/B/C/D; keep native LTX_C12_MODE unset.
+    mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
+      python3 -B models/tt_dit/tests/unit/test_audio_c12_cpu.py -v || exit 1
+    # The Torch suite verifies this immutable reference's SHA256 before AST extraction.
+    C12_REFERENCE="${PIPELINE_DIR:?CI staging directory required}/c12-audio-pack.py"
+    curl --fail --silent --show-error --location --connect-timeout 15 --max-time 60 \
+      https://raw.githubusercontent.com/tenstorrent/tt-metal/e9274f7a4f77710c01e3f50a8550966f4f99c08e/models/tt_dit/layers/audio_pack.py \
+      --output "$C12_REFERENCE" || exit 1
+    mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
+      python3 -B models/tt_dit/tests/unit/test_audio_c12_torch_cpu.py --upstream "$C12_REFERENCE" || exit 1
     # Resolve the adapter before pytest opens any devices; keep the tests offline. A hit in the
     # shared Weka cache is used in place; only a missing adapter is fetched into job storage.
     LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \

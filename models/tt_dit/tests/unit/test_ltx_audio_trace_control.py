@@ -13,6 +13,7 @@ import functools
 import inspect
 import json
 import os
+import runpy
 import unittest
 import weakref
 from contextlib import contextmanager, nullcontext
@@ -236,6 +237,7 @@ def fixture(*, traced=True, independent=True, env=None):
         dict(
             os=os,
             json=json,
+            parse_mode=runpy.run_path(str(ROOT / "utils/c12.py"))["parse_mode"],
             contextmanager=contextmanager,
             _TRUE_TOKENS={"1", "true", "yes", "on"},
             _FALSE_TOKENS={"0", "false", "no", "off"},
