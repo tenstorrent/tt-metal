@@ -55,3 +55,19 @@ def test_streaming(device, monkeypatch, max_cores, max_block, halves):
     monkeypatch.setattr(g6u_pd, "HALVES_PER_RISC", halves)
     plan = _run(device, (1, 1000), dim=2)
     assert plan.regime == "streaming" and plan.buffer_depth == 2
+
+
+def test_descriptor_cache_patches_addresses(device):
+    """BB-07: a repeat call reuses the cached descriptor and only patches buffer addresses."""
+    g6u_pd._DESCRIPTOR_CACHE.clear()
+    results = []
+    for seed in (1, 2):
+        torch.manual_seed(seed)
+        x = torch.randn((1, 512), dtype=torch.float32)
+        tt_x = ttnn.from_torch(
+            x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        got = ttnn.to_torch(g6_unsqueeze(tt_x, 2))
+        assert torch.equal(got.contiguous().view(torch.int32), x.unsqueeze(2).contiguous().view(torch.int32))
+        results.append(tt_x)
+    assert len(g6u_pd._DESCRIPTOR_CACHE) == 1

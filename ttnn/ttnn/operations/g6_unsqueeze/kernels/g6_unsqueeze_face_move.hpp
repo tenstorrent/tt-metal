@@ -39,8 +39,8 @@ template <
     uint32_t block_w_tiles,
     uint32_t buffer_depth,
     uint32_t logical_w,
-    uint32_t cb_face_stage,
     uint32_t elem_bytes,
+    uint32_t read_align_bytes,
     typename InAccessor,
     typename OutAccessor>
 struct FaceMover {
@@ -50,7 +50,8 @@ struct FaceMover {
     static constexpr uint32_t out_half_stride = 2 * face_bytes;              // output face 2h at 2048*h
     static constexpr uint32_t slot_faces = block_w_tiles * halves_per_risc;  // faces per staging slot
     static constexpr uint32_t slot_bytes = slot_faces * face_bytes;
-    static constexpr uint32_t read_align = 64;  // BH DRAM read alignment
+    static constexpr uint32_t read_align = read_align_bytes;  // BH DRAM read alignment (host READ_ALIGN_SLACK_BYTES)
+    static_assert((read_align & (read_align - 1)) == 0, "read alignment must be a power of two");
     static_assert(elem_bytes == 4, "scatter moves 32-bit words (float32 only)");
 
     const InAccessor& in;
@@ -165,7 +166,7 @@ struct FaceMover {
 
 // Shared kernel_main body. CT args (in order):
 //   0 half_begin, 1 halves_per_risc, 2 block_w_tiles, 3 buffer_depth, 4 logical_w, 5 cb_face_stage,
-//   6 elem_bytes, 7 tile_bytes, then TensorAccessorArgs(input), TensorAccessorArgs(output).
+//   6 elem_bytes, 7 tile_bytes, 8 read_align_bytes, then TensorAccessorArgs(input), TensorAccessorArgs(output).
 // RT args: 0 input addr, 1 output addr, 2 start_tile, 3 core_w_tiles.
 inline void kernel_body() {
     constexpr uint32_t half_begin = get_compile_time_arg_val(0);
@@ -176,7 +177,8 @@ inline void kernel_body() {
     constexpr uint32_t cb_face_stage = get_compile_time_arg_val(5);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
-    constexpr auto in_args = TensorAccessorArgs<8>();
+    constexpr uint32_t read_align_bytes = get_compile_time_arg_val(8);
+    constexpr auto in_args = TensorAccessorArgs<9>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
@@ -193,8 +195,8 @@ inline void kernel_body() {
         block_w_tiles,
         buffer_depth,
         logical_w,
-        cb_face_stage,
         elem_bytes,
+        read_align_bytes,
         decltype(in),
         decltype(out)>;
     // The CB carries read_align bytes of slack so the 64 B-aligned landing fits.

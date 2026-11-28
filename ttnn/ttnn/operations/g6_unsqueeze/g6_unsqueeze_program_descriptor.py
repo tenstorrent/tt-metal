@@ -13,7 +13,7 @@ staging CB (`cb_face_stage_half{h}`) sized `buffer_depth * block_w_tiles * halve
 
 from __future__ import annotations
 
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from pathlib import Path
 
 import ttnn
@@ -30,6 +30,15 @@ TILE_W = 32
 FACE_W = 16
 HALVES_PER_TILE = TILE_W // FACE_W
 READ_ALIGN_SLACK_BYTES = 64  # BH DRAM read alignment: landing is align_up(cb_base, 64)
+
+# Runtime-arg slots of the two buffer addresses (the only per-call values; see get_program_descriptor).
+RT_IN_ADDR = 0
+RT_OUT_ADDR = 1
+
+# Host-side descriptor cache (BB-07): a repeat call with the same program-defining key reuses the
+# built ProgramDescriptor and only patches the buffer addresses in its runtime args.
+DESCRIPTOR_CACHE_SIZE = 32
+_DESCRIPTOR_CACHE = OrderedDict()
 
 # Semantic CB ids, indexed by the first tile half the instance owns.
 CB_FACE_STAGE_HALF0 = 0
@@ -173,15 +182,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan=None) -> ttnn.Pr
             cb_id,
             elem_bytes,
             in_tile_bytes,
+            READ_ALIGN_SLACK_BYTES,
         ] + accessor_ct
         rt_args = ttnn.RuntimeArgs()
         for core, start, n in plan.core_assignments:
-            rt_args[core.x][core.y] = [
-                input_tensor.buffer_address(),
-                output_tensor.buffer_address(),
-                start,
-                n,
-            ]
+            rt_args[core.x][core.y] = [0, 0, start, n]  # addresses: RT_IN_ADDR / RT_OUT_ADDR, patched per call
         if half_begin == 0:
             source, config = "g6_unsqueeze_reader.cpp", ttnn.ReaderConfigDescriptor()
         else:
@@ -196,4 +201,51 @@ def create_program_descriptor(input_tensor, output_tensor, plan=None) -> ttnn.Pr
             )
         )
 
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    program_descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    _patch_buffer_addresses(program_descriptor, plan, input_tensor, output_tensor)
+    return program_descriptor
+
+
+def _patch_buffer_addresses(program_descriptor, plan, input_tensor, output_tensor):
+    in_addr = input_tensor.buffer_address()
+    out_addr = output_tensor.buffer_address()
+    for kernel in program_descriptor.kernels:
+        rt_args = kernel.runtime_args
+        for core, _, _ in plan.core_assignments:
+            core_args = rt_args[core.x][core.y]
+            core_args[RT_IN_ADDR] = in_addr
+            core_args[RT_OUT_ADDR] = out_addr
+
+
+def _cache_key(input_tensor):
+    """Everything that changes the built program (BB-07): shape, dtype, layout, placement, grid, knobs."""
+    mc = input_tensor.memory_config()
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    return (
+        tuple(int(s) for s in input_tensor.shape),
+        input_tensor.dtype,
+        input_tensor.layout,
+        mc.memory_layout,
+        mc.buffer_type,
+        (grid.x, grid.y),
+        L1_BUDGET_BYTES,
+        MAX_CORES,
+        MAX_BLOCK_W_TILES,
+        HALVES_PER_RISC,
+    )
+
+
+def get_program_descriptor(input_tensor, output_tensor):
+    """Cached (plan, descriptor) for this call; a hit patches only the two buffer addresses."""
+    key = _cache_key(input_tensor)
+    entry = _DESCRIPTOR_CACHE.get(key)
+    if entry is None:
+        plan = select_plan(input_tensor)
+        entry = (plan, create_program_descriptor(input_tensor, output_tensor, plan))
+        _DESCRIPTOR_CACHE[key] = entry
+        if len(_DESCRIPTOR_CACHE) > DESCRIPTOR_CACHE_SIZE:
+            _DESCRIPTOR_CACHE.popitem(last=False)
+    else:
+        _DESCRIPTOR_CACHE.move_to_end(key)
+        _patch_buffer_addresses(entry[1], entry[0], input_tensor, output_tensor)
+    return entry

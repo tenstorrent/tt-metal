@@ -33,7 +33,10 @@ the 16 B-segment alternative (perf lamp) would shrink a page to 32·16 B = 512 B
 
 ### Total per-core footprint
 
-`L1_op = 2 · (buffer_depth · block_w_tiles · face_bytes + 64)` bytes.
+`L1_op = (2 / halves_per_risc) · (buffer_depth · block_w_tiles · halves_per_risc · face_bytes + 64)` bytes
+(`halves_per_risc = 1` in production: `2 · (buffer_depth · block_w_tiles · face_bytes + 64)`). The code's cap
+generalizes the symbol-table bound to `floor((L1_BUDGET_BYTES/(2/halves_per_risc) − 64) / (buffer_depth · halves_per_risc · face_bytes))`
+(`_block_cap()` in the program descriptor).
 Scales with `block_w_tiles` and `buffer_depth` (both terms); nothing scales with W directly.
 Maximum: `resident` 2·(658·1024 + 64) = 1347712 B; `streaming` 2·(2·329·1024 + 64) = 1347712 B; both ≤ 1347776.
 Production: p1/p2 (1 tile per core) → 2·(1024 + 64) = 2176 B per core.
@@ -48,3 +51,9 @@ Production: p1/p2 (1 tile per core) → 2·(1024 + 64) = 2176 B per core.
 Totals per call (p1): DRAM read 2048 B, DRAM write 32768 B, NoC cross-core 0 B, core-local L1: 2048 B landed + 15·4 B·32 moved by RISC stores per core-pair.
 
 > Cheapest-traffic split considered: `w_tile` across cores with 16 B column-segment output writes — write 8192 B instead of 32768 B (−24576 B DRAM write), same 2048 B read, 0 B cross-core, but 32 write transactions per tile instead of 2. Implemented: `w_tile` across cores + `tile_half` across the 2 RISCs with 1024 B face writes. The byte-cheaper variant is the same split with a different transfer shape, recorded as the "output write shape" perf lamp (transaction count, not bytes, is expected to dominate at 16 B); the structure (per-tile scatter into private staging) keeps it reachable by changing only the staging stride and the write size.
+
+> Verifier audit (Phase 0): the deferred cheapest-traffic variant above (16 B column-segment writes,
+> −24576 B DRAM write on p1) has an *expectation* ("transaction count is expected to dominate"), not a
+> measurement, as its reason. Folded into the output-write-shape perf refinement in
+> `op_requirements.md` (Refinement 2), which must measure it and either build it or record the
+> measured reason it loses.

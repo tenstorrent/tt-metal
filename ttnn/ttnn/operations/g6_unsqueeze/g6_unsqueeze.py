@@ -13,7 +13,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_unsqueeze_program_descriptor import create_program_descriptor, select_plan
+from .g6_unsqueeze_program_descriptor import get_program_descriptor
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +126,5 @@ def g6_unsqueeze(input_tensor, dim):
         input_tensor.device(),
         input_tensor.memory_config(),
     )
-    plan = select_plan(input_tensor)
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, plan)
+    _, program_descriptor = get_program_descriptor(input_tensor, output_tensor)
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

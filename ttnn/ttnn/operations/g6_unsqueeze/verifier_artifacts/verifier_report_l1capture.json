@@ -1,0 +1,154 @@
+{
+  "summary": {
+    "total": 20,
+    "supported_pass": 8,
+    "supported_fail": 1,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 11
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op[1x512-dim2-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op[1x256-dim2-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-gate-math_fidelity]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-input_gen]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-poison_padding]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim-1-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-sequence]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      }
+    ],
+    "supported_fail": [
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-trace]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "failed",
+        "failure_category": "other"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_repeat_bit_identical",
+        "test_name": "test_repeat_bit_identical",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim0]",
+        "test_name": "test_validation_errors[1x512-dim0]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim1]",
+        "test_name": "test_validation_errors[1x512-dim1]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim-2]",
+        "test_name": "test_validation_errors[1x512-dim-2]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim-3]",
+        "test_name": "test_validation_errors[1x512-dim-3]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim3-out_of_range]",
+        "test_name": "test_validation_errors[1x512-dim3-out_of_range]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim-4-out_of_range]",
+        "test_name": "test_validation_errors[1x512-dim-4-out_of_range]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x1x1x32-dim4-rank4]",
+        "test_name": "test_validation_errors[1x1x1x32-dim4-rank4]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x512-dim2-l1_interleaved]",
+        "test_name": "test_validation_errors[1x512-dim2-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[1x0-dim2-empty]",
+        "test_name": "test_validation_errors[1x0-dim2-empty]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_unsqueeze/test_regression.py::test_validation_errors[2x64-dim2-two_rows]",
+        "test_name": "test_validation_errors[2x64-dim2-two_rows]",
+        "status": "failed"
+      }
+    ]
+  }
+}
