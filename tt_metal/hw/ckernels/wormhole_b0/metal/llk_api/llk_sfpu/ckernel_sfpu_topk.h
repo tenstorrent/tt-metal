@@ -485,6 +485,10 @@ inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist) {
     }
 }
 
+// Instructions issued by bitonic_topk_load8 / bitonic_topk_store8 each.
+template <bool FUSED>
+constexpr int bitonic_topk_ldst8_count = FUSED ? 2 : 4;
+
 template <bool is_fp32_dest_acc_en, bool FUSED = false, bool RANK_STAMPED = false>
 inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1) {
     constexpr std::uint32_t dst_indices_offset = 128;  // 2 tile x 64 rows per tile
@@ -590,6 +594,9 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional() {
     // Restore values after the XOR scratch operation.
     TTI_SFPXOR(0, VC, VD, 0);
 }
+
+// Instructions issued by topk_cmp_swap_stable_directional.
+constexpr int topk_cmp_swap_stable_count = 6;
 
 // Runtime-polarity wrapper for stable compare sites shared by ascending and descending sorts.
 template <std::uint32_t VC, std::uint32_t VD, std::uint32_t MODE, TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
@@ -1292,6 +1299,21 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF);  // right-run complement (2K-1)
     }
 
+    // One recorded group body (load8 / [rank stamp] / compare-exchange / store8 / INCRWC Dst += 4)
+    // serves every group: SFPLOAD/SFPSTORE address Imm10 + RWC.Dst, so walking RWC.Dst by the
+    // group stride reaches each group's rows. The rank-stamped body does not fit the SFPU replay
+    // slots, so it replays two windows around an inline right-run stamp.
+    // Window lengths must match the instructions recorded below.
+    constexpr int merge_ldst = bitonic_topk_ldst8_count<FUSED>;
+    constexpr int merge_left_stamp = RANK_STAMPED ? 5 : 0;  // AND, OR, SETCC, XOR, ENCC
+    constexpr int merge_cmp = RANK_STAMPED ? 2 /* IADD + SWAP */ : (STABLE_SORT ? topk_cmp_swap_stable_count : 1);
+    constexpr int merge_head = merge_ldst + merge_left_stamp;  // slots [0, merge_head)
+    constexpr int merge_body = merge_head + merge_cmp + merge_ldst + 1;
+    static_assert(
+        merge_body <= static_cast<int>(ckernel::math::replay_buf_offset),
+        "merge replay windows must stay in the SFPU half of the replay buffer");
+    bool record_body = true;
+
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++) {
         for (int col = 0; col < 2; col++) {
@@ -1310,30 +1332,40 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
 
             while (datums_compared < total_datums_to_compare) {
                 for (std::uint32_t ii = 0; ii < inner_d; ii++) {
-                    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
+                    // Rank-stamped: re-key both runs' value lo16 with fresh sign-conditioned
+                    // local ranks so this merge AND the rebuild that follows it compare
+                    // distinct keys whose tie order is the true index order. The true
+                    // indices are live in LREG4/5 from load8: from there to the swap,
+                    // ALU-only writes to LREG0..3 (TEN-2932).
+                    // largest = !top_min: complement the lanes whose sign matches the
+                    // kept extreme, exactly as the fused-key conditioning does.
+                    [[maybe_unused]] constexpr int stamp_cc =
+                        top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
                     if constexpr (RANK_STAMPED) {
-                        // Re-key both runs' value lo16 with fresh sign-conditioned local
-                        // ranks so this merge AND the rebuild that follows it compare
-                        // distinct keys whose tie order is the true index order. The
-                        // true indices are live in LREG4/5 from the load above: from
-                        // here to the swap, ALU-only writes to LREG0..3 (TEN-2932).
                         if (ii == 0) {
                             // Fresh per-pair rank iota: rank = 4*ii + (j>>3) (each load
                             // covers 4 consecutive run positions per lane group;
                             // LTILEID = 2*j). Left-run base is 0 for every in-tree
-                            // caller -- one merge call per tile pair.
+                            // caller -- one merge call per tile pair. load8 leaves LREG2 intact.
                             TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
                             TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
                         }
-                        // largest = !top_min: complement the lanes whose sign matches the
-                        // kept extreme, exactly as the fused-key conditioning does.
-                        constexpr int stamp_cc = top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
-                        // Left run: global direction, lower rank range.
-                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
-                        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-                        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
-                        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-                        TOPK_SFPENCC_ALL_LANES_ON();
+                    }
+                    if (record_body) {
+                        TTI_REPLAY(0, RANK_STAMPED ? merge_head : merge_body, 1, 1);
+                        bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
+                        if constexpr (RANK_STAMPED) {
+                            // Left run: global direction, lower rank range.
+                            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+                            TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+                            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
+                            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+                            TOPK_SFPENCC_ALL_LANES_ON();
+                        }
+                    } else {
+                        TTI_REPLAY(0, RANK_STAMPED ? merge_head : merge_body, 0, 0);
+                    }
+                    if constexpr (RANK_STAMPED) {
                         // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
                         // a single XOR because 2K is a power of two and rank < 2K.
                         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
@@ -1343,52 +1375,76 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
                         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
                         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
                         TOPK_SFPENCC_ALL_LANES_ON();
-                        // Advance to the next 4 run positions.
-                        TTI_SFPIADD(
-                            4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-                    }
-                    if constexpr (STABLE_SORT) {
-                        // top_min selects the value operand order (which run receives the
-                        // minima), exactly as in the unstable arm below. The tie-break polarity
-                        // comes from TIE_ORDER -- the GLOBAL sort
-                        // order. Anchoring the tie routing to
-                        // the operand order (the index minimum rides with the value minimum or
-                        // maximum per the global mode) makes every merge a comparator on ONE
-                        // fixed total order [value, then index], so callers may issue merges
-                        // with per-block alternating directions (ttnn.sort's bitonic merge
-                        // network, which always binds top_min=false and routes the outputs
-                        // afterwards) or in the global direction (the ttnn topk kernels, which
-                        // bind top_min = !largest; the LLK/quasar test kernels, which bind
-                        // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
-                        // to the pre-existing selection, since they program the runtime mode
-                        // from the same flag they derive top_min from.
-                        if constexpr (top_min) {
-                            topk_cmp_swap_stable_min_to_vd<
-                                p_sfpu::LREG1,
-                                p_sfpu::LREG0,
-                                p_sfpswap::ALL_ROWS_MAX,
-                                TIE_ORDER>();
+                        if (record_body) {
+                            TTI_REPLAY(merge_head, merge_body - merge_head, 1, 1);
                         } else {
-                            topk_cmp_swap_stable_min_to_vd<
-                                p_sfpu::LREG0,
-                                p_sfpu::LREG1,
-                                p_sfpswap::ALL_ROWS_MAX,
-                                TIE_ORDER>();
+                            TTI_REPLAY(merge_head, merge_body - merge_head, 0, 0);
                         }
-                    } else {
-                        TTI_SFPSWAP(
-                            0,
-                            top_min ? p_sfpu::LREG1 : p_sfpu::LREG0,
-                            top_min ? p_sfpu::LREG0 : p_sfpu::LREG1,
-                            p_sfpswap::ALL_ROWS_MAX);
                     }
-                    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
+                    if (record_body) {
+                        if constexpr (RANK_STAMPED) {
+                            // Advance to the next 4 run positions.
+                            TTI_SFPIADD(
+                                4,
+                                p_sfpu::LREG2,
+                                p_sfpu::LREG2,
+                                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+                        }
+                        if constexpr (STABLE_SORT) {
+                            // top_min selects the value operand order (which run receives the
+                            // minima), exactly as in the unstable arm below. The tie-break polarity
+                            // comes from TIE_ORDER -- the GLOBAL sort
+                            // order. Anchoring the tie routing to
+                            // the operand order (the index minimum rides with the value minimum or
+                            // maximum per the global mode) makes every merge a comparator on ONE
+                            // fixed total order [value, then index], so callers may issue merges
+                            // with per-block alternating directions (ttnn.sort's bitonic merge
+                            // network, which always binds top_min=false and routes the outputs
+                            // afterwards) or in the global direction (the ttnn topk kernels, which
+                            // bind top_min = !largest; the LLK/quasar test kernels, which bind
+                            // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
+                            // to the pre-existing selection, since they program the runtime mode
+                            // from the same flag they derive top_min from.
+                            if constexpr (top_min) {
+                                topk_cmp_swap_stable_min_to_vd<
+                                    p_sfpu::LREG1,
+                                    p_sfpu::LREG0,
+                                    p_sfpswap::ALL_ROWS_MAX,
+                                    TIE_ORDER>();
+                            } else {
+                                topk_cmp_swap_stable_min_to_vd<
+                                    p_sfpu::LREG0,
+                                    p_sfpu::LREG1,
+                                    p_sfpswap::ALL_ROWS_MAX,
+                                    TIE_ORDER>();
+                            }
+                        } else {
+                            TTI_SFPSWAP(
+                                0,
+                                top_min ? p_sfpu::LREG1 : p_sfpu::LREG0,
+                                top_min ? p_sfpu::LREG0 : p_sfpu::LREG1,
+                                p_sfpswap::ALL_ROWS_MAX);
+                        }
+                        bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
+                        TTI_INCRWC(0, 4, 0, 0);  // next group: Dst += 4 rows
+                        record_body = false;
+                    }
                     datums_compared += 8;
                     if (ii == (inner_d - 1)) {
                         dst_cr += 2 * dist;
                         dst_offset = dst_cr;
+                        if (datums_compared < total_datums_to_compare) {
+                            // Run-to-run jump: re-base the Dst pointer at the next run's first row.
+                            set_dst_write_addr(dst_addr_offset + (dst_offset & 0xF) + (dst_offset >> 4) * 32);
+                            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                        }
                     } else {
                         dst_offset += 4;
+                        if ((dst_offset & 0xF) == 0) {
+                            // Face skip inside a run: +16 rows beyond the body's +4.
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                        }
                     }
                 }
             }
@@ -1398,6 +1454,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
         dst_addr_offset = 16;
         set_dst_write_addr(dst_addr_offset);
     }
+    topk_replay_init = 0;  // slots 0..merge_body-1 hold the merge body: the next local sort / rebuild re-records
 }
 
 template <

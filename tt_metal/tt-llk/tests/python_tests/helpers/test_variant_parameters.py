@@ -1286,6 +1286,9 @@ class TOPK(TemplateParameter):
     topk_split_reinit: bool = False
     # Optional second split (0: none): the middle call runs [topk_split_phase, topk_split_phase2).
     topk_split_phase2: int = 0
+    # Run only one merge (m_iter = topk_merge_m_iter) on the unpacked tile pair and pack all four tiles.
+    topk_merge_only: bool = False
+    topk_merge_m_iter: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1300,6 +1303,8 @@ class TOPK(TemplateParameter):
             f"constexpr int TOPK_SPLIT_PHASE = {self.topk_split_phase};",
             f"constexpr bool TOPK_SPLIT_REINIT = {str(self.topk_split_reinit).lower()};",
             f"constexpr int TOPK_SPLIT_PHASE2 = {self.topk_split_phase2};",
+            f"constexpr bool TOPK_MERGE_ONLY = {str(self.topk_merge_only).lower()};",
+            f"constexpr int TOPK_MERGE_M_ITER = {self.topk_merge_m_iter};",
         ]
         return "\n".join(lines)
 
@@ -1316,8 +1321,10 @@ class TOPK(TemplateParameter):
             "int TOPK_SPLIT_PHASE;",
             "bool TOPK_SPLIT_REINIT;",
             "int TOPK_SPLIT_PHASE2;",
+            "bool TOPK_MERGE_ONLY;",
+            "int TOPK_MERGE_M_ITER;",
         ]
-        return "\n".join(lines), "IIII???Ii?i"
+        return "\n".join(lines), "IIII???Ii?i?i"
 
 
 @dataclass
