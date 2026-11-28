@@ -3,6 +3,7 @@
 
 import dataclasses
 import os
+import re
 import time
 from collections import OrderedDict, defaultdict
 
@@ -22,6 +23,7 @@ from models.common.hf_layer_type_attention import layer_type_attention
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
+from models.demos.gemma4.tt.capacity import BF16_TILE_BYTES, BFP8_TILE_BYTES, TILE
 from models.demos.gemma4.tt.common import (
     GEMMA4_CP_PREFILL_CHUNK,
     create_tt_model,
@@ -674,6 +676,62 @@ def lane_prefill_frame_tables(per_layer_tables, rounds, lane_slots, scratch_bloc
                         rows[row] = pt2[q].to(torch.int32)
         out.append(rows)
     return out
+
+
+def _kv_head_shards(kv_heads, mesh_config):
+    """``(heads_per_chip, shards)`` of an attention layer with ``kv_heads`` KV heads on ``mesh_config``'s mesh.
+
+    ``load_attention_weights`` gives the chip at TP index ``t`` (its coordinate along ``tp_axis``) the KV heads
+    ``[t * h, (t + 1) * h)`` with ``h = kv_heads // tp``, or, with fewer KV heads than TP chips, the one head its
+    query heads read, ``t * kv_heads // tp`` when the query heads split evenly. Chips with the same TP index hold
+    the same heads. ``shards`` lists, in head order, the row-major mesh device indices that hold each head shard.
+
+    Raises
+    ------
+    ValueError
+        When the TP group does not span its mesh axis or does not split the heads evenly.
+    """
+    rows, cols = (int(n) for n in mesh_config.mesh_shape)
+    tp, axis = int(mesh_config.tp), int(mesh_config.tp_axis)
+    if (rows, cols)[axis] != tp or (kv_heads >= tp and kv_heads % tp):
+        raise ValueError(f"Cannot place {kv_heads} KV heads with TP {tp} over axis {axis} of mesh {(rows, cols)}.")
+    by_tp = [[] for _ in range(tp)]
+    for device in range(rows * cols):
+        by_tp[divmod(device, cols)[axis]].append(device)
+    if kv_heads >= tp:
+        return kv_heads // tp, tuple(tuple(devices) for devices in by_tp)
+    shards = [[] for _ in range(kv_heads)]
+    for t, devices in enumerate(by_tp):
+        shards[t * kv_heads // tp].extend(devices)
+    return 1, tuple(tuple(sorted(devices)) for devices in shards)
+
+
+def _kv_block_bytes(name, cache, num_blocks, heads, head_dim):
+    """Bytes of one block of ``cache`` on one chip, once ``cache`` is shown to be layer ``name``'s paged cache.
+
+    A paged cache is ``[num_blocks, heads, block_size, head_dim]`` in TILE layout, so block ``b`` is the ``b``-th
+    run of ``heads * (block_size / 32) * (head_dim / 32)`` tiles of each chip's buffer.
+
+    Raises
+    ------
+    ValueError
+        When the dtype, layout or shape of ``cache`` differs from that.
+    """
+    tile_bytes = {ttnn.bfloat16: BF16_TILE_BYTES, ttnn.bfloat8_b: BFP8_TILE_BYTES}.get(cache.dtype)
+    shape = tuple(cache.shape)
+    if (
+        tile_bytes is None
+        or cache.layout != ttnn.TILE_LAYOUT
+        or len(shape) != 4
+        or (shape[0], shape[1], shape[3]) != (num_blocks, heads, head_dim)
+        or shape[2] % TILE
+        or head_dim % TILE
+    ):
+        raise ValueError(
+            f"Layer {name}: cannot describe a {cache.dtype} {cache.layout} KV cache of shape {shape}; expected "
+            f"[{num_blocks}, {heads}, block_size, {head_dim}] in TILE layout of bfloat16 or bfloat8_b."
+        )
+    return heads * (shape[2] // TILE) * (head_dim // TILE) * tile_bytes
 
 
 class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCausalLM):
@@ -3388,6 +3446,102 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 submesh_kv[layer_idx] = submesh_kv[source_idx]
         self._attach_sdpa_splitfree_scratch(kv_cache)
         return kv_cache
+
+    def get_kv_transfer_layout(self, kv_caches, kv_cache_config):
+        """Where each vLLM layer's KV blocks live on the mesh, for the vllm-tt-plugin's KV connectors.
+
+        ``allocate_kv_cache_per_layer`` gives every attention layer its own ``[k, v]`` pair, each
+        ``[num_blocks, heads_per_chip, block_size, head_dim]`` in TILE layout on every chip, indexed by vLLM block
+        ID. Each chip fills its copy with the KV heads ``_kv_head_shards`` places on it. Sliding and full-attention
+        layers have their own KV head count and head dim (``layer_type_attention``); full-attention layers have
+        fewer KV heads than TP chips on the larger meshes, so a head shard there spans several chips.
+
+        Parameters
+        ----------
+        kv_caches
+            What ``allocate_kv_cache_per_layer`` returned: per submesh, per layer index, ``[k, v]``.
+        kv_cache_config
+            vLLM's ``KVCacheConfig``; every layer name ``model.layers.<i>.self_attn`` of its groups is described.
+
+        Returns
+        -------
+        dict
+            Per layer name, ``[(k, block_bytes, shards), (v, block_bytes, shards)]``: ``block_bytes`` is one block
+            on one chip, ``shards`` the row-major mesh device indices that hold each KV head shard, in head order.
+
+        Raises
+        ------
+        ValueError
+            When a vLLM block ID does not select one block of one layer's own buffers (``_check_kv_transferable``),
+            or when a layer name has no cache, or a cache's shape, layout or dtype does not match the geometry.
+        """
+        self._check_kv_transferable(kv_caches)
+        (per_layer,) = kv_caches
+        text_config = self._text_config()
+        layer_types = list(text_config.layer_types)
+        attention = layer_type_attention(text_config)
+        mesh_config = self.model[0].mesh_config
+        geometry = {
+            layer_type: (head_dim, *_kv_head_shards(kv_heads, mesh_config))
+            for layer_type, kv_heads, head_dim in (
+                ("sliding_attention", attention.sliding_kv_heads, attention.sliding_head_dim),
+                ("full_attention", attention.full_kv_heads, attention.full_head_dim),
+            )
+        }
+        layout = {}
+        owners = {}
+        for group in kv_cache_config.kv_cache_groups:
+            for name in group.layer_names:
+                match = re.fullmatch(r"model\.layers\.(\d+)\.self_attn", name)
+                index = int(match.group(1)) if match else -1
+                if not 0 <= index < min(len(per_layer), len(layer_types)) or layer_types[index] not in geometry:
+                    raise ValueError(
+                        f"Layer {name}: no attention KV cache among {len(per_layer)} allocated layers "
+                        f"of types {sorted(set(layer_types))}."
+                    )
+                head_dim, heads, shards = geometry[layer_types[index]]
+                parts = []
+                for cache in per_layer[index]:
+                    if id(cache) in owners:
+                        raise ValueError(f"Layer {name} shares a KV buffer with layer {owners[id(cache)]}.")
+                    owners[id(cache)] = name
+                    block_bytes = _kv_block_bytes(name, cache, kv_cache_config.num_blocks, heads, head_dim)
+                    parts.append((cache, block_bytes, shards))
+                layout[name] = parts
+        return layout
+
+    def _check_kv_transferable(self, kv_caches):
+        """Raise unless a vLLM block ID selects the same block of one layer's own KV buffers on every chip.
+
+        Raises
+        ------
+        ValueError
+            With hybrid KV cache groups (one buffer pair serves layers of several groups), bounded sliding rings
+            (sliding rows are ring slots), KV-shared layers (they read their source layer's buffer), lane sharding
+            (each lane keeps other requests in the same block) or several submeshes.
+        """
+        model = self.model[0]
+        shared = getattr(self._text_config(), "num_kv_shared_layers", 0) or 0
+        shared_map = getattr(model, "kv_shared_layer_map", None) or {}
+        if self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            reason = "GEMMA4_HYBRID_KV_CACHE_GROUPS is on, so one [k, v] buffer pair serves layers of several groups"
+        elif self._bounded_sliding_kv_cache:
+            reason = (
+                "bounded sliding KV rings are on (GEMMA4_BOUNDED_SLIDING_KV_CACHE), so sliding-layer rows are ring "
+                "slots, not vLLM block IDs"
+            )
+        elif shared or shared_map:
+            reason = (
+                f"num_kv_shared_layers={shared} (kv_shared_layer_map {shared_map}), so shared layers read their "
+                "source layer's buffer"
+            )
+        elif model.mesh_config.lane_sharded:
+            reason = f"lane sharding is on, so each of {model.mesh_config.lanes} lanes keeps its own KV per block"
+        elif len(kv_caches) != 1:
+            reason = f"{len(kv_caches)} submeshes keep separate KV caches"
+        else:
+            return
+        raise ValueError(f"Gemma4 cannot declare a KV transfer layout: {reason}.")
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """Broadcast legacy ``page_table`` to per-layer whenever the plugin
