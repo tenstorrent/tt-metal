@@ -188,7 +188,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // the INIT zone before the measured TILE_LOOP.
         if constexpr (!test_utils::is_unary_sfpu_no_op(SFPU_UNARY_OPERATION, TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT))
         {
-            _llk_math_eltwise_sfpu_init_();
+            if constexpr (!test_utils::unary_sfpu_init_runs_sfpu_init(SFPU_UNARY_OPERATION))
+            {
+                _llk_math_eltwise_sfpu_init_();
+            }
             test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
         }
 

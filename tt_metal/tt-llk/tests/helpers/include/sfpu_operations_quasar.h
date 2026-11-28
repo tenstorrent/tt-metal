@@ -295,6 +295,14 @@ inline constexpr bool is_isinf_isnan_op(SfpuType op)
     return op == SfpuType::isinf || op == SfpuType::isposinf || op == SfpuType::isneginf || op == SfpuType::isnan || op == SfpuType::isfinite;
 }
 
+// Ops whose init below is the Compute API's whole *_tile_init, which runs _llk_math_eltwise_sfpu_init_ itself.
+inline constexpr bool unary_sfpu_init_runs_sfpu_init(SfpuType op)
+{
+    return is_isinf_isnan_op(op) || op == SfpuType::hardmish || op == SfpuType::hardshrink || op == SfpuType::threshold ||
+           op == SfpuType::power_iterative || op == SfpuType::i0 || op == SfpuType::bitwise_and || op == SfpuType::bitwise_or ||
+           op == SfpuType::bitwise_xor || op == SfpuType::tiled_prod;
+}
+
 /**
  * @brief Whether a unary op runs no SFPU code: typecast_tile and typecast_tile_init skip Float16_b <-> Float32, since
  * the 32-bit DEST and the packer do that conversion.
