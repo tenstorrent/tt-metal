@@ -5,7 +5,10 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <string>
+#include <type_traits>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -18,6 +21,27 @@ class MeshDevice;
 }
 
 namespace test_utils {
+
+// Deterministic ramp of test data: element i is (i % 251), a prime period so the pattern does not line up with tile or
+// face sizes. Every value is representable in T, so the conversions below are well defined (a float -> int8_t cast of
+// a value >= 128 is undefined behavior, which UBSan reports):
+//  - 1-byte signed integers use the range [-125, 125], i.e. (i % 251) - 125.
+//  - other integers use [0, 250].
+//  - floating-point-like types (float, bfloat16, ...) are built from a float in [0, 250].
+template <typename T>
+std::vector<T> make_ramp(size_t count) {
+    std::vector<T> data(count);
+    for (size_t i = 0; i < count; ++i) {
+        if constexpr (std::is_integral_v<T> && std::is_signed_v<T> && sizeof(T) == 1) {
+            data[i] = static_cast<T>(static_cast<int>(i % 251) - 125);
+        } else if constexpr (std::is_integral_v<T>) {
+            data[i] = static_cast<T>(i % 251);
+        } else {
+            data[i] = static_cast<T>(static_cast<float>(i % 251));
+        }
+    }
+    return data;
+}
 
 // Every MX DataType. MX tensors are TILE-only and can only be placed on a Quasar device.
 inline constexpr std::array kMxDataTypes = {

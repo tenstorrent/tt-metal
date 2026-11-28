@@ -998,7 +998,7 @@ public:
         // Generate payload
         std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
         // Update Common::DeviceData for linear write
-        Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_);
+        Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_, length);
         // Create the HostMemDeviceCommand
         auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = Common::CommandBuilder::build_linear_write_command<flush_prefetch, inline_data>(
@@ -1035,7 +1035,7 @@ public:
             // Generate payload
             std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
             // Update Common::DeviceData for linear write
-            Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_);
+            Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_, length);
             // Add the dispatch write linear command
             cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
                 is_mcast_ ? worker_range.size() : 0,  // num_mcast_dests

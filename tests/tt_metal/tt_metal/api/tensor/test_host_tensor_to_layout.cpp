@@ -54,15 +54,8 @@ TensorSpec make_tile_spec(const Shape& shape, DataType dtype, const Tile& tile) 
     return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE, tile), memory_config));
 }
 
-// A deterministic ramp that is in-range for every dtype under test (incl. UINT8).
-template <typename T>
-std::vector<T> make_ramp(size_t count) {
-    std::vector<T> data(count);
-    for (size_t i = 0; i < count; ++i) {
-        data[i] = static_cast<T>(static_cast<float>(i % 251));
-    }
-    return data;
-}
+// A deterministic ramp that is in-range for every dtype under test (incl. UINT8 and INT8); shared helper.
+using ::test_utils::make_ramp;
 
 // Content-equivalence check that works for every dtype (including FP8_E4M3, which has no typed
 // reader): pull the host shard out of each tensor and compare the raw bytes directly. The tensors
