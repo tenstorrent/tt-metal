@@ -346,17 +346,17 @@ def test_all_gather_async_broadcast_rejects_noncontiguous_width_gather(
         submesh_device.reset_sub_device_stall_group()
 
 
-# Unicast factory (WH ring, >= 20 large pages per device) with pages too big for scatter writes:
-# one fp32 tile per packet (needs Watcher to catch) and fp32 rows larger than a packet (hangs).
+# Unicast ring (WH: >= 48 KB per device per link) with fp32 tiles that straddle 4352 B packets and row segments longer
+# than a packet, which the packet builder splits.
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "ag_output_shape, ag_input_dtype, layout",
     [
-        ([1, 1, 256, 1024], ttnn.float32, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 10240], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 1024, 1024], ttnn.float32, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 10240], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
     ],
-    ids=["fp32_tile_one_page_per_packet", "fp32_rm_page_larger_than_packet"],
+    ids=["fp32_tile_straddles_packets", "fp32_rm_row_segment_longer_than_packet"],
 )
 @pytest.mark.parametrize(
     "device_params",

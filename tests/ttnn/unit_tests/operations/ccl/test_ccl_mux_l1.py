@@ -19,6 +19,10 @@ NUM_WORKERS_PER_LINK = 2
 RING_SIZE = 128 * 1024
 
 DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1540000}
+NEIGHBOR_EXCHANGE_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_NEIGHBOR_EXCHANGE,
+    "trace_region_size": 1540000,
+}
 
 
 def _run_all_gather_async(mesh_device, enable_trace, num_buffers_per_channel=8):
@@ -83,6 +87,21 @@ def _run_strided_all_gather(mesh_device, enable_trace):
     )
 
 
+def _run_all_gather(mesh_device, enable_trace):
+    # mux is used in unicast factory with FABRIC_1D_NEIGHBOR_EXCHANGE and 2 or more workers per direction.
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape=[1, 1, 256, 2048],
+        dim=3,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+        num_iters=2,
+        enable_trace=enable_trace,
+    )
+
+
 CCL_RUNNERS = {
     "all_gather_async": _run_all_gather_async,
     "reduce_scatter_minimal_async": lambda mesh_device, enable_trace: _run_reduce_scatter(
@@ -111,6 +130,18 @@ def _pattern(num_bytes, seed):
 @pytest.mark.parametrize("enable_trace", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize("ccl_op", list(CCL_RUNNERS))
 def test_ccl_mux_keeps_persistent_l1(mesh_device, enable_trace, ccl_op):
+    _check_mux_keeps_persistent_l1(mesh_device, ccl_op, lambda: CCL_RUNNERS[ccl_op](mesh_device, enable_trace))
+
+
+# On WH and BH, ttnn.all_gather takes its mux path (the unicast factory) under FABRIC_1D_NEIGHBOR_EXCHANGE.
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [NEIGHBOR_EXCHANGE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("enable_trace", [False, True], ids=["eager", "trace"])
+def test_all_gather_mux_keeps_persistent_l1(mesh_device, enable_trace):
+    _check_mux_keeps_persistent_l1(mesh_device, "all_gather", lambda: _run_all_gather(mesh_device, enable_trace))
+
+
+def _check_mux_keeps_persistent_l1(mesh_device, ccl_op, run_ccl):
     # The CCL ops take their mux and worker cores from the top of the grid, starting at (0, 0).
     grid = mesh_device.compute_with_storage_grid_size()
     space = ttnn.experimental.create_prefetcher_pipe_space(
@@ -131,7 +162,7 @@ def test_ccl_mux_keeps_persistent_l1(mesh_device, enable_trace, ccl_op):
                 expected[key] = _pattern(size, seed=len(expected))
                 ttnn.cluster.write_to_core(device_id, virtual_core.x, virtual_core.y, address, expected[key])
 
-    CCL_RUNNERS[ccl_op](mesh_device, enable_trace)
+    run_ccl()
 
     clobbered = [key for key, data in expected.items() if ttnn.cluster.read_from_core(*key, len(data)) != data]
     assert not clobbered, f"{ccl_op} overwrote persistent L1 (device, x, y, address): {clobbered}"
