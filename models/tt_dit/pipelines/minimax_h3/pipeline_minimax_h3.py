@@ -94,6 +94,7 @@ from ...parallel.manager import CCLManager
 from ...utils import dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
+from ...utils.torch_threads import cap_torch_threads
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from ..pipeline_api import PipelineAPIMixin
@@ -661,6 +662,11 @@ _PROMPT_WARM_LAYERS = 4
 def _tqdm_spacer() -> None:
     sys.stderr.write("\n")
     sys.stderr.flush()
+
+
+# 8, not half the CPUs as the LTX and Wan pipelines use: on a loaded 64-CPU host a call's small torch
+# ops still stall at 32 threads.
+_CALL_TORCH_THREADS = 8
 
 
 class MiniMaxH3Pipeline(PipelineAPIMixin):
@@ -2171,6 +2177,7 @@ class MiniMaxH3Pipeline(PipelineAPIMixin):
 
     # ------------------------------------------------------------------ the call
 
+    @cap_torch_threads(_CALL_TORCH_THREADS)
     @torch.no_grad()
     def __call__(
         self,

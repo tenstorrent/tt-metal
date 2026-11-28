@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Keep torch's intra-op thread pool to half the CPUs this process may run on.
+"""Keep torch's intra-op thread pool below the CPUs this process may run on: half of them, or a fixed count.
 
 Most host-side torch work in a pipeline call is a chain of small OpenMP parallel regions (strided
 copies, pads, casts, concatenations), and each region waits for all of its threads. When torch has as
@@ -34,23 +34,31 @@ def half_of_affinity_mask() -> int:
 
 
 @contextlib.contextmanager
-def cap_torch_threads_to_half_the_cpus() -> Iterator[None]:
-    """Run the block with at most half of this process's CPUs as torch threads, then restore the count.
+def cap_torch_threads(limit: int) -> Iterator[None]:
+    """Run the block with at most ``limit`` torch threads, then restore the count.
 
     Only ever lowers the count, so a caller that chose fewer threads (a single-threaded server worker)
-    is left alone. The mask is read on every entry. Also usable as a decorator:
-    ``@cap_torch_threads_to_half_the_cpus()``.
+    is left alone. Also usable as a decorator: ``@cap_torch_threads(8)``.
 
     torch's thread count is process-wide, so capped blocks running at the same time on different Python
     threads can restore each other's count.
     """
     prev = torch.get_num_threads()
-    cap = half_of_affinity_mask()
-    if prev <= cap:
+    if prev <= limit:
         yield
         return
-    torch.set_num_threads(cap)
+    torch.set_num_threads(limit)
     try:
         yield
     finally:
         torch.set_num_threads(prev)
+
+
+@contextlib.contextmanager
+def cap_torch_threads_to_half_the_cpus() -> Iterator[None]:
+    """``cap_torch_threads`` at half of this process's CPUs. The mask is read on every entry.
+
+    Also usable as a decorator: ``@cap_torch_threads_to_half_the_cpus()``.
+    """
+    with cap_torch_threads(half_of_affinity_mask()):
+        yield
