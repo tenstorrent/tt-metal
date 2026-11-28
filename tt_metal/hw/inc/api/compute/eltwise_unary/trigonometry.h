@@ -33,6 +33,17 @@ ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_in
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sin_tile(uint32_t idst) {
+    // On Quasar one call covers the tile, so the row loop's constants load once per tile.
+    MATH(if constexpr (ckernel::sfpu::trig_whole_tile) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_sine,
+            (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -63,6 +74,17 @@ ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosin
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cos_tile(uint32_t idst) {
+    // On Quasar one call covers the tile, so the row loop's constants load once per tile.
+    MATH(if constexpr (ckernel::sfpu::trig_whole_tile) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_cosine,
+            (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -136,6 +158,17 @@ ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tan_tile(uint32_t idst) {
+    // On Quasar one call covers the tile, so the row loop's constants load once per tile.
+    MATH(if constexpr (ckernel::sfpu::trig_whole_tile) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_tangent,
+            (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

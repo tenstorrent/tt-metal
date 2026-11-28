@@ -22,6 +22,9 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
+// Whether sin_tile, cos_tile and tan_tile run as one SFPU call over the whole tile.
+inline constexpr bool trig_whole_tile = false;
+
 // Magic seed locally tuned for this refinement sequence.
 // The fp32 path has maximum ULP error < 0.94 for normal inputs in [2^-126, 2^103].
 static constexpr std::uint32_t RECIPROCAL_GT0_MAGIC_SEED = 0xfef392e0;

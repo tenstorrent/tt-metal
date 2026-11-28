@@ -41,6 +41,7 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Ops::Eltwise::Binary
+        TTNN::Ops::Experimental::Quasar
 )
 
 install(

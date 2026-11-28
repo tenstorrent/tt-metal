@@ -21,6 +21,9 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
+// Whether sin_tile, cos_tile and tan_tile run as one SFPU call over the whole tile.
+inline constexpr bool trig_whole_tile = false;
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::approx_recip(x);
