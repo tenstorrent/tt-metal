@@ -40,6 +40,20 @@ constexpr std::uint32_t FACE_ROWS = 16;
 constexpr std::uint32_t NEGATE_VA = 1;
 
 constexpr std::uint8_t ZERO_ADDR_MOD = ADDR_MOD_7;
+
+// DEST rows in one half-DEST section for the given Dest mode.
+template <bool is_fp32_dest_acc_en>
+constexpr std::uint32_t half_dest_rows()
+{
+    return get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>() * TILE_ROWS;
+}
+
+// One past the last DEST row of an operand: tile i starts at ``base + i * stride`` and the kernel
+// touches the first ``rows_spanned_per_tile`` rows of it (may be less than ``stride``).
+constexpr std::uint32_t operand_end_row_index(std::uint32_t base, std::uint32_t num_tiles, std::uint32_t stride, std::uint32_t rows_spanned_per_tile)
+{
+    return base + (num_tiles - 1) * stride + rows_spanned_per_tile;
+}
 } // namespace rope
 
 inline void sfpu_rope_dest_setup()
@@ -53,8 +67,11 @@ inline void sfpu_rope_dest_setup()
  * cos/sin for one face into LREG0/LREG1.  Every head shares them at a given width
  * tile, so the load is hoisted out of the head loop.  A single even-parity load
  * serves both x parities (see the layout note at the top).
+ *
+ * is_fp32_dest_acc_en is required, not defaulted: a 16-bit view of an FP32 DEST
+ * loads the wrong rows, silently.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void sfpu_rope_load_cos_sin(const std::uint32_t cos_addr, const std::uint32_t sin_addr)
 {
     // BF16 inputs can be unpacked into FP32 DEST: use the register representation.
@@ -84,8 +101,11 @@ inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
  * x_addr is the absolute DEST row of the face's first row, and must be 4-row aligned
  * (the caller's x_base/x_stride asserts guarantee it).  Only the address-bearing
  * instructions take the runtime TT_ form; the multiplies keep their inline encoding.
+ *
+ * is_fp32_dest_acc_en is required, not defaulted: a 16-bit view of an FP32 DEST
+ * stores half datums, silently.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void sfpu_rope_face(const std::uint32_t x_addr)
 {
     constexpr std::uint32_t FMT = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
@@ -120,6 +140,11 @@ inline void sfpu_rope_face(const std::uint32_t x_addr)
  * scale_fp32 is required rather than defaulted: under has_scale a missing value
  * would scale cos/sin by zero and silently zero every output. Callers with
  * has_scale=false pass 0.
+ *
+ * is_fp32_dest_acc_en selects the Dest representation the loads and stores use,
+ * as in sfpu_rope_fused_all_rows: BF16 inputs unpacked into FP32 DEST need it set.
+ * No template parameter is defaulted: a caller that omits the Dest mode fails to
+ * compile instead of reading a 16-bit view of an FP32 DEST.
  */
 template <
     std::uint32_t Ht,
@@ -129,14 +154,23 @@ template <
     std::uint32_t cos_base,
     std::uint32_t sin_base,
     std::uint32_t cs_stride,
-    bool has_scale = false>
+    bool has_scale,
+    bool is_fp32_dest_acc_en>
 inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
 {
     constexpr std::uint32_t F = rope::FACE_ROWS;
 
     static_assert((F & 3) == 0, "face stride must keep rows 4-row aligned");
+    static_assert(Wt == 1 || Wt == 2, "rope_sfpu: Wt must be 1 or 2 (decode rotary head_dim <= 64)");
     static_assert((x_base & 3) == 0 && (x_stride & 3) == 0, "x rows must be 4-row aligned");
     static_assert((cos_base & 3) == 0 && (sin_base & 3) == 0 && (cs_stride & 3) == 0, "cos/sin rows must be 4-row aligned");
+
+    // Rows touched per tile: both faces, 4 rows each (only row 0 is live, but a vector is 4 rows).
+    constexpr std::uint32_t rows_spanned_per_tile = F + 4;
+    constexpr std::uint32_t half_rows             = rope::half_dest_rows<is_fp32_dest_acc_en>();
+    static_assert(rope::operand_end_row_index(x_base, Ht * Wt, x_stride, rows_spanned_per_tile) <= half_rows, "rope_sfpu: x rows exceed half DEST");
+    static_assert(rope::operand_end_row_index(cos_base, Wt, cs_stride, rows_spanned_per_tile) <= half_rows, "rope_sfpu: cos rows exceed half DEST");
+    static_assert(rope::operand_end_row_index(sin_base, Wt, cs_stride, rows_spanned_per_tile) <= half_rows, "rope_sfpu: sin rows exceed half DEST");
 
     constexpr std::uint32_t head_stride = Wt * x_stride;
 
@@ -145,7 +179,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
         for (std::uint32_t f = 0; f < 2; f++)
         {
             const std::uint32_t cs_off = w * cs_stride + f * F;
-            sfpu_rope_load_cos_sin(cos_base + cs_off, sin_base + cs_off);
+            sfpu_rope_load_cos_sin<is_fp32_dest_acc_en>(cos_base + cs_off, sin_base + cs_off);
             if constexpr (has_scale)
             {
                 // Amortized over the Ht heads that reuse this cos/sin pair.
@@ -154,7 +188,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
             std::uint32_t x_addr = x_base + w * x_stride + f * F;
             for (std::uint32_t h = 0; h < Ht; h++)
             {
-                sfpu_rope_face(x_addr);
+                sfpu_rope_face<is_fp32_dest_acc_en>(x_addr);
                 x_addr += head_stride;
             }
         }
@@ -176,6 +210,8 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
  *
  * ``is_fp32_dest_acc_en`` selects the DEST register representation for both
  * x and fused phases, independently of their original input memory format.
+ * No template parameter is defaulted: a caller that omits the Dest mode fails to
+ * compile instead of reading a 16-bit view of an FP32 DEST.
  *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
  * a Dense-layout custom_mm result still sitting in DEST.
@@ -187,16 +223,17 @@ template <
     std::uint32_t x_stride,
     std::uint32_t cs_base,
     std::uint32_t cs_stride,
-    bool has_scale           = false,
-    std::uint32_t tile_h     = 1,
-    bool cos_sin_per_row     = false,
-    bool is_fp32_dest_acc_en = false>
+    bool has_scale,
+    std::uint32_t tile_h,
+    bool cos_sin_per_row,
+    bool is_fp32_dest_acc_en>
 inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
 {
     constexpr std::uint32_t F = rope::FACE_ROWS;
 
     static_assert(tile_h == 1 || tile_h == 2 || tile_h == 4 || tile_h == 8 || tile_h == 16 || tile_h == 32, "rope_sfpu: tile_h must be 1, 2, 4, 8, 16, or 32");
     static_assert((F & 3) == 0, "face stride must keep rows 4-row aligned");
+    static_assert(Wt == 1 || Wt == 2, "rope_sfpu: Wt must be 1 or 2 (decode rotary head_dim <= 64)");
     static_assert((x_base & 3) == 0 && (x_stride & 3) == 0, "x rows must be 4-row aligned");
     static_assert((cs_base & 3) == 0 && (cs_stride & 3) == 0, "cos/sin rows must be 4-row aligned");
 
@@ -204,6 +241,14 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
     constexpr std::uint32_t num_row_halves     = (tile_h > 16) ? 2 : 1;
     constexpr std::uint32_t live_rows_per_half = (tile_h > 16) ? 16 : tile_h;
     constexpr std::uint32_t num_row_groups     = (live_rows_per_half + 3) / 4;
+
+    // Rows touched per x tile: up to the last row group of the last face.  Shared cos/sin
+    // (cos_sin_per_row false) only reads the first row group of each column-face.
+    constexpr std::uint32_t x_rows_spanned  = (num_row_halves - 1) * 32 + F + num_row_groups * 4;
+    constexpr std::uint32_t cs_rows_spanned = cos_sin_per_row ? x_rows_spanned : F + 4;
+    constexpr std::uint32_t half_rows       = rope::half_dest_rows<is_fp32_dest_acc_en>();
+    static_assert(rope::operand_end_row_index(x_base, Ht * Wt, x_stride, x_rows_spanned) <= half_rows, "rope_sfpu: x rows exceed half DEST");
+    static_assert(rope::operand_end_row_index(cs_base, Wt, cs_stride, cs_rows_spanned) <= half_rows, "rope_sfpu: fused cos/sin rows exceed half DEST");
 
     for (std::uint32_t w = 0; w < Wt; w++)
     {

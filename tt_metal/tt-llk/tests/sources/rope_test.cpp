@@ -5,7 +5,7 @@
 // Test for Blackhole SFPU RoPE (sfpu/experimental/ckernel_sfpu_rope.h).
 //
 // The call sequence mirrors what Compute API does.
-// Fused cos/sin supports both 16-bit and FP32 Dest; separate phases use 16-bit Dest.
+// Both the fused and the separate cos/sin paths support 16-bit and FP32 Dest.
 
 #include <cstdint>
 
@@ -167,8 +167,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 else
                 {
-                    sfpu::sfpu_rope_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_SIN_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE>(
-                        ROPE_SCALE_FP32);
+                    sfpu::sfpu_rope_all_rows<
+                        ROPE_HT,
+                        ROPE_WT,
+                        ROPE_X_BASE,
+                        ROPE_X_STRIDE,
+                        ROPE_COS_BASE,
+                        ROPE_SIN_BASE,
+                        ROPE_CS_STRIDE,
+                        ROPE_HAS_SCALE,
+                        is_fp32_dest_acc_en>(ROPE_SCALE_FP32);
                 }
 
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
