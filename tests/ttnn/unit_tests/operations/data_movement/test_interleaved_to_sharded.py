@@ -8,6 +8,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -300,6 +301,37 @@ def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_s
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
 
+# Row-major inputs reach the row-major scratch planning in compute_program_hash before validation runs.
+@pytest.mark.parametrize(
+    "tensor_shape, output_mem_config, message",
+    [
+        [
+            [6, 32, 64],
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    [3, 32, 32],
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            r"interleaved_to_sharded does not support ND sharding",
+        ],
+        [[1, 1, 32, 64], ttnn.L1_MEMORY_CONFIG, r"Output memory config must be sharded"],
+    ],
+    ids=["pure_nd", "interleaved_output"],
+)
+def test_interleaved_to_sharded_row_major_rejects_unsharded_output_spec(
+    device, tensor_shape, output_mem_config, message, expect_error
+):
+    ttnn_input_tensor = ttnn.from_torch(
+        torch.randn(tensor_shape, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, message):
+        ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
+
+
 @pytest.mark.parametrize(
     "tensor_shape, nd_shard_shape, nd_shard_grid, output_shard_shape, output_shard_grid",
     [
@@ -356,6 +388,10 @@ def _zero_width_tile(device):
     return ttnn.from_torch(torch.zeros(1, 1, 32, 0).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _zero_width_row_major(device):
+    return ttnn.from_torch(torch.zeros(1, 1, 32, 0).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
 # Each of these used to reach an integer division by the input width (or a truncated num_slices) on the host.
 @pytest.mark.parametrize(
     "run, message",
@@ -373,6 +409,12 @@ def _zero_width_tile(device):
         (
             lambda device: ttnn.interleaved_to_sharded(
                 _zero_width_tile(device), _single_core_l1(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 32))
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded(
+                _zero_width_row_major(device), _single_core_l1(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 32))
             ),
             "Input tensor width must be greater than 0",
         ),
@@ -418,6 +460,7 @@ def _zero_width_tile(device):
     ids=[
         "i2s_zero_width",
         "i2s_memory_config_zero_width",
+        "i2s_memory_config_zero_width_row_major",
         "i2s_partial_zero_width",
         "i2s_partial_num_slices_wraps",
         "s2i_partial_zero_width_cache",
@@ -461,3 +504,146 @@ def test_interleaved_to_sharded_partial_keeps_logical_width(device, shape, grid,
         assert list(output.shape) == [1, 1, rows, shape[-1]]
         expected = torch_input[:, :, slice_index * rows : (slice_index + 1) * rows, :]
         assert_equal(expected, ttnn.to_torch(output))
+
+
+def _rm_bits(t):
+    t = t.contiguous()
+    if t.dtype == torch.bfloat16:
+        return t.view(torch.int16)
+    if t.dtype == torch.float32:
+        return t.view(torch.int32)
+    return t.to(torch.int64)
+
+
+def _rm_make(shape, dtype, seed):
+    g = torch.Generator().manual_seed(seed)
+    if dtype == ttnn.bfloat16:
+        return torch.randn(shape, generator=g).to(torch.bfloat16)
+    if dtype == ttnn.float32:
+        return torch.randn(shape, generator=g, dtype=torch.float32)
+    return torch.randint(0, 2**31 - 1, shape, generator=g, dtype=torch.int32)
+
+
+_RM_ELEMENT_BYTES = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.uint32: 4}
+
+
+@pytest.mark.parametrize(
+    "dtype, row_bytes, rows_per_core, grid, orientation",
+    [
+        (ttnn.bfloat16, 48, 100, "full", ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.bfloat16, 256, 513, "full", ttnn.ShardOrientation.COL_MAJOR),
+        (ttnn.float32, 32, 100, "one_row", ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.uint32, 240, 100, "full", ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.bfloat16, 512, 100, "full", ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+)
+def test_interleaved_to_sharded_row_major_dram(device, dtype, row_bytes, rows_per_core, grid, orientation):
+    _run_row_major_dram(device, dtype, row_bytes, rows_per_core, grid, orientation)
+
+
+# Each case sits at one edge of the Blackhole bank-run gate in uses_bank_runs() with every other condition met,
+# so the reader it takes is known from the id: rows of at most 256 B (aligned page), at least 8 rows per DRAM
+# bank per shard, and DRAM-unaligned rows or at least 32 cores. rows_per_core=None means exactly 8 rows per bank.
+@pytest.mark.parametrize(
+    "row_bytes, rows_per_core, grid",
+    [
+        (256, None, "full"),
+        (288, None, "full"),
+        (48, None, "full"),
+        (48, -1, "full"),
+        (64, 100, "full"),
+        (64, 100, "one_row"),
+    ],
+    ids=[
+        "256B_bank_runs",
+        "288B_old_path",
+        "8_rows_per_bank_bank_runs",
+        "8_rows_per_bank_minus_1_old_path",
+        "64B_aligned_full_grid_bank_runs",
+        "64B_aligned_under_32_cores_old_path",
+    ],
+)
+def test_interleaved_to_sharded_row_major_dram_gate_edges(device, row_bytes, rows_per_core, grid):
+    min_rows_per_core = 8 * device.dram_grid_size().x
+    if rows_per_core is None:
+        rows_per_core = min_rows_per_core
+    elif rows_per_core < 0:
+        rows_per_core = min_rows_per_core + rows_per_core
+    _run_row_major_dram(device, ttnn.bfloat16, row_bytes, rows_per_core, grid, ttnn.ShardOrientation.ROW_MAJOR)
+
+
+def _run_row_major_dram(device, dtype, row_bytes, rows_per_core, grid, orientation):
+    width = row_bytes // _RM_ELEMENT_BYTES[dtype]
+    g = device.compute_with_storage_grid_size()
+    grid_y = 1 if grid == "one_row" else g.y
+    num_cores = g.x * grid_y
+    rows = num_cores * rows_per_core - rows_per_core // 2
+    shape = (1, 1, rows, width)
+
+    torch_input = _rm_make(shape, dtype, seed=row_bytes * 1000 + rows_per_core)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, grid_y - 1))})
+    sharded_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (rows_per_core, width), orientation),
+    )
+
+    for out in (
+        ttnn.to_memory_config(tt_input, sharded_config),
+        ttnn.interleaved_to_sharded(tt_input, sharded_config),
+    ):
+        assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        assert torch.equal(_rm_bits(ttnn.to_torch(out)), _rm_bits(torch_input))
+        ttnn.deallocate(out)
+
+
+@run_for_blackhole()
+def test_interleaved_to_sharded_row_major_dram_under_l1_pressure(device):
+    # Free L1 fits the output shard plus the old 4-page scratch but not the 16 KB bank-run stage.
+    rows_per_core, width = 2048, 16
+    g = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+    torch_input = _rm_make((1, 1, g.x * g.y * rows_per_core, width), ttnn.bfloat16, seed=0)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sharded_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (rows_per_core, width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    def check(out):
+        assert torch.equal(_rm_bits(ttnn.to_torch(out)), _rm_bits(torch_input))
+        ttnn.deallocate(out)
+
+    # Caches the bank-run program so the pressured calls below must not hit it.
+    check(ttnn.interleaved_to_sharded(tt_input, sharded_config))
+
+    tile_bytes = 2048
+    output_shard_bytes = rows_per_core * width * 2
+    bank_runs_stage_bytes = 16 * 1024
+    target_free = output_shard_bytes + bank_runs_stage_bytes // 2
+    l1_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    blocker_tiles = (l1_view.largest_contiguous_bytes_free_per_bank - target_free) // tile_bytes
+    blocker = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * blocker_tiles, 32 * l1_view.num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        free_after = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+        assert output_shard_bytes + 1024 < free_after < output_shard_bytes + bank_runs_stage_bytes, free_after
+        check(ttnn.interleaved_to_sharded(tt_input, sharded_config))
+        check(ttnn.to_memory_config(tt_input, sharded_config))
+    finally:
+        ttnn.deallocate(blocker)

@@ -14,7 +14,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+
+#include <algorithm>
 
 namespace ttnn {
 
@@ -102,8 +103,6 @@ bool can_use_interleaved_to_sharded(
     MeshDevice* device = input_tensor.device();
     uint32_t src_alignment = device->allocator()->get_alignment(input_tensor.memory_config().buffer_type());
     uint32_t dst_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
-    uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-
     tt::DataFormat input_cb_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_df = tt::tt_metal::datatype_to_dataformat_converter(resolved_dtype);
 
@@ -121,10 +120,7 @@ bool can_use_interleaved_to_sharded(
         num_units_per_shard = shard_spec.shape[0];
     }
 
-    // Scratch CB is always created (keep_l1_aligned is hardcoded true in program factory)
-    uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
-    constexpr uint32_t num_trids = 4;
-    uint32_t total_cb_size = num_trids * scratch_page_size;
+    uint32_t total_cb_size = 0;
 
     // Input CB: extra L1 only when dtype conversion is needed
     if (convert_df) {
@@ -146,6 +142,20 @@ bool can_use_interleaved_to_sharded(
     }
 
     uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
+    const uint32_t reserved_bytes = total_cb_size + pending_output_bytes_per_core;
+    const uint32_t scratch_l1_budget = max_l1_size > reserved_bytes ? max_l1_size - reserved_bytes : 0;
+
+    // Scratch CB is always created (keep_l1_aligned is hardcoded true in program factory)
+    const auto num_rows = static_cast<uint32_t>(input_tensor.physical_volume() / input_tensor.padded_shape()[-1]);
+    const uint32_t num_shard_cores =
+        std::min<uint32_t>(shard_spec.grid.num_cores(), tt::div_up(num_rows, shard_spec.shape[0]));
+    total_cb_size += ttnn::prim::interleaved_to_sharded_row_major_scratch_size(
+        input_tensor,
+        resolved_mem_config.memory_layout(),
+        input_unit_size,
+        num_units_per_shard,
+        num_shard_cores,
+        scratch_l1_budget);
 
     return total_cb_size + pending_output_bytes_per_core < max_l1_size;
 }
