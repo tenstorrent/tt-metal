@@ -215,13 +215,26 @@ static std::vector<Tensor> pool2d_L1(
 
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
 
+        // The shard spec must describe the tensor that is sharded below: [N, H, W, C] flattened to [1, 1, N*H*W, C],
+        // whose rows are the logical N*H*W, tile-padded once (reshape keeps no per-image-row padding). The padded 4-D
+        // shape rounds W up to a tile in every image row instead, counting rows the flattened tensor does not have,
+        // and the halo then waits for input blocks that never arrive (#63639).
+        const auto& logical_shape = input_tensor.logical_shape();
+        const uint32_t logical_nhw = logical_shape[0] * logical_shape[1] * logical_shape[2];
+        const ttnn::Shape shard_basis_shape(
+            {1,
+             1,
+             input_tensor.layout() == Layout::TILE ? tt::round_up(logical_nhw, tt::constants::TILE_HEIGHT)
+                                                   : logical_nhw,
+             input_tensor_shape[3]});
+
         auto [in_memory_config, input_tensor_width_snapped_to_channels_alignment, calc_parallel_config] =
             get_pool_input_memory_config(
                 sliding_window_config,
                 applied_shard_scheme,
                 batch_size,
                 channels,
-                input_tensor_shape,
+                shard_basis_shape,
                 output_shape,
                 input_tensor.device()->compute_with_storage_grid_size(),
                 input_tensor.dtype(),
