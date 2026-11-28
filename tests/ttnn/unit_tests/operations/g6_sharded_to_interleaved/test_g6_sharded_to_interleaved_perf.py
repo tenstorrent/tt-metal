@@ -8,8 +8,8 @@
 - `test_trace_replay_ns_per_op`: host wall clock over N replays of a K-call trace, i.e. what one call costs a
   traced model (dispatch plus kernel). Prints `REPLAY ... ns/op`; bit-exactness is the only assertion.
 
-Both call `_dispatch`, which skips only the support gate, so the flagged p1 case is measurable before the
-refinement that adds it to SUPPORTED.
+The `default` variant calls the public entry point (the knobs `default_knobs` picks); every other variant pins
+its knobs through `_dispatch`, which skips only the support gate.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import pytest
 import torch
 import ttnn
 
+from ttnn.operations.g6_sharded_to_interleaved import g6_sharded_to_interleaved
 from ttnn.operations.g6_sharded_to_interleaved.g6_sharded_to_interleaved import _dispatch
 from ttnn.operations.g6_sharded_to_interleaved.g6_sharded_to_interleaved_program_descriptor import Knobs
 
@@ -33,6 +34,15 @@ CASES = {
         (((0, 0), (7, 3)),),
         ttnn.DRAM_MEMORY_CONFIG,
     ),
+    # Guard: the p2 input written to L1 interleaved instead of DRAM.
+    "p2l1": (
+        (1, 5120),
+        ttnn.bfloat16,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        (32, 160),
+        (((0, 0), (7, 3)),),
+        ttnn.L1_MEMORY_CONFIG,
+    ),
     # Panoptic-DeepLab (1, 128, 256, 32) bf8b, 103 height shards of 10 x 1 tiles -> L1 interleaved (PERF FOCUS).
     "p1": (
         (1, 128, 256, 32),
@@ -44,9 +54,14 @@ CASES = {
     ),
 }
 KNOBS = {
+    "default": None,  # what the public entry point runs (`default_knobs`)
     "lanes1": Knobs(),
-    "lanes2": Knobs(num_write_lanes=2),
-    "nostagger": Knobs(bank_stagger=False),
+    "lanes1_stagger": Knobs(bank_stagger=True),
+    "lanes2": Knobs(num_write_lanes=2, bank_stagger=True),
+    "lanes2_nostagger": Knobs(num_write_lanes=2),
+    "nocs2": Knobs(num_write_nocs=2, bank_stagger=True),
+    "nocs2_nostagger": Knobs(num_write_nocs=2),
+    "lanes2_nocs2": Knobs(num_write_lanes=2, num_write_nocs=2, bank_stagger=True),
 }
 EAGER_CALLS = 12
 TRACE_CALLS = 16  # calls per captured trace: amortizes the execute_trace command itself
@@ -67,6 +82,13 @@ def _input(device, case):
     return tt_input, ttnn.to_torch(tt_input)
 
 
+def _call(tt_input, memory_config, knobs):
+    """`default` goes through the public entry point; explicit knobs need `_dispatch`."""
+    if knobs is None:
+        return g6_sharded_to_interleaved(tt_input, memory_config)
+    return _dispatch(tt_input, memory_config, knobs)
+
+
 def _assert_exact(output, expected):
     got = ttnn.to_torch(output)
     assert got.dtype == expected.dtype and torch.equal(got.view(torch.int16), expected.view(torch.int16))
@@ -78,7 +100,7 @@ def test_eager_calls(device, name, knobs):
     case = CASES[name]
     tt_input, expected = _input(device, case)
     for _ in range(EAGER_CALLS):
-        output = _dispatch(tt_input, case[-1], KNOBS[knobs])
+        output = _call(tt_input, case[-1], KNOBS[knobs])
         _assert_exact(output, expected)
         ttnn.deallocate(output)
     ttnn.deallocate(tt_input)
@@ -90,10 +112,10 @@ def test_eager_calls(device, name, knobs):
 def test_trace_replay_ns_per_op(device, name, knobs):
     case = CASES[name]
     tt_input, expected = _input(device, case)
-    ttnn.deallocate(_dispatch(tt_input, case[-1], KNOBS[knobs]))  # program cache warm before capture (BB-16)
+    ttnn.deallocate(_call(tt_input, case[-1], KNOBS[knobs]))  # program cache warm before capture (BB-16)
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    outputs = [_dispatch(tt_input, case[-1], KNOBS[knobs]) for _ in range(TRACE_CALLS)]
+    outputs = [_call(tt_input, case[-1], KNOBS[knobs]) for _ in range(TRACE_CALLS)]
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     for _ in range(5):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)

@@ -79,10 +79,17 @@ SCENARIOS = {
     "height_padded_image": HEIGHT_PADDED_IMAGE,
 }
 KNOBS = {
-    "default": Knobs(),
+    "default": None,
+    "one_lane": Knobs(),
     "two_lanes": Knobs(num_write_lanes=2),
+    "two_lanes_stagger": Knobs(num_write_lanes=2, bank_stagger=True),
     "small_blocks": Knobs(block_tile_rows=3, block_tile_cols=2),
     "two_lanes_unit_blocks": Knobs(num_write_lanes=2, block_tile_rows=1, block_tile_cols=1),
+    "two_nocs_stagger": Knobs(num_write_nocs=2, bank_stagger=True),
+    "two_nocs_two_lanes_small_blocks_stagger": Knobs(
+        num_write_lanes=2, num_write_nocs=2, block_tile_rows=3, block_tile_cols=2, bank_stagger=True
+    ),
+    "one_lane_stagger": Knobs(bank_stagger=True),
 }
 
 
@@ -127,6 +134,20 @@ def test_describe_plan_production(device):
     assert plan["plan"] == "owner_writes"
     assert plan["num_shards"] == 103 and len(writers) == 103
     assert writers[-1]["core"] == (3, 9) and writers[-1]["block"] == (1020, 0, 4, 1)
+    assert plan["num_write_lanes"] == 2 and plan["bank_stagger"] and plan["num_write_nocs"] == 1
+    # Shards k and k + 11 start on the same bank; each class is rotated by k // 11 rows per lane rectangle.
+    assert plan["issue_period"] == 11
+    assert writers[23]["issue_first_row"] == [2, 2] and writers[102]["issue_first_row"] == [1, 1]
+    ttnn.deallocate(tt_in)
+
+
+@pytest.mark.parametrize("name, lanes", [("p2_flux", 1), ("p2_flux_to_l1", 1), ("p1_panoptic", 2), ("p1_other", 2)])
+def test_default_knobs_gate(device, name, lanes):
+    """Two lanes (with the stagger) only for an L1 destination with at least TWO_LANE_MIN_SHARD_PAGES per shard."""
+    sc = SCENARIOS[name]
+    tt_in, _ = _input(device, sc)
+    plan = describe_plan(tt_in, sc["out"])
+    assert plan["num_write_lanes"] == lanes and plan["bank_stagger"] == (lanes == 2)
     ttnn.deallocate(tt_in)
 
 

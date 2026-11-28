@@ -20,10 +20,12 @@ namespace {
 // Writes one block: `rows x cols` tiles. Source slots keep the nominal shard stride even in a clipped
 // last shard (the buffer's slot map advances by the nominal shard shape), so the row stride is the
 // shard's, never the block's. Consecutive pages of a row sit in different banks, so every tile is its
-// own write; nothing waits here, the caller drains once.
-template <uint32_t page_size, typename Accessor>
+// own write; nothing waits here, the caller drains once. With two write NoCs consecutive writes alternate
+// between them, so each NoC carries half the traffic over its own links.
+template <uint32_t page_size, uint32_t num_write_nocs, typename Accessor>
 FORCE_INLINE void store_block(
     const Accessor& output,
+    uint8_t& noc,
     uint32_t src_addr,
     uint32_t src_row_stride_bytes,
     uint32_t dst_page,
@@ -34,7 +36,10 @@ FORCE_INLINE void store_block(
         uint32_t src = src_addr;
         uint32_t page = dst_page;
         for (uint32_t c = 0; c < cols; ++c) {
-            noc_async_write<page_size>(src, output.get_noc_addr(page), page_size);
+            noc_async_write<page_size>(src, output.get_noc_addr(page, 0, noc), page_size, noc);
+            if constexpr (num_write_nocs == 2) {
+                noc ^= 1;
+            }
             src += page_size;
             ++page;
         }
@@ -44,9 +49,10 @@ FORCE_INLINE void store_block(
 }
 
 // Walks a `rows x cols` rectangle as blocks of at most `block_rows x block_cols`, issuing every write.
-template <uint32_t page_size, typename Accessor>
+template <uint32_t page_size, uint32_t num_write_nocs, typename Accessor>
 FORCE_INLINE void store_rect(
     const Accessor& output,
+    uint8_t& noc,
     uint32_t src_addr,
     uint32_t src_row_stride_bytes,
     uint32_t dst_page,
@@ -60,8 +66,9 @@ FORCE_INLINE void store_rect(
         for (uint32_t block_col = 0; block_col < cols; block_col += block_cols) {
             DeviceZoneScopedN("S2I-STORE-BLOCK");
             const uint32_t bcols = cols - block_col < block_cols ? cols - block_col : block_cols;
-            store_block<page_size>(
+            store_block<page_size, num_write_nocs>(
                 output,
+                noc,
                 src_addr + block_row * src_row_stride_bytes + block_col * page_size,
                 src_row_stride_bytes,
                 dst_page + block_row * dst_row_stride_pages + block_col,
@@ -77,7 +84,10 @@ FORCE_INLINE void store_rect(
 void kernel_main() {
     constexpr uint32_t cb_input_shard = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr auto output_args = TensorAccessorArgs<2>();
+    // 1 = this kernel's NoC only; 2 = both NoCs (the host compiles the kernel in dynamic NoC mode).
+    constexpr uint32_t num_write_nocs = get_compile_time_arg_val(2);
+    constexpr auto output_args = TensorAccessorArgs<3>();
+    static_assert(num_write_nocs == 1 || num_write_nocs == 2);
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t src_row_stride_slots = get_common_arg_val<uint32_t>(1);  // nominal shard_tile_cols
@@ -98,8 +108,10 @@ void kernel_main() {
     const uint32_t src_row_stride_bytes = src_row_stride_slots * page_size;
     const uint32_t rect_src_addr = get_read_ptr(cb_input_shard) + src_first_slot * page_size;
 
-    store_rect<page_size>(
+    uint8_t noc = noc_index;
+    store_rect<page_size, num_write_nocs>(
         output,
+        noc,
         rect_src_addr + issue_first_row * src_row_stride_bytes,
         src_row_stride_bytes,
         dst_first_page + issue_first_row * dst_row_stride_pages,
@@ -108,8 +120,9 @@ void kernel_main() {
         rect_tile_cols,
         block_tile_rows,
         block_tile_cols);
-    store_rect<page_size>(
+    store_rect<page_size, num_write_nocs>(
         output,
+        noc,
         rect_src_addr,
         src_row_stride_bytes,
         dst_first_page,
@@ -122,6 +135,9 @@ void kernel_main() {
     {
         // Also on a lane with no tiles: every issued write is acked before the next program starts.
         DeviceZoneScopedN("S2I-WRITE-BARRIER");
-        noc_async_write_barrier();
+        noc_async_write_barrier(noc_index);
+        if constexpr (num_write_nocs == 2) {
+            noc_async_write_barrier(1 - noc_index);
+        }
     }
 }

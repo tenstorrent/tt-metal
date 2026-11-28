@@ -76,7 +76,7 @@ category 0. The four former xfail cells (p1 production, p1 loose, p1 other spec,
 for bit. The acceptance test is 17 passed / 0 xfailed. impl_debug, trace replay and the precision
 baseline stay green. `SUPPORTED == TARGET` and `EXCLUSIONS == []`.
 
-### [ ] Refinement 2 — Speed up the perf-flagged profile: the p1 write issue path
+### [x] Refinement 2 — Speed up the perf-flagged profile: the p1 write issue path
 
 **Type**: perf
 
@@ -112,6 +112,16 @@ device, so keep the offset a function of the shard index k.
 2050 ns). The output stays bit-exact. p1 trace-replay ns/op does not regress from about 5952. The
 golden suite is green. There is no regression on the guard set: p2 (bf16 width to DRAM, 1494.5 ns
 kernel / about 2845 ns/op replay) and p2 to L1 (bf16 width to L1).
+
+**Outcome**: p1 kernel 2119 → 1712 ns (median of 1632, 1711.5 and 1714.5 over three runs; −19%, under the 2050 ns
+target) with `default_knobs` choosing 2 lanes + `bank_stagger` (L1 destination, ≥ 8 shard pages). p1 replay is
+5952 → 5964 ns/op (flat, +0.2%). Output is bit-exact. The guard set runs its unchanged 1-lane plan (p2 1499.5 ns /
+2842 ns/op, p2 to L1 1271 ns / 2812 ns/op, both within noise). The stagger is only a win on two NoCs (1 NoC: 2239
+vs 2139 ns). `num_write_nocs = 2` is parked as a knob (one kernel, dynamic NoC: 1804 ns; costs ~16 cycles/write
+over dedicated mode). The incremental bank walk is capped at ~30 ns by ablation and not built (it needs bank-level
+addressing that `TensorAccessor` lacks). The p1 wall is now kernel start skew (~620 cycles) plus NoC0-lane
+barrier tails on cores at physical x=1–2, y=3–5. Next: pick each core's NoC by position rather than by lane. Not
+tried here because this refinement's levers were exhausted and that is a new traffic-placement scheme.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile: per-call dispatch cost on p1
 

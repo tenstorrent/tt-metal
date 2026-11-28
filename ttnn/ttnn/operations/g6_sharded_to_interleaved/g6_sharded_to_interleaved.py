@@ -15,16 +15,15 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_sharded_to_interleaved_program_descriptor import (
-    DEFAULT_KNOBS,
     TILE,
     _lane_rects,
     build_plan,
     cached_plan,
     issue_first_row,
     lookup_program,
+    resolve_knobs,
     store_program,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS — `inputs` is (scenario,), scenario as built in validate() / feature_spec.py
@@ -160,7 +159,7 @@ def validate(input_tensor, memory_config):
 # ---------------------------------------------------------------------------
 
 
-def _dispatch(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+def _dispatch(input_tensor, memory_config, knobs=None):
     key, program, plan = lookup_program(input_tensor, memory_config, knobs)
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
@@ -179,8 +178,9 @@ def g6_sharded_to_interleaved(input_tensor: ttnn.Tensor, memory_config: ttnn.Mem
     return _dispatch(input_tensor, memory_config)
 
 
-def describe_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS) -> dict:
+def describe_plan(input_tensor, memory_config, knobs=None) -> dict:
     """The plan a call with these arguments runs (BB-08, BB-21): regime, lanes, per-core role and block."""
+    knobs = resolve_knobs(input_tensor, memory_config, knobs)
     plan = cached_plan(input_tensor, memory_config, knobs) or build_plan(input_tensor, memory_config, knobs)
     cores = []
     for k, (core, block) in enumerate(zip(plan.cores, plan.blocks)):
@@ -200,6 +200,7 @@ def describe_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS) -> dict:
     return {
         "plan": "owner_writes",
         "num_write_lanes": plan.knobs.num_write_lanes,
+        "num_write_nocs": plan.knobs.num_write_nocs,
         "block_tile_rows": plan.knobs.block_tile_rows,
         "block_tile_cols": plan.knobs.block_tile_cols,
         "bank_stagger": plan.knobs.bank_stagger,

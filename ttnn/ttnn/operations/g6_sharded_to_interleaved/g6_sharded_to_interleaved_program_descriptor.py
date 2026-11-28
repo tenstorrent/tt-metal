@@ -23,7 +23,8 @@ TILE = 32
 CB_INPUT_SHARD = 0
 
 # Blocking-model knobs (op_design.md -> Blocking Model). Each is defined once here; every dependent
-# quantity (lane rectangles, block extents, kernel instances, RT args) is derived from them.
+# quantity (lane rectangles, block extents, kernel instances, RT args) is derived from them. `Knobs()` is the
+# plainest plan; `default_knobs` picks what a call without explicit knobs runs.
 
 
 @dataclass(frozen=True)
@@ -31,15 +32,39 @@ class Knobs:
     # Data-movement RISCs per shard core issuing the block's writes. 1 = BRISC on NoC1; 2 adds an
     # instance of the same kernel on NCRISC / NoC0, the block cut along its longer tile axis.
     num_write_lanes: int = 1
+    # NoCs each lane's writes alternate over. 2 compiles the lane in dynamic NoC mode so one RISC spreads its
+    # traffic over both NoC networks without a second kernel.
+    num_write_nocs: int = 1
     # Block extents along tile_row / tile_col; None = the lane's whole rectangle (one block per lane).
     block_tile_rows: int | None = None
     block_tile_cols: int | None = None
     # Rotate each core's row walk so that cores whose rectangles start on the same output bank issue to
     # different banks at every write step (see `issue_first_row`). False = every core walks from row 0.
-    bank_stagger: bool = True
+    bank_stagger: bool = False
 
 
-DEFAULT_KNOBS = Knobs()
+# Below this many pages per shard core, a second write lane's per-call dispatch cost outweighs what it takes off
+# the core's write issue.
+TWO_LANE_MIN_SHARD_PAGES = 8
+
+
+def default_knobs(input_tensor, memory_config):
+    """The knobs a call without explicit knobs runs.
+
+    Two lanes put the writes on both NoC networks, which pays for L1 destinations (banks spread over the worker
+    grid) once the shard holds enough pages. DRAM destinations stay on one lane: the second NoC's path to the
+    DRAM endpoints is slower there. The stagger only spreads banks usefully when the traffic spans both NoCs; on
+    one NoC it reorders the hot links and is slower, so it follows the lane count.
+    """
+    spec = input_tensor.memory_config().shard_spec
+    shard_pages = (spec.shape[0] // TILE) * (spec.shape[1] // TILE)
+    two_lanes = memory_config.buffer_type == ttnn.BufferType.L1 and shard_pages >= TWO_LANE_MIN_SHARD_PAGES
+    return Knobs(num_write_lanes=2 if two_lanes else 1, bank_stagger=two_lanes)
+
+
+def resolve_knobs(input_tensor, memory_config, knobs):
+    return default_knobs(input_tensor, memory_config) if knobs is None else knobs
+
 
 # (processor, NoC) of write lane i.
 _LANE_CONFIGS = (
@@ -103,7 +128,8 @@ def _lane_rects(block, num_lanes):
     return rects
 
 
-def build_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+def build_plan(input_tensor, memory_config, knobs=None):
+    knobs = resolve_knobs(input_tensor, memory_config, knobs)
     spec = input_tensor.memory_config().shard_spec
     tensor_tile_rows, tensor_tile_cols = _tile_grid(input_tensor)
     shard_tile_rows, shard_tile_cols = spec.shape[0] // TILE, spec.shape[1] // TILE
@@ -123,6 +149,8 @@ def build_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
         raise RuntimeError(
             f"g6_sharded_to_interleaved: num_write_lanes={knobs.num_write_lanes} not in [1, {len(_LANE_CONFIGS)}]"
         )
+    if knobs.num_write_nocs not in (1, 2):
+        raise RuntimeError(f"g6_sharded_to_interleaved: num_write_nocs={knobs.num_write_nocs} not in [1, 2]")
     for cap in (knobs.block_tile_rows, knobs.block_tile_cols):
         if cap is not None and cap < 1:
             raise RuntimeError(f"g6_sharded_to_interleaved: block extent {cap} < 1")
@@ -227,11 +255,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
     grid = input_tensor.memory_config().shard_spec.grid
     cb_input_shard = ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_SHARD, input_tensor)
 
-    ct_args = [CB_INPUT_SHARD, plan.page_size]
+    knobs = plan.knobs
+    ct_args = [CB_INPUT_SHARD, plan.page_size, knobs.num_write_nocs]
     ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     common_rt_args = [output_tensor.buffer_address(), plan.shard_tile_cols, plan.tensor_tile_cols]
 
-    knobs = plan.knobs
     lane_rt_args = [ttnn.RuntimeArgs() for _ in range(knobs.num_write_lanes)]
     for k, (core, block) in enumerate(zip(plan.cores, plan.blocks)):
         rects = _lane_rects(block, knobs.num_write_lanes) if block is not None else []
@@ -250,6 +278,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
                 ]
             lane_rt_args[lane][core.x][core.y] = args
 
+    noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if knobs.num_write_nocs == 2 else ttnn.NOC_MODE.DM_DEDICATED_NOC
     kernels = []
     for lane in range(knobs.num_write_lanes):
         processor, noc = _LANE_CONFIGS[lane]
@@ -260,7 +289,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
                 compile_time_args=ct_args,
                 runtime_args=lane_rt_args[lane],
                 common_runtime_args=common_rt_args,
-                config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
+                config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=noc_mode),
             )
         )
 
@@ -289,9 +318,10 @@ class CachedProgram:
 _PROGRAMS = {}
 
 
-def program_key(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+def program_key(input_tensor, memory_config, knobs=None):
     """Everything that shapes the plan or the descriptor. Orientation and range order change only
     per-core RT values (not the C++ program hash), so they must be in this key."""
+    knobs = resolve_knobs(input_tensor, memory_config, knobs)
     mc = input_tensor.memory_config()
     spec = mc.shard_spec
     ranges = tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges())
@@ -308,7 +338,7 @@ def program_key(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
     )
 
 
-def lookup_program(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+def lookup_program(input_tensor, memory_config, knobs=None):
     """(key, cached program or None, plan). On a miss the plan is built and checked against the L1 bound
     (BB-05) here, so a refused shape is refused before the caller allocates its output."""
     key = program_key(input_tensor, memory_config, knobs)
@@ -326,6 +356,6 @@ def store_program(key, input_tensor, output_tensor, plan):
     return cached
 
 
-def cached_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+def cached_plan(input_tensor, memory_config, knobs=None):
     cached = _PROGRAMS.get(program_key(input_tensor, memory_config, knobs))
     return None if cached is None else cached.plan
