@@ -224,8 +224,8 @@ void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_dev
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
 
     // HYBRID mode: the FIFO is only used on the receiver core, so allocate it
-    // there per-core instead of reserving fifo_size on every worker core.
-    // Read the mode through the mesh's own context rather than the default one: MeshBuffer::create
+    // there per-core, on the receiver device only, instead of reserving fifo_size on every worker core.
+    // Read the mode through the mesh's own context rather than the default one: the allocation
     // below resolves it the same way, and the two must agree or we hand per-core sharding args to a
     // lockstep allocator.
     const bool per_core =
@@ -254,17 +254,19 @@ void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_dev
     MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = total_data_buffer_size,
     };
-    data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-    if (!mesh_device->is_local(recv_core_.device_coord)) {
+    const bool recv_is_local = mesh_device->is_local(recv_core_.device_coord);
+    if (!per_core) {
+        data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+    } else if (recv_is_local) {
+        data_buffer_ = create_per_core_socket_buffer(
+            data_mesh_buffer_specs, data_buffer_specs, *mesh_device, recv_core_.device_coord);
+    }
+    // A rank that does not drive the receiver device never uses the FIFO, and allocates no per-core one.
+    if (!recv_is_local) {
         return;
     }
-    // Per-core buffers have a real address only via the per-core API;
-    // address() is not valid for them (host would push to a bogus L1 spot).
-    const DeviceAddr data_buf_base = per_core
-                                         ? experimental::per_core_allocation::get_per_core_address(
-                                               *data_buffer_, recv_core_.device_coord, recv_core_.core_coord)
-                                         : data_buffer_->address();
-    aligned_data_buf_start_ = tt::align(data_buf_base, pcie_alignment);
+    // A per-core FIFO sits on one core of one device, so address() is that core's address.
+    aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
     write_ptr_ = 0;
 }
 

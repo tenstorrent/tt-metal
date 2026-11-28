@@ -82,6 +82,15 @@ bool socket_endpoint_uses_per_core_allocation(const SocketConfig& config, Socket
 // cores, leaving nothing for a co-owning rank to reserve.
 bool socket_is_fully_per_core(const SocketConfig& config);
 
+// Allocates a per-core socket buffer on its endpoint device `device_coord` only and reports it to the Inspector, as
+// MeshBuffer::create does. TT_FATALs when this rank does not drive that device, since it could not resolve the
+// buffer's address.
+std::shared_ptr<MeshBuffer> create_per_core_socket_buffer(
+    const MeshBufferConfig& mesh_buffer_config,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice& mesh_device,
+    const MeshCoordinate& device_coord);
+
 // Create send/receive socket config buffers
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint);
