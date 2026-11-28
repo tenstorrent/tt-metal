@@ -227,3 +227,25 @@ def test_moreh_softmax_provided_output(device):
 def test_moreh_softmax_backward_provided_output(device):
     torch.manual_seed(0)
     run_moreh_softmax_backward_nan_pad_test([2, 32, 128], 2, BackwardStrategy.SMALL_W, device, provide_output=True)
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "backward_op",
+    [ttnn.moreh_softmax_backward, ttnn.moreh_softmin_backward, ttnn.moreh_logsoftmax_backward],
+    ids=OP_IDS,
+)
+def test_softmax_backward_shape_mismatch(backward_op, device, expect_error):
+    torch.manual_seed(0)
+    output_shape = [1, 1, 128, 128]
+    small_shape = [1, 1, 32, 32]
+    dim = len(output_shape) - 1
+
+    tt_output = create_ttnn_tilized_tensor(torch.rand(output_shape), device, ttnn.bfloat16)
+    tt_output_grad = create_ttnn_tilized_tensor(torch.rand(output_shape), device, ttnn.bfloat16)
+    tt_small = create_ttnn_tilized_tensor(torch.rand(small_shape), device, ttnn.bfloat16)
+
+    with expect_error(RuntimeError, "output_grad shape"):
+        backward_op(tt_output, tt_small, dim)
+    with expect_error(RuntimeError, "input_grad shape"):
+        backward_op(tt_output, tt_output_grad, dim, input_grad_tensor=tt_small)
