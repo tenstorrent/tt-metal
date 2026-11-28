@@ -113,16 +113,55 @@ inline void calculate_round_veltkamp_macro() {
 
 namespace compute_kernel_lib {
 
-template <Dst Slot = Dst::D0>
-struct Int32ToBf16Rne : UnaryOp<Int32ToBf16Rne<Slot>, Slot> {
+// subtile_split: the vector mode that covers exactly NF faces of the DEST tile (the tiny-tile CB holds NF faces).
+template <uint32_t NF>
+constexpr VectorMode split_vector_mode() {
+    static_assert(NF == 1 || NF == 2 || NF == 4);
+    return NF == 4 ? VectorMode::RC : (NF == 2 ? VectorMode::R : VectorMode::None);
+}
+
+// Same element as the op's Int32ToBf16Rne, SFPU passes restricted to the NF faces of the (tiny) tile.
+template <uint32_t NF, Dst Slot = Dst::D0>
+struct Int32ToBf16RneNF : UnaryOp<Int32ToBf16RneNF<NF, Slot>, Slot> {
     static ALWI void init() {
         MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::typecast>(g6_sfpu::init_twopass_veltkamp_macro)));
     }
     static ALWI void exec_impl(uint32_t slot_offset) {
         MATH((_llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::calculate_typecast_int32_to_fp32<false, 8>, to_u32(Slot) + slot_offset, VectorMode::RC)));
+            ckernel::sfpu::calculate_typecast_int32_to_fp32<false, 8>,
+            to_u32(Slot) + slot_offset,
+            split_vector_mode<NF>())));
         MATH((_llk_math_eltwise_unary_sfpu_params_(
-            g6_sfpu::calculate_round_veltkamp_macro<8>, to_u32(Slot) + slot_offset, VectorMode::RC)));
+            g6_sfpu::calculate_round_veltkamp_macro<8>, to_u32(Slot) + slot_offset, split_vector_mode<NF>())));
+    }
+};
+
+// Stock LLK typecast arms used by the domain cells, SFPU restricted to NF faces (typecast_tile hard-codes RC).
+// Init is the stock typecast_tile_init<in, out>.
+template <uint32_t InDF, uint32_t OutDF, uint32_t NF, Dst Slot = Dst::D0>
+struct TypecastNF : UnaryOp<TypecastNF<InDF, OutDF, NF, Slot>, Slot> {
+    static ALWI void init() { typecast_tile_init<InDF, OutDF>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        constexpr auto in_f = static_cast<DataFormat>(InDF);
+        constexpr auto out_f = static_cast<DataFormat>(OutDF);
+        const uint32_t d = to_u32(Slot) + slot_offset;
+        if constexpr (NF == 4) {
+            typecast_tile<InDF, OutDF>(d);
+        } else if constexpr (in_f == DataFormat::Float16_b && out_f == DataFormat::Int32) {
+            MATH((_llk_math_eltwise_unary_sfpu_params_(
+                ckernel::sfpu::calculate_typecast_fp32_to_int32<APPROX, 8>, d, split_vector_mode<NF>())));
+        } else if constexpr (in_f == DataFormat::Float32 && out_f == DataFormat::Float16_b) {
+            MATH((_llk_math_eltwise_unary_sfpu_params_(
+                ckernel::sfpu::calculate_typecast_fp32_to_fp16b<APPROX, 8>, d, split_vector_mode<NF>())));
+        } else if constexpr (in_f == DataFormat::UInt16 && out_f == DataFormat::Int32) {
+            MATH((_llk_math_eltwise_unary_sfpu_params_(
+                ckernel::sfpu::calculate_typecast_uint16_to_uint32<APPROX, 8, DST_ACCUM_MODE>,
+                d,
+                split_vector_mode<NF>())));
+        } else {
+            // Packer-only arms (bf16 -> fp32 / bf8b ...): typecast_tile is a no-op or 4-face; keep stock.
+            typecast_tile<InDF, OutDF>(d);
+        }
     }
 };
 

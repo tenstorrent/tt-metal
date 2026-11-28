@@ -206,7 +206,141 @@ def _tile_core_order(device, grid, first_tiles, buffer_type):
     return cores
 
 
+# Sub-tile split (Perf 1): arms whose compute runs an SFPU pass. With few tiles the math thread is the long pole, so
+# each core takes NF faces of one tile (quarter first, then half) and the SFPU walks only those faces. Carve-out,
+# measured: the packer-only arms (bf16 -> fp32, bf16 -> bfloat8_b) have no SFPU long pole and only pay launch skew
+# (Q2221 half +3.7%, Q2194 quarter +6%, Q2227 / Q2195 half +5..7%) -> whole tiles.
+SPLIT_ARMS = {
+    (ttnn.int32, ttnn.bfloat16),
+    (ttnn.bfloat16, ttnn.int32),
+    (ttnn.uint16, ttnn.int32),
+    (ttnn.float32, ttnn.bfloat16),
+    (ttnn.bfloat16, ttnn.uint8),
+}
+SPLIT_FACES_ORDER = (1, 2)  # finest split whose unit count fits the grid (one unit per core)
+# (height, width) of the 2-face tiny tile. 16x32 packs bfloat8_b wrong (row 15 of each face); 32x16 is exact.
+HALF_TILE = (32, 16)
+
+
+def _live_faces(t, Wt, Ht, w_tail, h_tail):
+    """Faces of tile t (in page order) that hold logical data (same rule as kernels/g6_typecast_tile_faces.hpp)."""
+    col, row = t % Wt, (t // Wt) % Ht
+    dead_r = 1 <= w_tail <= 16 and col == Wt - 1
+    dead_b = 1 <= h_tail <= 16 and row == Ht - 1
+    return [f for f in range(4) if not ((f & 1) and dead_r) and not ((f & 2) and dead_b)]
+
+
+def _split_units(nf, tensor_tiles, Wt, Ht, w_tail, h_tail):
+    """Units (tile, first_face) of nf contiguous faces holding at least one live face."""
+    units = []
+    for t in range(tensor_tiles):
+        live = _live_faces(t, Wt, Ht, w_tail, h_tail)
+        for ff in range(0, 4, nf):
+            if any(f in live for f in range(ff, ff + nf)):
+                units.append((t, ff))
+    return units
+
+
 def _create_tile_program_descriptor(input_tensor, output_tensor):
+    if (input_tensor.dtype, output_tensor.dtype) in SPLIT_ARMS:
+        logical = tuple(input_tensor.shape)
+        w = logical[-1]
+        h = logical[-2] if len(logical) >= 2 else 1
+        grid = input_tensor.device().compute_with_storage_grid_size()
+        tiles = _tensor_tiles(logical)
+        if tiles < grid.x * grid.y:  # a whole-tile split already fills the grid otherwise
+            for nf in SPLIT_FACES_ORDER:
+                units = _split_units(nf, tiles, _div_up(w, TILE_HW), _div_up(h, TILE_HW), w % TILE_HW, h % TILE_HW)
+                if len(units) <= grid.x * grid.y:
+                    return _create_split_program_descriptor(input_tensor, output_tensor, nf, units)
+    return _create_whole_tile_program_descriptor(input_tensor, output_tensor)
+
+
+def _create_split_program_descriptor(input_tensor, output_tensor, nf, units):
+    """R1 sub-tile split (Perf 1): one unit = nf contiguous faces of one tile per core, tiny-tile CB pair."""
+    device = input_tensor.device()
+    logical = tuple(input_tensor.shape)
+    out_dtype = output_tensor.dtype
+    in_page = input_tensor.buffer_page_size()
+    out_page = output_tensor.buffer_page_size()
+    w = logical[-1]
+    w_tail = w % TILE_HW
+    Wt = _div_up(w, TILE_HW)
+    in_hdr, in_face = _tile_geometry(input_tensor.dtype, in_page)
+    out_hdr, out_face = _tile_geometry(out_dtype, out_page)
+    assert in_hdr == 0
+    grid = device.compute_with_storage_grid_size()
+    ordered = _tile_core_order(device, grid, [t for t, _ in units], input_tensor.memory_config().buffer_type)
+    if ordered is None:
+        ordered = [ttnn.CoreCoord(k % grid.x, k // grid.x) for k in range(len(units))]
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ordered])
+
+    tile_desc = ttnn.TileDescriptor(*HALF_TILE) if nf == 2 else ttnn.TileDescriptor(16, 16)
+    in_unit = nf * in_face
+    exp_sec = _div_up(16 * nf, 16) * 16 if out_hdr else 0
+    out_unit = exp_sec + nf * out_face
+
+    def _cb(index, dtype, page):
+        return ttnn.CBDescriptor(
+            total_size=page,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page, tile=tile_desc)
+            ],
+        )
+
+    mask = out_dtype == ttnn.bfloat8_b and w % 16 != 0
+    col0 = w_tail % 16 if mask else 0
+    face_a = 0 if (w_tail != 0 and w_tail < 16) else 1
+    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for core, (t, ff) in zip(ordered, units):
+        bits = 0
+        if mask and t % Wt == Wt - 1:
+            for g in (face_a, face_a + 2):
+                if ff <= g < ff + nf:
+                    bits |= 1 << (g - ff)
+        reader_rt[core.x][core.y] = [t, ff * in_face, bits]
+        writer_rt[core.x][core.y] = [t, ff]
+        compute_rt[core.x][core.y] = [1]
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "g6_typecast_split_reader.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=[CB_INPUT_TILES, in_page, in_unit, in_face, col0]
+        + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()),
+        runtime_args=reader_rt,
+        common_runtime_args=[input_tensor.buffer_address()],
+        defines=_defines(),
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "g6_typecast_split_writer.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=[CB_OUTPUT_TILES, out_page, out_hdr, out_face, nf, exp_sec]
+        + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
+        runtime_args=writer_rt,
+        common_runtime_args=[output_tensor.buffer_address()],
+        defines=_defines(),
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "g6_typecast_compute.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, 1, nf],
+        runtime_args=compute_rt,
+        defines=_defines(),
+        config=_compute_config(input_tensor.dtype, out_dtype),
+    )
+    program_descriptor = ttnn.ProgramDescriptor(
+        kernels=[reader, writer, compute],  # order matches _READER_KERNEL_IDX / _WRITER_KERNEL_IDX
+        semaphores=[],
+        cbs=[_cb(CB_INPUT_TILES, input_tensor.dtype, in_unit), _cb(CB_OUTPUT_TILES, out_dtype, out_unit)],
+    )
+    plan = {"regime": "tile_split", "faces_per_core": nf, "num_cores": len(units), "units": len(units)}
+    return program_descriptor, plan
+
+
+def _create_whole_tile_program_descriptor(input_tensor, output_tensor):
     device = input_tensor.device()
     shape = tuple(input_tensor.padded_shape)
     logical_shape = tuple(input_tensor.shape)
@@ -321,7 +455,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_compute.cpp"),
         core_ranges=all_cores,
-        compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles],
+        compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles, 4],  # 4 faces: whole tiles
         runtime_args=compute_rt,
         defines=_defines(),
         config=compute_config,
@@ -474,7 +608,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_compute.cpp"),
         core_ranges=all_cores,
-        compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles],
+        compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles, 4],  # 4 faces: whole tiles
         runtime_args=compute_rt,
         defines=_defines(),
         config=_compute_config(in_dtype, out_dtype),

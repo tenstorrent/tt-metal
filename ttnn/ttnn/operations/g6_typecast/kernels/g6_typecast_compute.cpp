@@ -21,7 +21,7 @@
 // int32->bf16: the direct Int32->Float16_b LLK arm rounds fp32->bf16 ties half-away (SFP_STOCH_RND), so it
 // gets e.g. 33685505 -> 33816576 wrong; torch rounds through float32 with RNE twice. Perf 1 replaced the exact
 // but non-hoistable Typecast<Int32,Float32> -> Typecast<Float32,Float16_b> pair (re-init per tile) with ONE
-// custom element, Int32ToBf16Rne (g6_typecast_int32_bf16_sfpu.hpp, raw-LLK justification there).
+// custom element, Int32ToBf16Rne (g6_typecast_sfpu_elements.hpp, raw-LLK justification there).
 
 #include <cstdint>
 #include <type_traits>
@@ -30,12 +30,15 @@
 #include "api/compute/tile_move_copy.h"
 #include "g6_typecast_zones.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
-#include "g6_typecast_int32_bf16_sfpu.hpp"
+#include "g6_typecast_sfpu_elements.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t block_tiles = get_compile_time_arg_val(2);
+    // Faces per CB tile: 4 = whole 32x32 tiles; 2 / 1 = Perf 1 sub-tile split (the CBs are declared with a 32x16 /
+    // 16x16 tiny tile, so hw_startup programs unpack/datacopy/pack for NF faces and the SFPU walks NF faces).
+    constexpr uint32_t NF = get_compile_time_arg_val(3);
 
     const uint32_t core_tiles = get_arg_val<uint32_t>(0);
 
@@ -54,15 +57,16 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_input_tiles, cb_output_tiles);
 
     // Arm selection: every arm is ONE chain element. int32 -> bf16 uses the custom single-init RNE element
-    // (g6_typecast_int32_bf16_sfpu.hpp, raw-LLK justification there); every other arm is Typecast<in, out>.
+    // (g6_typecast_sfpu_elements.hpp, raw-LLK justification there); every other arm is TypecastNF<in, out, NF>
+    // (= Typecast for whole tiles).
     constexpr uint32_t df_int32 = static_cast<uint32_t>(DataFormat::Int32);
     constexpr uint32_t df_bf16 = static_cast<uint32_t>(DataFormat::Float16_b);
     constexpr bool int32_to_bf16 = in_df == df_int32 && out_df == df_bf16;
     auto element = []() {
         if constexpr (int32_to_bf16) {
-            return Int32ToBf16Rne<>{};
+            return Int32ToBf16Rne<NF>{};
         } else {
-            return Typecast<in_df, out_df>{};
+            return TypecastNF<in_df, out_df, NF>{};
         }
     };
     // Perf 1 (lean_compute_startup): the element inits are emitted ONCE by the caller right after hw_startup,

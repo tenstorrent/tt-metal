@@ -58,9 +58,9 @@ def _run(device, shape, dst, buffer):
         ((16, 4096, 12), ttnn.float32, "dram"),  # Q2185: 16/15 tiles per core -> ragged tails
         ((1, 1, 3844, 256), ttnn.bfloat8_b, "dram"),  # Q2187
         ((1, 32, 64, 256), ttnn.bfloat8_b, "l1"),  # P22
-        ((1, 1, 32, 128), ttnn.int32, "dram"),  # Q2229
+        ((2, 1024, 256), ttnn.int32, "dram"),  # bf16->int32 whole tiles (Q2229 itself runs the Perf 1 sub-tile split)
     ],
-    ids=["Q2185", "Q2187", "P22", "Q2229"],
+    ids=["Q2185", "Q2187", "P22", "i32_512t"],
 )
 def test_multi_block(device, monkeypatch, shape, dst, buffer, cap):
     monkeypatch.setattr(pd, "BLOCK_TILES_CAP", cap)
