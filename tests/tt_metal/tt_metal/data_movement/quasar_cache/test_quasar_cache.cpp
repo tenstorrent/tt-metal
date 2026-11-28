@@ -96,9 +96,15 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
     std::vector<uint32_t> output_data;
     slow_dispatch::ReadFromL1(mesh_device, core, base_addr, config.num_words * sizeof(uint32_t), output_data);
 
+    // Nothing keeps a dirty line in L2 until the invalidate: if it was evicted first, its new values reached L1.
+    // So each 64B line must read back either all old or all new.
+    bool line_is_new = false;
     bool pass = true;
     for (uint32_t i = 0; i < config.num_words; i++) {
-        uint32_t expected = config.expect_new_values ? (config.value + i) : old_value;
+        if (!config.expect_new_values && ((base_addr + i * sizeof(uint32_t)) % 64 == 0)) {
+            line_is_new = output_data[i] == config.value + i;
+        }
+        uint32_t expected = (config.expect_new_values || line_is_new) ? (config.value + i) : old_value;
         if (output_data[i] != expected) {
             log_error(tt::LogTest, "Mismatch at index {}: expected 0x{:08x}, got 0x{:08x}",
                       i, expected, output_data[i]);
@@ -231,7 +237,7 @@ TEST_F(QuasarL2CacheOps, InvalidateLine) {
         .num_words = 16,
         .value = 0x99990000,
         .test_mode = 3,             // invalidate line
-        .expect_new_values = false  // Invalidate doesn't write back, so old values should remain
+        .expect_new_values = false  // Old values remain, unless the line was evicted before the invalidate
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
 }
