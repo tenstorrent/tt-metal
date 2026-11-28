@@ -12,24 +12,24 @@
 
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
-// and makes it faster
+// and makes it faster.
+// A default plus two nested v_if (no v_elseif / v_else) compiles to plain SETCC-predicated moves,
+// without the CC-stack PUSHC/POPC and COMPC a three-way ladder needs. Regions:
+// exp < 0 -> 0; exp > 30 (including inf/NaN) -> INT32_MAX; otherwise man << (exp - 23).
 sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
-    sfpi::vInt result;
     sfpi::vInt exp = exexp(in);  // extract exponent
-    v_if(exp < 0) { result = 0; }
-    v_elseif(exp > 30)  // overflow occurs above this range
-    {
-        // set to int32 max value in case of overflow
+    sfpi::vInt result = 0;       // |in| < 1 (exp < 0) truncates to 0
+    v_if(exp >= 0) {
+        // set to int32 max value in case of overflow (exp > 30)
         result = std::numeric_limits<std::int32_t>::max();
-    }
-    v_else {
-        // extract mantissa
-        sfpi::vInt man = exman(in, sfpi::MantissaMode::ImplicitOne);
-        // shift the mantissa by (23-exponent) to the right
-        sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
-        man = sfpi::shft(man, shift, sfpi::ShiftMode::Logical);
-
-        result = man;
+        v_if(exp < 31) {
+            // extract mantissa
+            result = exman(in, sfpi::MantissaMode::ImplicitOne);
+            // shift by (exp - 23): left if positive, right if negative
+            sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
+            result = sfpi::shft(result, shift, sfpi::ShiftMode::Logical);
+        }
+        v_endif;
     }
     v_endif;
     return result;
