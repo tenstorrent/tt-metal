@@ -65,20 +65,29 @@ inline bool detect_slow_dispatch() { return getenv("TT_METAL_SLOW_DISPATCH_MODE"
 // Host architecture from UMD (works before SetUp() fills arch_ on the fixture).
 inline tt::ARCH detect_arch() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }
 
-// Tests that ttsim cannot run. ttsim exits the whole process on functionality it does not
-// model, which would also end every test after this one in the same binary run, so these are
-// skipped up front. `test` is "<suite>.<name>" as gtest prints it (including any
-// instantiation prefix and parameter suffix); a trailing '*' matches by prefix.
+// Tests that ttsim cannot run, even alone in a fresh process. ttsim exits the whole process on
+// functionality it does not model, and slow dispatch waits forever on a kernel that hangs, so
+// these are skipped up front. Tests that only fail after an earlier test left simulator state
+// behind do not belong here; run_quasar_regression.sh --ttsim reruns those alone.
+// `test` is "<suite>.<name>" as gtest prints it (including any instantiation prefix and
+// parameter suffix); a trailing '*' matches by prefix.
 struct TtsimUnsupportedTest {
     std::string_view test;
     std::string_view reason;
 };
 
 inline constexpr TtsimUnsupportedTest kTtsimUnsupportedTests[] = {
+    // ttsim exits the process (UnsupportedFunctionality).
     {"LLKMeshDeviceFixture.TensixComputeDropout", "tensix_cfg_wr32 reg=82: the PRNG is out of scope"},
     {"LLKMeshDeviceFixture.TensixComputeDropoutAfterFpuAdd", "tensix_cfg_wr32 reg=82: the PRNG is out of scope"},
-    // Never completes on ttsim v1.17.0; slow dispatch then waits for it forever.
-    {"LLKQuasarMeshDeviceSingleCardFixture.TensixComputeUnaryBroadcastQuasarDfb", "kernel hangs"},
+    {"SingleCoreSfpuCompute/SingleCoreSingleMeshDeviceSfpuRandomParameterizedFixture.*",
+     "tensix_cfg_wr32 reg=80/82: the PRNG is out of scope"},
+    {"SingleCoreSfpuBinaryCompute/SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture.TensixSfpuBinaryCompute/"
+     "div_int32_1tiles",
+     "sfpu_dest_mode: fmt=8"},
+    // Never completes on ttsim v1.17.0, even alone in a fresh process; slow dispatch then
+    // waits for it forever.
+    {"LLKQuasarMeshDeviceSingleCardFixture.QuasarBfdDatacopy", "kernel hangs"},
 };
 
 // Reason the current test cannot run on ttsim, or empty when it can (or the target is not ttsim).

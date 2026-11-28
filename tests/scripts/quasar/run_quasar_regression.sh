@@ -79,11 +79,15 @@ soc_descriptor.yaml (a copy of tt_metal/soc_descriptors/quasar_32_arch_ttsim.yam
 in the same directory. The NNG variables are not used. ttsim has one grid, so
 every config entry runs on the same library; --config still filters entries.
 TT_METAL_SLOW_DISPATCH_MODE=1 is exported because ttsim has no fast dispatch.
+A gtest batch runs one process per gtest suite, because ttsim cannot run a
+program on a device that was closed and reopened in the same process.
 ttsim exits the process on functionality it does not model, and slow dispatch
 waits forever for a kernel that hangs on it. For gtest, a test that ends the
 process, or prints nothing for QUASAR_TTSIM_TEST_TIMEOUT seconds (default 600),
-is recorded as failed and a new process runs the tests of the batch that have
-not run yet.
+is recorded as failed and a new process runs the tests of the suite that have
+not run yet. Some tests leave simulator state behind that breaks the next test,
+so a test that ends the process after other tests ran is first run again alone;
+if it passes alone it counts as passed, with the earlier error in its result.
 
 Options:
   --ttsim                          Run against ttsim instead of the ZeBu emulator
@@ -223,6 +227,8 @@ fi
 passed=0
 failed=0
 skipped=0
+# YAML entries left out by --group/--config; reported apart from skipped tests.
+filtered=0
 declare -a results=()
 
 # Load tests from YAML into an array (single-pass read via yq)
@@ -832,6 +838,9 @@ print_summary() {
     echo "  PASSED:  $passed"
     echo "  FAILED:  $failed"
     echo "  SKIPPED: $skipped"
+    if [[ $filtered -gt 0 ]]; then
+        echo "  NOT SELECTED: $filtered YAML entries (--group/--config)"
+    fi
     local total_elapsed=$((SECONDS - run_start))
     echo "  ELAPSED: $(fmt_duration $total_elapsed)"
     echo "========================================="
@@ -971,21 +980,80 @@ gtest_filter_exclude() {
     fi
 }
 
+# Run one ttsim gtest process with output in $1, stopping it if it goes quiet.
+# Slow dispatch waits on a simulator with no timeout, so a kernel that hangs on
+# ttsim would stall the run for good. gtest prints a line when each test starts
+# and ends; no output for TTSIM_TEST_TIMEOUT seconds means the current test hung.
+# Sets ttsim_rc and ttsim_hung. gtest_cmd_env must be built by the caller.
+run_ttsim_gtest_process() {
+    local out="$1"
+    shift
+    local pid tail_pid idle
+    ttsim_hung=0
+    : > "$out"
+    # Own process group, so a timeout stops the whole test at once.
+    if command -v setsid &>/dev/null; then
+        setsid "${gtest_cmd_env[@]}" "$@" > "$out" 2>&1 &
+    else
+        "${gtest_cmd_env[@]}" "$@" > "$out" 2>&1 &
+    fi
+    pid=$!
+    active_gtest_pid=$pid
+    tail -n +1 -f --pid="$pid" "$out" &
+    tail_pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        idle=$(( $(date +%s) - $(stat -c %Y "$out") ))
+        if [[ $idle -ge $TTSIM_TEST_TIMEOUT ]]; then
+            ttsim_hung=1
+            echo "  TIMEOUT: no test output for ${idle}s; terminating the process"
+            terminate_gtest_process "$pid"
+            break
+        fi
+    done
+    set +e
+    wait "$pid"
+    ttsim_rc=$?
+    wait "$tail_pid" 2>/dev/null
+    set -e
+    active_gtest_pid=""
+    [[ $ttsim_hung -eq 1 && $ttsim_rc -eq 0 ]] && ttsim_rc=124
+    return 0
+}
+
+# Why the process in $1 ended during a test: a hang, or ttsim's last ERROR line.
+ttsim_abort_reason() {
+    local out="$1" rc="$2" hung="$3" msg
+    if [[ $hung -eq 1 ]]; then
+        printf 'hung: no output for %ss' "$TTSIM_TEST_TIMEOUT"
+    else
+        msg="$(grep -E 'ERROR' "$out" | tail -n 1 | cut -c1-200)"
+        printf 'process exited with status %s%s' "$rc" "${msg:+: $msg}"
+    fi
+}
+
 # ttsim calls _Exit(1) on functionality it does not model, which ends a
 # back2back process at that test and loses every later test in the batch.
-# Run the batch in one process, and after such an exit record what finished,
-# mark the test that was running as failed, and start a new process on the
-# tests that have not run yet. Results come from gtest's console output, since
-# a process that exits this way writes no --gtest_output file.
+# Run the tests in one process, and after such an exit record what finished,
+# deal with the test that was running, and start a new process on the tests
+# that have not run yet. Results come from gtest's console output, since a
+# process that exits this way writes no --gtest_output file.
+#
+# Some tests leave simulator state behind (tile counters, unpacker config) that
+# makes the next test end the process or hang. So a test that ends the process
+# after other tests ran in it is run again alone: if it passes alone, it counts
+# as passed and its result line names the error it hit after the earlier tests.
 run_gtest_ttsim_resumable() {
     local config="$1" group="$2" label="$3" combined_filter="$4" log_base="$5"
     shift 5
     local -a extra_args=("$@")
     local binary="$BUILD_DIR/test/tt_metal/$group"
     local -a started=()
-    local part=0 rc filter out line current crash_msg
+    local part=0 retries=0 rc hung filter out line current n_in_part reason
+    local retry_out retry_status retry_detail
     local inv_passed=0 inv_failed=0 inv_skipped=0
-    local tmp_out=""
+    local tmp_out="" tmp_retry=""
+    local result_re='^\[ +(OK|FAILED|SKIPPED) +\] ([^ ,]+)(.*\(([0-9]+ ms)\))?'
 
     while true; do
         part=$((part + 1))
@@ -1007,43 +1075,14 @@ run_gtest_ttsim_resumable() {
             out="$tmp_out"
             build_gtest_cmd_env ""
         fi
-
-        # Slow dispatch waits on a simulator with no timeout, so a kernel that hangs on
-        # ttsim would stall the batch for good. gtest prints a line when each test starts
-        # and ends; no output for TTSIM_TEST_TIMEOUT seconds means the current test hung.
-        local pid tail_pid idle hung=0
-        : > "$out"
-        # Own process group, so a timeout stops the whole test at once.
-        if command -v setsid &>/dev/null; then
-            setsid "${gtest_cmd_env[@]}" "${cmd[@]}" > "$out" 2>&1 &
-        else
-            "${gtest_cmd_env[@]}" "${cmd[@]}" > "$out" 2>&1 &
-        fi
-        pid=$!
-        active_gtest_pid=$pid
-        tail -n +1 -f --pid="$pid" "$out" &
-        tail_pid=$!
-        while kill -0 "$pid" 2>/dev/null; do
-            sleep 5
-            idle=$(( $(date +%s) - $(stat -c %Y "$out") ))
-            if [[ $idle -ge $TTSIM_TEST_TIMEOUT ]]; then
-                hung=1
-                echo "  TIMEOUT: no test output for ${idle}s; terminating the process"
-                terminate_gtest_process "$pid"
-                break
-            fi
-        done
-        set +e
-        wait "$pid"
-        rc=$?
-        wait "$tail_pid" 2>/dev/null
-        set -e
-        active_gtest_pid=""
-        [[ $hung -eq 1 && $rc -eq 0 ]] && rc=124
+        run_ttsim_gtest_process "$out" "${cmd[@]}"
+        rc=$ttsim_rc
+        hung=$ttsim_hung
 
         # Only a result line for the test that is currently running counts; this
         # skips gtest's closing list of failed tests.
         current=""
+        n_in_part=0
         while IFS= read -r line; do
             if [[ "$line" =~ ^\[\ RUN\ +\]\ ([^ ]+) ]]; then
                 if [[ -n "$current" ]]; then
@@ -1052,8 +1091,8 @@ run_gtest_ttsim_resumable() {
                 fi
                 current="${BASH_REMATCH[1]}"
                 started+=("$current")
-            elif [[ -n "$current" && "$line" =~ ^\[\ +(OK|FAILED|SKIPPED)\ +\]\ ([^ ,]+)(.*\(([0-9]+\ ms)\))? ]] \
-                    && [[ "${BASH_REMATCH[2]}" == "$current" ]]; then
+                n_in_part=$((n_in_part + 1))
+            elif [[ -n "$current" && "$line" =~ $result_re ]] && [[ "${BASH_REMATCH[2]}" == "$current" ]]; then
                 case "${BASH_REMATCH[1]}" in
                     OK)      record_ttsim_result PASS "[$config] $group $current" "${BASH_REMATCH[4]:-?}"; inv_passed=$((inv_passed + 1)) ;;
                     FAILED)  record_ttsim_result FAIL "[$config] $group $current" "${BASH_REMATCH[4]:-?}"; inv_failed=$((inv_failed + 1)) ;;
@@ -1073,20 +1112,94 @@ run_gtest_ttsim_resumable() {
             fi
             break
         fi
-        if [[ $hung -eq 1 ]]; then
-            record_ttsim_result FAIL "[$config] $group $current" "hung: no output for ${TTSIM_TEST_TIMEOUT}s"
-        else
-            crash_msg="$(grep -E 'ERROR' "$out" | tail -n 1 | cut -c1-200)"
-            record_ttsim_result FAIL "[$config] $group $current" "process exited with status $rc${crash_msg:+: $crash_msg}"
+        reason="$(ttsim_abort_reason "$out" "$rc" "$hung")"
+        if [[ $n_in_part -eq 1 ]]; then
+            # It was the first test of its process, so it already ran on a fresh device.
+            record_ttsim_result FAIL "[$config] $group $current" "$reason"
+            inv_failed=$((inv_failed + 1))
+            continue
         fi
-        inv_failed=$((inv_failed + 1))
+
+        retries=$((retries + 1))
+        echo "  RETRY: $current alone, after: $reason"
+        if [[ -n "$log_base" ]]; then
+            retry_out="${log_base}_part${part}_retry.out"
+            build_gtest_cmd_env "${log_base}_part${part}_retry.log"
+        else
+            [[ -z "$tmp_retry" ]] && tmp_retry="$(mktemp)"
+            retry_out="$tmp_retry"
+            build_gtest_cmd_env ""
+        fi
+        run_ttsim_gtest_process "$retry_out" "$binary" --gtest_filter="$current" "${extra_args[@]}"
+        retry_status=""
+        retry_detail=""
+        while IFS= read -r line; do
+            if [[ "$line" =~ $result_re ]] && [[ "${BASH_REMATCH[2]}" == "$current" ]]; then
+                retry_status="${BASH_REMATCH[1]}"
+                retry_detail="${BASH_REMATCH[4]:-?}"
+                break
+            fi
+        done < "$retry_out"
+        case "$retry_status" in
+            OK)
+                record_ttsim_result PASS "[$config] $group $current" "$retry_detail alone; after earlier tests: $reason"
+                inv_passed=$((inv_passed + 1)) ;;
+            SKIPPED)
+                record_ttsim_result SKIP "[$config] $group $current" "$retry_detail alone; after earlier tests: $reason"
+                inv_skipped=$((inv_skipped + 1)) ;;
+            FAILED)
+                record_ttsim_result FAIL "[$config] $group $current" "$reason; alone it failed ($retry_detail)"
+                inv_failed=$((inv_failed + 1)) ;;
+            *)
+                record_ttsim_result FAIL "[$config] $group $current" \
+                    "$reason; alone: $(ttsim_abort_reason "$retry_out" "$ttsim_rc" "$ttsim_hung")"
+                inv_failed=$((inv_failed + 1)) ;;
+        esac
     done
 
     [[ -n "$tmp_out" ]] && rm -f "$tmp_out"
-    echo "  RESULT: ${inv_passed} passed, ${inv_failed} failed, ${inv_skipped} skipped, ${part} process(es)"
+    [[ -n "$tmp_retry" ]] && rm -f "$tmp_retry"
+    echo "  RESULT: ${inv_passed} passed, ${inv_failed} failed, ${inv_skipped} skipped, ${part} process(es), ${retries} retried alone"
     if [[ $inv_failed -gt 0 && -n "$log_base" ]]; then
         echo "  LOG: ${log_base}_part*.out"
     fi
+}
+
+# The LLK fixtures close the device at the end of each gtest suite and open it again
+# for the next one. On ttsim (v1.17.0) the first program after that reopen never
+# completes, so each suite of the batch runs in its own process. Each process is
+# resumable as above.
+run_gtest_ttsim_per_suite() {
+    local config="$1" group="$2" label="$3" combined_filter="$4" log_base="$5"
+    shift 5
+    local binary="$BUILD_DIR/test/tt_metal/$group"
+    local -a suites=()
+    local listing suite other exclude filter i
+    local -a list_cmd=("$binary" --gtest_list_tests)
+    [[ -n "$combined_filter" ]] && list_cmd+=(--gtest_filter="$combined_filter")
+
+    # Suite lines are unindented and end in '.'; test lines are indented.
+    if listing="$("${list_cmd[@]}" 2>/dev/null)"; then
+        mapfile -t suites < <(awk '/^[^ \t]/ && $1 ~ /\.$/ { print substr($1, 1, length($1) - 1) }' <<< "$listing")
+    fi
+    if [[ ${#suites[@]} -le 1 ]]; then
+        run_gtest_ttsim_resumable "$config" "$group" "$label" "$combined_filter" "$log_base" "$@"
+        return
+    fi
+
+    echo "  ${#suites[@]} test suites; one process per suite"
+    for i in "${!suites[@]}"; do
+        suite="${suites[$i]}"
+        exclude=""
+        for other in "${suites[@]}"; do
+            [[ "$other" == "$suite" ]] && continue
+            exclude="${exclude:+$exclude:}${other}.*"
+        done
+        filter="$(gtest_filter_exclude "$combined_filter" "$exclude")"
+        echo "  SUITE $((i + 1))/${#suites[@]}: $suite"
+        run_gtest_ttsim_resumable "$config" "$group" "$label [$suite]" "$filter" \
+            "${log_base:+${log_base}_suite$((i + 1))}" "$@"
+    done
 }
 
 # Args after label are group/filter pairs. Gtest pairs share one group; pytest
@@ -1234,7 +1347,7 @@ run_test_invocation() {
     if [[ "$SIM_KIND" == ttsim && "$runner" == "gtest" ]]; then
         local ttsim_log_base=""
         [[ -n "$LOG_DIR" ]] && ttsim_log_base="$LOG_DIR/${config}_${group_stem}_${log_stem}"
-        run_gtest_ttsim_resumable "$config" "$group" "$label" "$combined_filter" "$ttsim_log_base" \
+        run_gtest_ttsim_per_suite "$config" "$group" "$label" "$combined_filter" "$ttsim_log_base" \
             "${gtest_repeat_args[@]}"
         echo ""
         return
@@ -1498,11 +1611,11 @@ for entry in "${test_entries[@]}"; do
     IFS="$SEP" read -r group filter config envvars gtest_repeat back2back runner pytest_mark <<< "$entry"
 
     if [[ -n "$FILTER_CONFIG" && "$config" != "$FILTER_CONFIG" ]]; then
-        skipped=$((skipped + 1))
+        filtered=$((filtered + 1))
         continue
     fi
     if [[ -n "$FILTER_GROUP" && "$group" != "$FILTER_GROUP" ]]; then
-        skipped=$((skipped + 1))
+        filtered=$((filtered + 1))
         continue
     fi
 

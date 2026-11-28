@@ -3,8 +3,9 @@ name: "LLK Quasar ttsim metal tests"
 # Runs the tt-metal LLK gtests (build/test/tt_metal/unit_tests_llk) on the Quasar ttsim
 # functional simulator. The test list is the unit_tests_llk group of
 # tests/scripts/quasar/quasar_regression_tests.yaml, the same list the ZeBu emulator
-# regression runs. run_quasar_regression.sh --ttsim batches its back2back entries, so the
-# whole group runs in one unit_tests_llk process with a combined --gtest_filter.
+# regression runs. run_quasar_regression.sh --ttsim batches its back2back entries into one
+# combined --gtest_filter and runs each gtest suite of it in its own unit_tests_llk process:
+# ttsim cannot run a program on a device that was closed and reopened in the same process.
 #
 # ttsim has no fast dispatch, so the runner exports TT_METAL_SLOW_DISPATCH_MODE=1.
 # The simulator release is the one pinned in tt_metal/ttsim-version.
