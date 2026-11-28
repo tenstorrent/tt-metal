@@ -27,7 +27,15 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using CompileTimeArgsTest = MeshDevice1x1Fixture;
+class CompileTimeArgsTest : public MeshDevice1x1Fixture {
+protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+        }
+        MeshDevice1x1Fixture::SetUp();
+    }
+};
 
 TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
     for (const auto& mesh_device : this->devices_) {

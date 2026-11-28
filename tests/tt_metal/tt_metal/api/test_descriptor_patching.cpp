@@ -176,6 +176,12 @@ TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
 
 class DescriptorPatchingDeviceTest : public GenericMeshDeviceFixture {
 protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not ported to Quasar: its descriptors create DataMovementKernels, which Quasar rejects";
+        }
+        GenericMeshDeviceFixture::SetUp();
+    }
     auto* device() { return get_mesh_device()->impl().get_devices()[0]; }
 };
 
