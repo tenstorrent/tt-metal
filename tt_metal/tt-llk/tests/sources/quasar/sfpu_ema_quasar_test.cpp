@@ -88,6 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_transpose_dest.h"
+#include "llk_sfpu_common.h"
 #include "params.h"
 
 // The entry reads the compute kernel's DST_SYNC_MODE / DST_ACCUM_MODE.
@@ -111,6 +112,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool interleave_fpu = MATH_TRANSPOSE_FACES;
 
     _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
+
+    _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
     _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
 
     llk_math_ema_sfpu_init();

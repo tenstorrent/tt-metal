@@ -166,6 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
+#include "llk_sfpu_common.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
 
@@ -200,6 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
+        _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
         // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
         dispatch_sfpu_srcs_op<ExpOp>(
             unpack_S_dst,

@@ -14,7 +14,7 @@ from helpers.llk_params import (
 )
 from helpers.tile_shape import TileShape
 
-from .arch_common import fpu_common, pack_common, unpack_common
+from .arch_common import fpu_common, pack_common, sfpu_common, unpack_common
 from .base_fpu import Fpu
 from .base_sfpu import Sfpu
 from .base_unpacker import Unpacker
@@ -60,6 +60,16 @@ class L1Operation:
 
     def _get_pack_nodes(self) -> List[PackNode]:
         return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
+
+    def _get_sfpu_nodes(self) -> List[Tuple[str, SfpuNode]]:
+        sfpu_nodes: List[Tuple[str, SfpuNode]] = []
+        for node in self.math_nodes:
+            if isinstance(node, SfpuNode):
+                sfpu_nodes.append(("MATH", node))
+        for node in self.pack_nodes:
+            if isinstance(node, SfpuNode):
+                sfpu_nodes.append(("PACK", node))
+        return sfpu_nodes
 
     def get_unpackers(self) -> List[Unpacker]:
         unpackers: List[Unpacker] = []
@@ -258,6 +268,8 @@ class L1Operation:
                     )
                     if not hoist:
                         body += cu.fpu_uninit(self, config, block)
+                elif isinstance(cu, SfpuNode) and config.sfpu_on_trisc3:
+                    body += sfpu_common.sfpu_lend_dest("MATH")
                 elif isinstance(cu, SfpuNode):
                     init = cu.sfpu_init(self, config, block)
                     body += config.sentinel.sfpu_math_reconfig(config)
@@ -284,6 +296,35 @@ class L1Operation:
             uninit_code += fpu_ops[0].fpu_uninit(self, config, None)
         code += self._zone(config, "UNINIT", uninit_code)
 
+        return code
+
+    def sfpu(self, config: "GlobalConfig", blocks: List[PlannedBlock]) -> str:
+        config.sentinel.prepare_operation(config, self, blocks)
+        code = f"// Operation {self.stage_id}: SFPU\n"
+        nodes = self._get_sfpu_nodes() if config.sfpu_on_trisc3 else []
+
+        init_code = sfpu_common.hw_configure_sfpu(config) if nodes else ""
+        code += self._zone(config, "INIT", init_code)
+
+        def batch_body(planned: PlannedBlock, constants):
+            body = ""
+            for lender, node in nodes:
+                block = planned.block_for(node)
+                node_body = node.sfpu_init(self, config, block)
+                node_body += planned.plan(node, "sfpu").emit_calls(
+                    constants,
+                    partial(node.sfpu_call, self, config, block),
+                )
+                node_body += node.sfpu_uninit(self, config, block)
+                body += sfpu_common.sfpu_wait_for_dest_available(lender)
+                body += node_body
+                body += sfpu_common.sfpu_section_done(lender)
+            return body
+
+        code += self._zone_loop(
+            config, "TILE_LOOP", self._batch_loop(blocks, batch_body)
+        )
+        code += self._zone(config, "UNINIT", "")
         return code
 
     def _all_same_pack_formats(self, config) -> bool:
@@ -324,7 +365,10 @@ class L1Operation:
             prev_was_pack = False
             for pack_node in self.pack_nodes:
                 block = planned.block_for(pack_node)
-                if isinstance(pack_node, SfpuNode):
+                if isinstance(pack_node, SfpuNode) and config.sfpu_on_trisc3:
+                    body += sfpu_common.sfpu_lend_dest("PACK")
+                    prev_was_pack = False
+                elif isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
                         body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
                     body += pack_node.sfpu_init(self, config, block)

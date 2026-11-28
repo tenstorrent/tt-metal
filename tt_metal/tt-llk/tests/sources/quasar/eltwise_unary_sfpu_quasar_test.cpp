@@ -136,6 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu_common.h"
 #include "params.h"
 #include "sfpu_operations_quasar.h"
 
@@ -166,6 +167,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
+
+        _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
 
         if constexpr (!unpack_to_dest)
         {

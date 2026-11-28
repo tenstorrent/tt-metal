@@ -73,6 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu/ckernel_sfpu_max_pool_indices.h"
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_sfpu_common.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -102,6 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
         _llk_math_eltwise_sfpu_init_();
         // After _llk_math_eltwise_sfpu_init_(), which resets the SFPU Control Register init sets.
         init_max_pool_with_indices<APPROX_MODE, MAX_POOL_LAYOUT>();

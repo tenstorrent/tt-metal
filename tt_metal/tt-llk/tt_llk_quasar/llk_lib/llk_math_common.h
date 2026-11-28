@@ -116,7 +116,6 @@ inline void _build_alu_words_(const DataFormat srca, const DataFormat srcb, alu_
     words.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
 
     words.f.ALU_ACC_CTRL_Fp32_enabled      = EN_32BIT_DEST;
-    words.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_32BIT_DEST;
     words.f.ALU_ACC_CTRL_INT8_math_enabled = int8_math;
 
     // Dest keeps its implied (saved per-bank) format; only the 32-bit MOV path pins it, because
@@ -163,7 +162,9 @@ inline void _configure_alu_cfg_(const DataFormat srca, const DataFormat srcb)
     alu_config_u target;
     _build_alu_words_<TYPE, EN_32BIT_DEST>(srca, srcb, target);
 
-    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+    constexpr std::uint32_t ACC_WORD = NUM_WORDS_ALU_FORMAT - 1;
+
+    for (std::uint32_t i = 0; i < ACC_WORD; i++)
     {
         if (words_known && (alu_cfg.words.val[i] == target.val[i]))
         {
@@ -171,6 +172,14 @@ inline void _configure_alu_cfg_(const DataFormat srca, const DataFormat srcb)
         }
         cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = target.val[i];
         alu_cfg.words.val[i]                         = target.val[i];
+    }
+
+    if (!words_known || (alu_cfg.words.val[ACC_WORD] != target.val[ACC_WORD]))
+    {
+        cfg_rmw(ALU_FORMAT_SPEC_REG2_Dstacc_RMW, target.f.ALU_FORMAT_SPEC_REG2_Dstacc);
+        cfg_rmw(ALU_ACC_CTRL_Fp32_enabled_RMW, target.f.ALU_ACC_CTRL_Fp32_enabled);
+        cfg_rmw(ALU_ACC_CTRL_INT8_math_enabled_RMW, target.f.ALU_ACC_CTRL_INT8_math_enabled);
+        alu_cfg.words.val[ACC_WORD] = target.val[ACC_WORD];
     }
 
     alu_cfg.programmed = wanted;
