@@ -52,31 +52,37 @@ uint32_t StripeLayout::chain_width(uint32_t c) const {
     return base + (c < rem ? 1u : 0u);
 }
 
-uint32_t StripeLayout::n_blocks_per_core() const {
-    return stripe_regions::total_blocks(ring_size, hops_before, piece_tiles, N_block_tiles);
+uint32_t StripeLayout::blocks_per_core() const {
+    return stripe_regions::total_blocks(ring_size, hops_before, piece_tiles, block_tiles);
 }
 
 StripeLayout make_stripe_layout(
-    uint32_t N_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t num_chains, uint32_t N_block_tiles, bool ring) {
+    uint32_t gathered_tiles,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    uint32_t num_chains,
+    uint32_t block_tiles,
+    bool ring) {
     TT_FATAL(ring_size >= 1, "ring_size must be >= 1, got {}", ring_size);
     TT_FATAL(ring_index < ring_size, "ring_index ({}) must be < ring_size ({})", ring_index, ring_size);
     TT_FATAL(
-        N_tiles % ring_size == 0,
-        "N_tiles ({}) must be divisible by ring_size ({}): each device must own a tile-aligned stripe",
-        N_tiles,
+        gathered_tiles % ring_size == 0,
+        "The gathered dimension ({} tiles) must be divisible by ring_size ({}): each device must own a tile-aligned "
+        "stripe",
+        gathered_tiles,
         ring_size);
     TT_FATAL(
-        num_chains >= 1 && N_block_tiles >= 1,
-        "num_chains ({}) and N_block_tiles ({}) must be >= 1.",
+        num_chains >= 1 && block_tiles >= 1,
+        "num_chains ({}) and block_tiles ({}) must be >= 1.",
         num_chains,
-        N_block_tiles);
+        block_tiles);
 
     StripeLayout layout;
     layout.ring_size = ring_size;
-    layout.stripe_tiles = N_tiles / ring_size;
+    layout.stripe_tiles = gathered_tiles / ring_size;
     layout.num_chains = num_chains;
     layout.piece_tiles = tt::div_up(layout.stripe_tiles, num_chains);
-    layout.N_block_tiles = N_block_tiles;
+    layout.block_tiles = block_tiles;
     layout.hops_before = stripe_hops_before(ring_size, ring_index, ring);
     // Local stripe first, then by hop distance.
     layout.stripe_order.push_back(ring_index);

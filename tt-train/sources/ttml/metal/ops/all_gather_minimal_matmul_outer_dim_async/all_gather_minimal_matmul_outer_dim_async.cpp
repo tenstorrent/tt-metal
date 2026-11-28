@@ -19,7 +19,8 @@ ttnn::Tensor all_gather_minimal_matmul_outer_dim_async(
     std::optional<const ttnn::DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t num_links,
-    bool transpose_b) {
+    bool transpose_b,
+    int32_t dim) {
     return ttnn::prim::ttml_all_gather_minimal_matmul_outer_dim_async(
         input_tensor,
         gathered_tensor,
@@ -32,6 +33,7 @@ ttnn::Tensor all_gather_minimal_matmul_outer_dim_async(
         dtype,
         compute_kernel_config,
         num_links,
-        transpose_b);
+        transpose_b,
+        dim);
 }
 }  // namespace ttml::metal

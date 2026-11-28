@@ -14,80 +14,152 @@
 #include "tt-train/sources/ttml/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
-// Global N columns of one N block for this chain (kPaddingColumn where the chain is narrower than a piece).
-// Returns false if the whole block is padding.
-template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t hops_before>
-inline bool block_columns(
-    uint32_t n_block_iter,
+// Tiles of the gathered operand's outer dimension in one block of this chain: its slice of the stripes, in stripe
+// order (kPaddingIndex where the chain is narrower than a piece). Returns false if the whole block is padding.
+template <uint32_t block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t hops_before>
+inline bool stripe_block_tiles(
+    uint32_t block,
     const uint32_t* stripe_order,
     uint32_t stripe_tiles,
     uint32_t chain_offset,
     uint32_t chain_width,
-    uint32_t* cols,
-    uint32_t& width) {
-    const BlockSpan span = StripeBlocks<N_block_tiles, piece_tiles, ring_size, hops_before>::span(n_block_iter);
-    width = span.width;
+    uint32_t* tiles,
+    uint32_t& count) {
+    const BlockSpan span = StripeBlocks<block_tiles, piece_tiles, ring_size, hops_before>::span(block);
+    count = span.width;
     bool any_real = false;
     for (uint32_t j = 0; j < span.width; j++) {
-        // Virtual column: the chain's pieces of all stripes laid side by side in stripe order.
+        // Virtual tile: the chain's pieces of all stripes laid side by side in stripe order.
         const uint32_t v = span.v_start + j;
         const uint32_t local = v % piece_tiles;
         if (local < chain_width) {
-            cols[j] = (stripe_order[v / piece_tiles] * stripe_tiles) + chain_offset + local;
+            tiles[j] = (stripe_order[v / piece_tiles] * stripe_tiles) + chain_offset + local;
             any_real = true;
         } else {
-            cols[j] = kPaddingColumn;
+            tiles[j] = kPaddingIndex;
         }
     }
     return any_real;
 }
 
-// Our own stripe comes straight from the shard, the others from the persistent buffer the senders fill.
+// Tiles of the local operand's outer dimension in one block: [start, end) of the core's range, kPaddingIndex from the
+// tensor's end (`limit`) on. Returns false if the whole block is padding.
+inline bool range_block_tiles(uint32_t start, uint32_t end, uint32_t limit, uint32_t* tiles, uint32_t& count) {
+    count = end - start;
+    for (uint32_t j = 0; j < count; j++) {
+        tiles[j] = start + j < limit ? start + j : kPaddingIndex;
+    }
+    return start < limit;
+}
+
+// The rows and columns of the block a core is working on. The gathered operand's side follows the stripe layout and
+// changes with the outer loop; the local operand's is a run of the core's own range and changes with the inner loop.
 template <
-    uint32_t K_block_tiles,
+    bool gather_in0,
+    uint32_t M_block_tiles,
     uint32_t N_block_tiles,
-    bool transpose_b,
-    typename ShardAccessor,
-    typename PwbAccessor>
-inline void read_in1_block_columns(
+    uint32_t piece_tiles,
+    uint32_t ring_size,
+    uint32_t hops_before>
+struct BlockTiles {
+    static constexpr uint32_t full_height = M_block_tiles;
+    static constexpr uint32_t full_width = N_block_tiles;
+
+    uint32_t rows[M_block_tiles];
+    uint32_t cols[N_block_tiles];
+    uint32_t height = 0;
+    uint32_t width = 0;
+    bool rows_real = false;  // false: every row of the block is padding
+    bool cols_real = false;
+
+    void set_gathered(
+        uint32_t block,
+        const uint32_t* stripe_order,
+        uint32_t stripe_tiles,
+        uint32_t chain_offset,
+        uint32_t chain_width) {
+        if constexpr (gather_in0) {
+            rows_real = stripe_block_tiles<M_block_tiles, piece_tiles, ring_size, hops_before>(
+                block, stripe_order, stripe_tiles, chain_offset, chain_width, rows, height);
+        } else {
+            cols_real = stripe_block_tiles<N_block_tiles, piece_tiles, ring_size, hops_before>(
+                block, stripe_order, stripe_tiles, chain_offset, chain_width, cols, width);
+        }
+    }
+
+    void set_local(uint32_t start, uint32_t end, uint32_t limit) {
+        if constexpr (gather_in0) {
+            cols_real = range_block_tiles(start, end, limit, cols, width);
+        } else {
+            rows_real = range_block_tiles(start, end, limit, rows, height);
+        }
+    }
+};
+
+// Where an operand's tiles are read from, by their place in its outer dimension: our own stripe comes straight from
+// the shard, the others from the persistent buffer the senders fill. A local operand is one stripe that holds it all.
+struct StripeSource {
+    uint32_t outer_tiles = 0;  // the whole operand
+    uint32_t local_first = 0;  // where our own stripe starts
+    uint32_t stripe_tiles = 0;
+};
+
+// Reads tile (outer, k) of an operand stored [outer, K] (outer_first) or [K, outer].
+template <bool outer_first, typename ShardAccessor, typename BufferAccessor>
+inline void read_operand_tile(
+    const Noc& noc,
     const ShardAccessor& shard,
-    const PwbAccessor& pgb,
+    const BufferAccessor& buffer,
+    const StripeSource& source,
+    uint32_t ptr,
+    uint32_t tile_bytes,
+    uint32_t outer,
+    uint32_t k,
+    uint32_t K_tiles) {
+    if (outer - source.local_first < source.stripe_tiles) {  // inside our own stripe
+        noc.async_read(
+            shard,
+            CoreLocalMem<uint32_t>(ptr),
+            tile_bytes,
+            {.page_id = operand_page<outer_first>(outer - source.local_first, k, K_tiles, source.stripe_tiles)},
+            {});
+    } else {
+        noc.async_read(
+            buffer,
+            CoreLocalMem<uint32_t>(ptr),
+            tile_bytes,
+            {.page_id = operand_page<outer_first>(outer, k, K_tiles, source.outer_tiles)},
+            {});
+    }
+}
+
+// Reads the real rows of an in0 block ([M, K] tiles, a row after the other) for one K block. Padding rows keep what
+// the buffer held: their output is never written.
+template <uint32_t K_block_tiles, typename ShardAccessor, typename BufferAccessor>
+inline void read_in0_block_rows(
+    const ShardAccessor& shard,
+    const BufferAccessor& buffer,
+    const StripeSource& source,
     uint32_t cb_id,
     uint32_t tile_bytes,
     uint32_t K_tiles,
-    uint32_t N_tiles,
     uint32_t k_start,
-    const uint32_t* cols,
-    uint32_t width,
-    uint32_t local_stripe,
-    uint32_t stripe_tiles) {
+    const uint32_t* rows,
+    uint32_t height) {
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t base = cb.get_write_ptr();
-    const uint32_t local_first = local_stripe * stripe_tiles;
-    for (uint32_t i = 0; i < K_block_tiles; i++) {
-        const uint32_t k = k_start + i;
-        uint32_t ptr = base + (i * N_block_tiles * tile_bytes);
-        for (uint32_t j = 0; j < width; j++, ptr += tile_bytes) {
-            if (cols[j] == kPaddingColumn) {
-                continue;
-            }
+    for (uint32_t i = 0; i < height; i++) {
+        if (rows[i] == kPaddingIndex) {
+            continue;
+        }
+        uint32_t ptr = base + (i * K_block_tiles * tile_bytes);
+        for (uint32_t j = 0; j < K_block_tiles; j++, ptr += tile_bytes) {
+            const uint32_t k = k_start + j;
             if (k >= K_tiles) {  // K padding
                 fill_zeros_async(noc, cb, tile_bytes, ptr - base);
-            } else if (cols[j] - local_first < stripe_tiles) {  // inside our own stripe
-                noc.async_read(
-                    shard,
-                    CoreLocalMem<uint32_t>(ptr),
-                    tile_bytes,
-                    {.page_id = gathered_page<transpose_b>(cols[j] - local_first, k, K_tiles, stripe_tiles)},
-                    {});
             } else {
-                noc.async_read(
-                    pgb,
-                    CoreLocalMem<uint32_t>(ptr),
-                    tile_bytes,
-                    {.page_id = gathered_page<transpose_b>(cols[j], k, K_tiles, N_tiles)},
-                    {});
+                read_operand_tile<true>(noc, shard, buffer, source, ptr, tile_bytes, rows[i], k, K_tiles);
             }
         }
     }
@@ -95,21 +167,60 @@ inline void read_in1_block_columns(
     noc.write_zeros_l1_barrier();
 }
 
-// Waits until every remote stripe in the block has its first `k_blocks` K blocks in. `arrived` remembers what we
-// already saw so each stripe's semaphore is polled only when it can still be behind.
-inline void wait_for_block_stripes(
+// Reads the real columns of an in1 block ([K, N] tiles, a K row after the other) for one K block.
+template <
+    uint32_t K_block_tiles,
+    uint32_t N_block_tiles,
+    bool transpose_b,
+    typename ShardAccessor,
+    typename BufferAccessor>
+inline void read_in1_block_columns(
+    const ShardAccessor& shard,
+    const BufferAccessor& buffer,
+    const StripeSource& source,
+    uint32_t cb_id,
+    uint32_t tile_bytes,
+    uint32_t K_tiles,
+    uint32_t k_start,
     const uint32_t* cols,
-    uint32_t width,
+    uint32_t width) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t base = cb.get_write_ptr();
+    for (uint32_t i = 0; i < K_block_tiles; i++) {
+        const uint32_t k = k_start + i;
+        uint32_t ptr = base + (i * N_block_tiles * tile_bytes);
+        for (uint32_t j = 0; j < width; j++, ptr += tile_bytes) {
+            if (cols[j] == kPaddingIndex) {
+                continue;
+            }
+            if (k >= K_tiles) {  // K padding
+                fill_zeros_async(noc, cb, tile_bytes, ptr - base);
+            } else {
+                read_operand_tile<transpose_b>(noc, shard, buffer, source, ptr, tile_bytes, cols[j], k, K_tiles);
+            }
+        }
+    }
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+}
+
+// Waits until every remote stripe in the block has its first `k_blocks` K blocks in. `tiles` are the block's tiles of
+// the gathered dimension. `arrived` remembers what we already saw so each stripe's semaphore is polled only when it
+// can still be behind.
+inline void wait_for_block_stripes(
+    const uint32_t* tiles,
+    uint32_t count,
     uint32_t local_stripe,
     uint32_t stripe_tiles,
     const uint32_t* stripe_sem_addrs,
     uint32_t k_blocks,
     uint32_t* arrived) {
-    for (uint32_t j = 0; j < width; j++) {
-        if (cols[j] == kPaddingColumn) {
+    for (uint32_t j = 0; j < count; j++) {
+        if (tiles[j] == kPaddingIndex) {
             continue;
         }
-        const uint32_t s = cols[j] / stripe_tiles;
+        const uint32_t s = tiles[j] / stripe_tiles;
         if (s == local_stripe || arrived[s] >= k_blocks) {
             continue;
         }
@@ -123,77 +234,71 @@ inline void wait_for_block_stripes(
     }
 }
 
-// Writes the real columns of an output block. granular waits for and frees one row at a time; it's used for the
+// Gives back what wait_for_block_stripes counted once the injector is done: `k_blocks` per stripe it waited on.
+// Subtracting keeps what a neighbour already delivered for the next call, which a reset would lose.
+inline void release_block_stripes(
+    const uint32_t* stripe_sem_addrs, const uint32_t* arrived, uint32_t ring_size, uint32_t k_blocks) {
+    for (uint32_t s = 0; s < ring_size; s++) {
+        if (arrived[s] > 0) {
+            noc_semaphore_inc(get_noc_addr(stripe_sem_addrs[s]), -k_blocks);
+        }
+    }
+}
+
+// Writes the real tiles of an output block. granular waits for and frees one row at a time; it's used for the
 // last block, where nothing else overlaps the write.
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool granular, typename Accessor>
-inline void write_block_columns(
-    const Accessor& writer,
-    uint32_t M_tiles,
-    uint32_t N_tiles,
-    uint32_t cb_out_id,
-    uint32_t tile_bytes,
-    uint32_t m_start,
-    uint32_t m_end,
-    const uint32_t* cols,
-    uint32_t width) {
+template <bool granular, typename Accessor, typename Block>
+inline void write_block_tiles(
+    const Accessor& writer, uint32_t N_tiles, uint32_t cb_out_id, uint32_t tile_bytes, const Block& block) {
     Noc noc;
     CircularBuffer cb_out(cb_out_id);
     if constexpr (!granular) {
-        cb_out.wait_front(M_block_tiles * N_block_tiles);
+        cb_out.wait_front(Block::full_height * Block::full_width);
     }
-    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+    for (uint32_t i = 0; i < Block::full_height; i++) {
         if constexpr (granular) {
-            cb_out.wait_front(N_block_tiles);
+            cb_out.wait_front(Block::full_width);
         }
-        const uint32_t m = m_start + m_id;
-        if (m < m_end && m < M_tiles) {
+        if (i < block.height && block.rows[i] != kPaddingIndex) {
             const uint32_t row_ptr =
-                granular ? cb_out.get_read_ptr() : cb_out.get_read_ptr() + (m_id * N_block_tiles * tile_bytes);
-            for (uint32_t j = 0; j < width; j++) {
-                if (cols[j] != kPaddingColumn) {
+                granular ? cb_out.get_read_ptr() : cb_out.get_read_ptr() + (i * Block::full_width * tile_bytes);
+            const uint32_t row_page = block.rows[i] * N_tiles;
+            for (uint32_t j = 0; j < block.width; j++) {
+                if (block.cols[j] != kPaddingIndex) {
                     noc.async_write(
                         CoreLocalMem<uint32_t>(row_ptr + (j * tile_bytes)),
                         writer,
                         tile_bytes,
                         {},
-                        {.page_id = (m * N_tiles) + cols[j]});
+                        {.page_id = row_page + block.cols[j]});
                 }
             }
         }
         if constexpr (granular) {
             noc.async_writes_flushed();
-            cb_out.pop_front(N_block_tiles);
+            cb_out.pop_front(Block::full_width);
         }
     }
     if constexpr (!granular) {
         noc.async_writes_flushed();
-        cb_out.pop_front(M_block_tiles * N_block_tiles);
+        cb_out.pop_front(Block::full_height * Block::full_width);
     }
 }
 
 // Holds a finished block's output until the writer gets to it during the next block.
-template <uint32_t M_block_tiles, uint32_t N_block_tiles>
+template <typename Block>
 struct DeferredBlockWrite {
-    uint32_t cols[N_block_tiles];
-    uint32_t width = 0;
-    uint32_t m_start = 0;
-    uint32_t m_end = 0;
+    Block block;
     bool pending = false;
 
-    void defer(uint32_t block_m_start, uint32_t block_m_end, const uint32_t* block_cols, uint32_t block_width) {
-        m_start = block_m_start;
-        m_end = block_m_end;
-        width = block_width;
-        for (uint32_t j = 0; j < block_width; j++) {
-            cols[j] = block_cols[j];
-        }
+    void defer(const Block& finished) {
+        block = finished;
         pending = true;
     }
 
     template <typename Accessor>
-    void write(const Accessor& writer, uint32_t cb_out_id, uint32_t M_tiles, uint32_t N_tiles, uint32_t tile_bytes) {
-        write_block_columns<M_block_tiles, N_block_tiles, false>(
-            writer, M_tiles, N_tiles, cb_out_id, tile_bytes, m_start, m_end, cols, width);
+    void write(const Accessor& writer, uint32_t cb_out_id, uint32_t N_tiles, uint32_t tile_bytes) {
+        write_block_tiles<false>(writer, N_tiles, cb_out_id, tile_bytes, block);
         pending = false;
     }
 };

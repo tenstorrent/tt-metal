@@ -12,8 +12,12 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::metal {
-// input @ gathered, where gathered_tensor is sharded along N (one stripe per device on cluster_axis) and gathered
-// over fabric while the matmul runs.
+// A matmul with one operand, gathered_tensor, sharded along its outer dimension (one stripe per device on
+// cluster_axis) and gathered over fabric while the matmul runs:
+//   dim = -1: input @ gathered. The gathered tensor is the second operand, sharded along its columns (N).
+//   dim = -2: gathered @ input. The gathered tensor is the first operand [M, K], sharded along its rows (M), and the
+//             input is a matrix too.
+// The second operand is stored [N, K] with transpose_b, else [K, N].
 //
 // persistent_gather_buffer is workspace the size of the whole gathered tensor for the remote stripes; the local stripe
 // is read straight from gathered_tensor and never copied into it. Neighbours write into it from the start of a call and
@@ -35,5 +39,6 @@ ttnn::Tensor all_gather_minimal_matmul_outer_dim_async(
     std::optional<const ttnn::DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t num_links = 1,
-    bool transpose_b = true);
+    bool transpose_b = true,
+    int32_t dim = -1);
 }  // namespace ttml::metal
