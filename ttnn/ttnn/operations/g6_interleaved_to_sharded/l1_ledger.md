@@ -29,7 +29,8 @@ Audit notes:
 | `shard_tile_rows`, `shard_tile_cols` | `shard_shape / 32` | `shard_tile_rows * shard_tile_cols * tile_bytes ≤ L1_BUDGET_BYTES = 1347776` | `validate()` BB-05 check (ValueError otherwise); production: 5 and 4 pages |
 | `block_tile_rows`, `block_tile_cols` | one issuer's rectangle | `≤ shard_tile_rows`, `≤ shard_tile_cols` | `min()` clamps in the host work split |
 | `span_bytes(r)` | bytes read per tile of tile row `r` | `≤ tile_bytes` | regime selection function (op_design.md, Regimes) |
-| `issuers_per_core` | reader kernels per core | {1, 2} | `KNOBS` value set |
+| `issuers_per_core` | reader kernels per core | {1, 2} (default 2) | `KNOBS` value set |
+| `issuer_placement`, `issuer_split`, `bank_stagger` | (RISC, NoC) per issuer; block cut between issuers; column-walk rotation | finite `KNOB_VALUES` sets; `col_rotate < block_tile_cols` | `KNOBS` value set; host `% cols` |
 | `partial_tile_read` | span shape of a partial tile row | {`valid_rows`, `face_rows`, `whole_tile`} | `KNOBS` value set; every span ≤ `tile_bytes` (kernel `static_assert`) |
 
 ## Footprint
@@ -68,5 +69,16 @@ Implemented knob alternatives (same split, no L1 change; p1 device kernel durati
 | `face_rows` (lamp L2) | 10,240 | 10 | 1280 ns | 1121 ns |
 | `whole_tile` | 327,680 | 5 | 1675 ns | 1495 ns |
 
-Read-ablated floor: 543 ns, of which ~450 ns is first-to-last core launch stagger. `face_rows` reaches the
+Refinement 2 (same split, same bytes, no L1 change; 5-call medians on a later, faster-launching session — compare rows within one table only):
+
+| Placement | 1 issuer (old default) | 2 issuers, `even` | 2 issuers, `noc_balanced` (default) | read-ablated |
+|-----------|------------------------|-------------------|-------------------------------------|--------------|
+| p1 (8x4, 5 tiles/owner) | 804 ns | 741 ns | 758 ns (3/2 split, same as even) | 241 ns |
+| (32, 640) on 8x1 (20 tiles/owner) | 979 ns | 1093 ns | 953 ns (18/2) | 145 ns |
+| (32, 640) on 1x8 | 1334 ns | 912–944 ns | 985 ns (2/18) | 174 ns |
+| (33, 5120) on 8x4 (10 tiles/owner) | 1770 ns | 1404–1471 ns | 1486 ns | 246 ns |
+
+`bank_stagger` (on (32, 640) 8x1: 979 → 1023 ns) is flat or worse and stays False.
+
+Read-ablated floor (Phase 0 session): 543 ns, of which ~450 ns is first-to-last core launch stagger. `face_rows` reaches the
 logical byte floor but loses on request count; `valid_rows` stays the default.

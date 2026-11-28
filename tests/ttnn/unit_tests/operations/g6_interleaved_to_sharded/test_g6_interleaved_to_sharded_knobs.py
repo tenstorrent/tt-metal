@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Every value of the KNOBS dict (issuers_per_core: perf lamp L1; partial_tile_read: the
-valid-row span, the two face-row spans of perf lamp L2, the whole tile) is bit exact on the width and
+valid-row span, the two face-row spans of perf lamp L2, the whole tile; issuer_placement,
+issuer_split and bank_stagger: the Refinement 2 issue-path levers) is bit exact on the width and
 height placements, and the host geometry of the span and the issuer split matches op_design.md.
 
 flux58: every tile row is partial (valid-row span). h33_width: tile row 0 full, tile row 1
@@ -87,6 +88,30 @@ def test_knob_values_bit_exact(scenario, issuers_per_core, partial_tile_read, de
     assert plan["partial_tile_read"] == partial_tile_read
 
 
+@SCENARIOS
+@pytest.mark.parametrize("bank_stagger", descriptor.KNOB_VALUES["bank_stagger"])
+@pytest.mark.parametrize("issuer_split", descriptor.KNOB_VALUES["issuer_split"])
+@pytest.mark.parametrize("issuer_placement", descriptor.KNOB_VALUES["issuer_placement"])
+def test_issue_path_knobs_bit_exact(scenario, issuer_placement, issuer_split, bank_stagger, device, monkeypatch):
+    monkeypatch.setitem(descriptor.KNOBS, "issuers_per_core", 2)
+    monkeypatch.setitem(descriptor.KNOBS, "issuer_placement", issuer_placement)
+    monkeypatch.setitem(descriptor.KNOBS, "issuer_split", issuer_split)
+    monkeypatch.setitem(descriptor.KNOBS, "bank_stagger", bank_stagger)
+    ttnn_input, output_config = _run_exact(scenario, device)
+    plan = describe_plan(ttnn_input, output_config)
+    assert (plan["issuer_placement"], plan["issuer_split"], plan["bank_stagger"]) == (
+        issuer_placement,
+        issuer_split,
+        bank_stagger,
+    )
+
+
+def test_one_issuer_bank_stagger_bit_exact(device, monkeypatch):
+    monkeypatch.setitem(descriptor.KNOBS, "issuers_per_core", 1)
+    monkeypatch.setitem(descriptor.KNOBS, "bank_stagger", True)
+    _run_exact(FLUX_58_640, device)
+
+
 # h_rem -> (valid_rows spans, face_rows spans), as (offset, bytes) pairs; whole_tile is always [(0, 2048)].
 SPANS = {
     0: ([(0, 2048)], [(0, 2048)]),
@@ -149,3 +174,35 @@ def test_partial_spans(h_rem):
 )
 def test_issuer_blocks(rows, cols, issuers, expected):
     assert descriptor.issuer_blocks(rows, cols, issuers) == expected
+
+
+@pytest.mark.parametrize(
+    "rows,cols,weights,expected",
+    [
+        (1, 5, [2 / 3, 1 / 3], [(0, 0, 1, 3), (0, 3, 1, 2)]),  # p1: 8x4 owners
+        (1, 20, [8 / 9, 1 / 9], [(0, 0, 1, 18), (0, 18, 1, 2)]),  # 8 owners in one row
+        (1, 20, [1 / 9, 8 / 9], [(0, 0, 1, 2), (0, 2, 1, 18)]),  # 8 owners in one column
+        (3, 1, [1 / 2, 1 / 2], [(0, 0, 2, 1), (2, 0, 1, 1)]),
+        (1, 1, [0.9, 0.1], [(0, 0, 1, 1), (1, 0, 0, 1)]),
+    ],
+)
+def test_issuer_blocks_weighted(rows, cols, weights, expected):
+    assert descriptor.issuer_blocks(rows, cols, 2, weights) == expected
+
+
+@pytest.mark.parametrize(
+    "owners,nocs,expected",
+    [
+        ([(x, y) for y in range(4) for x in range(8)], [0, 1], [8 / 12, 4 / 12]),
+        ([(x, 0) for x in range(8)], [0, 1], [8 / 9, 1 / 9]),
+        ([(0, y) for y in range(8)], [1, 0], [8 / 9, 1 / 9]),
+        ([(0, 0)], [0, 1], [1 / 2, 1 / 2]),
+        ([(x, 0) for x in range(8)], [0], None),
+    ],
+)
+def test_noc_weights(owners, nocs, expected):
+    assert (
+        descriptor.noc_weights(owners, nocs) == pytest.approx(expected)
+        if expected
+        else (descriptor.noc_weights(owners, nocs) is None)
+    )

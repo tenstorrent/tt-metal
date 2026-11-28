@@ -23,7 +23,10 @@ void kernel_main() {
     constexpr uint32_t partial_span2_offset = get_compile_time_arg_val(5);
     constexpr uint32_t partial_span2_bytes = get_compile_time_arg_val(6);
     constexpr uint8_t issuer_noc = get_compile_time_arg_val(7);
-    constexpr auto input_args = TensorAccessorArgs<8>();
+    // bank_stagger: each tile row's column walk starts at col_rotate and wraps (a rotation of the
+    // same pages and slots), so the owners' first reads spread over the DRAM banks.
+    constexpr bool bank_stagger = get_compile_time_arg_val(8) != 0;
+    constexpr auto input_args = TensorAccessorArgs<9>();
 
     // One-packet issue path: a span longer than one burst would be truncated.
     static_assert(tile_bytes <= NOC_MAX_BURST_SIZE, "a tile page must fit one NoC packet");
@@ -42,6 +45,7 @@ void kernel_main() {
         const uint32_t block_tile_cols = get_arg_val<uint32_t>(3);
         const uint32_t block_slot_begin = get_arg_val<uint32_t>(4);    // shard slot of the block's first tile
         const uint32_t row_in_image_begin = get_arg_val<uint32_t>(5);  // block_row_begin mod image_tile_rows
+        [[maybe_unused]] const uint32_t col_rotate = bank_stagger ? get_arg_val<uint32_t>(6) : 0;
 
         [[maybe_unused]] const auto input = TensorAccessor(input_args, input_base, tile_bytes);
 
@@ -54,6 +58,12 @@ void kernel_main() {
             [[maybe_unused]] const uint32_t span_bytes = partial_row ? partial_span_bytes : tile_bytes;
             uint32_t page = row_page;
             uint32_t slot_addr = row_slot_addr;
+            [[maybe_unused]] uint32_t col = 0;
+            if constexpr (bank_stagger) {
+                col = col_rotate;
+                page += col_rotate;
+                slot_addr += col_rotate * tile_bytes;
+            }
             for (uint32_t c = 0; c < block_tile_cols; ++c) {
 #ifndef G6I2S_ABLATE_READS
                 const uint64_t page_noc_addr = input.get_noc_addr(page, 0, issuer_noc);
@@ -70,6 +80,13 @@ void kernel_main() {
 #endif
                 ++page;
                 slot_addr += tile_bytes;
+                if constexpr (bank_stagger) {
+                    if (++col == block_tile_cols) {  // wrap to the row's first column
+                        col = 0;
+                        page -= block_tile_cols;
+                        slot_addr -= block_tile_cols * tile_bytes;
+                    }
+                }
             }
             row_page += tensor_tile_cols;
             row_slot_addr += shard_tile_cols * tile_bytes;

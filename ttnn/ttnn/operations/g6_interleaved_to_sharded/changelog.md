@@ -37,3 +37,43 @@
 - **Tests added**:
   - `test_g6_interleaved_to_sharded.py`: 4 `test_placement` cases (multi-image COL_MAJOR height, partial last height shard, 2 rank-4 width) and `test_plan_report_height_map` (shard `s` on `G[s]`, idle cores past the last shard, short last block);
   - `test_g6_interleaved_to_sharded_knobs.py`: the 4-core `(2,1,33,128)` height scenario, bit-exact on all 6 `issuers_per_core x partial_tile_read` values.
+
+## Refinement 2 — Speed up the perf-flagged FLUX #58 profile
+- **Date**: 2026-11-28
+- **What was done**: Perf refinement on the issue path. One kernel source, still one dispatch.
+  - **Diagnosis** (p1, timing-only experiments, not committed):
+    - The issue loop is CPU-bound at ~44 ns per read: ~20 ns of interleaved address math, the rest NIU register writes. Dropping the command-buffer poll saved only 27 ns.
+    - Kernel-start times on BRISC and NCRISC are equal, so moving the single issuer to the other RISC buys nothing.
+    - The stateful one-packet API saves nothing here: every page sits on a different DRAM bank, so every read must rewrite the coordinate.
+  - **Lever 1, `split_reader`: default `issuers_per_core` 1 → 2.**
+  - **Lever 2, `noc_placement`:**
+    - New knob `issuer_placement`: four (RISC, NoC) orders, both issuers always on different RISCs and NoCs.
+    - New knob `issuer_split`: `even` or `noc_balanced` (default). Measured:
+      - NOC0 read responses share a grid column. 8 owners stacked in one column: 1 issuer on NOC0 takes 1334 ns.
+      - NOC1 read responses share a grid row. 8 owners in one row: an even NOC0/NOC1 split takes 1093 ns, worse than 1 issuer at 979 ns.
+    - `noc_balanced` therefore gives NOC0 `C/(R+C)` of each block (R / C = most owners in one grid column / row). p1 → 3/2, the 8x1 row → 18/2, the 1x8 column → 2/18.
+  - **Lever 3, `bank_stagger`:** new knob (CT switch + per-issuer `col_rotate` RT arg). It rotates each tile row's column walk so the first page sits on bank `shard mod n_banks`. Measured flat/worse (on (32, 640): 979 → 1023 ns), so it stays parked at the byte-identical default False.
+  - **Reused:** the reader kernel, `issuer_blocks()`, `owner_block()`, the cache-keyed `KNOBS` dict.
+  - **Added:** the `ISSUER_PLACEMENTS` table, `noc_weights()`, a weighted `_split()`, and the `bank_stagger` CT switch and RT arg.
+- **Perf** (profiled `DEVICE KERNEL DURATION`, 5-call medians, same session; this session launches faster than Phase 0's, so p1 old default reads 804 ns here vs 1101 ns then):
+
+  | Placement | Old default (1 issuer) | New default (2 issuers, `noc_balanced`) | Change |
+  |---|---|---|---|
+  | p1 ROW_MAJOR | 804 ns | 758 ns | −5.7% (even split, same 3/2: 741 ns) |
+  | (32, 640) 8x1 | 979 ns | 953 ns | −2.7% (no regression; even split would be +12%) |
+  | (32, 640) 1x8 | 1334 ns | 985 ns | −26% |
+  | (33, 5120) regime pin | 1770 ns | 1486 ns | −16% |
+
+  Unprofiled trace replay, p1, 200 calls captured: 2708/2717 ns per call (1 issuer) vs 2719/2721 ns (new default). That is the same within 0.4%: back-to-back replay is dispatch-bound and hides the ~50 ns kernel gain, but shows no RB-053 regression (`probes/probe_012.py`).
+- **Accuracy achieved**: bit-exact (PCC=1.0, relative RMS=0) with NaN-poisoned padding, on every `issuer_placement x issuer_split x bank_stagger` combination. Shapes: p1 `(1,5120)`, `(33,5120)`, `(1,5120)` on 8 cores `(32,640)`, height `(2,1,33,128)` on 4 cores.
+- **Golden test progress**: 13/13 passing (6 test_op / test_op_loose cells + 7 regression). Unit dir: 207 passed.
+- **Issues encountered**:
+  - Under `--profile`, `-k` with spaces and `::node[id]` selectors are mangled by the tracy wrapper, so run the whole perf file.
+  - One tracy capture crashed and dropped the first test's rows, shifting every label by one variant. Always check the row count (#tests x 5) before reading medians.
+- **Remaining headroom (finding, not a follow-up)**:
+  - On p1 the per-core wall is now ~2-3 reads of issue (~44 ns each) + one DRAM round trip (~320 ns) + launch skew. The read-ablated floor is ~250 ns.
+  - `noc_balanced` over-weights contention on the 1x8 column (985 ns vs 912–944 ns for even), because issue cost per RISC also binds there. A blend of the even and contention weights is the next thing to try; it does not touch p1, whose split is 3/2 either way.
+- **Tests added**:
+  - `test_g6_interleaved_to_sharded_knobs.py`: `test_issue_path_knobs_bit_exact` (4 placements x 2 splits x 2 stagger x 4 scenarios), `test_one_issuer_bank_stagger_bit_exact`, `test_issuer_blocks_weighted`, `test_noc_weights`;
+  - `test_g6_interleaved_to_sharded_perf.py`: scenarios p1 / p1_640 / p1_640_col / h33 and the new knob variants;
+  - `probes/probe_012.py`: unprofiled trace-replay timing.

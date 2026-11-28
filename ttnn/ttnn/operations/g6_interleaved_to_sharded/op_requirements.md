@@ -72,7 +72,7 @@ The kernel and the per-tile-row span predicate stay the same:
 - The acceptance file passes with no xfails.
 - The knob tests pass on the added height scenario.
 
-### [ ] Refinement 2 — Speed up the perf-flagged FLUX #58 profile
+### [x] Refinement 2 — Speed up the perf-flagged FLUX #58 profile
 
 **Type**: perf
 
@@ -118,3 +118,11 @@ No SUPPORTED change.
   - the `(32, 640)` 8-core placement;
   - the `(33, 5120)` regime pin (full + partial tile rows in one block);
   - the height path for correctness, once Refinement 1 is in.
+
+**Outcome**: p1 profiled device kernel duration went 804 → 758 ns (−5.7%, 5-call medians, same session; Phase 0's 1101 ns was a slower-launch session).
+- **Levers.** Default 2 issuers with the new `noc_balanced` split: NOC0 takes `C/(R+C)` of each block, because NOC0 responses share a grid column and NOC1 responses a grid row.
+- **Guards.** (32, 640) 8x1: 979 → 953 ns. 1x8 column: 1334 → 985 ns. (33, 5120): 1770 → 1486 ns. All bit-exact; golden 13/13.
+- **Trace replay.** Unprofiled replay is unchanged at ~2.71 µs per call (dispatch-bound).
+- **`bank_stagger`.** Built, measured flat/worse, parked at False.
+- **What binds now.** Per-RISC issue at ~44 ns/read (CPU: address math + NIU register writes; the poll is only ~5 ns/read), plus one DRAM round trip, plus launch skew.
+- **Next to try.** Blend the even and contention weights; the 1x8 column is 985 ns against 912 ns for an even split. Not done because it does not move p1, whose split is 3/2 either way.
