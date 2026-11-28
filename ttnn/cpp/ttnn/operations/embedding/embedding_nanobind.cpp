@@ -29,7 +29,7 @@ void py_module(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             padding_idx (int, optional): the padding token. Default to `None`.
-            layout (ttnn.Layout): the layout of the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            layout (ttnn.Layout, optional): the layout of the output tensor. Defaults to `None`, which uses the layout of `weight`. A `dtype` different from the weight dtype requires a `ttnn.TILE_LAYOUT` output.
             embeddings_type (ttnn.EmbeddingsType): the type of embeddings. Defaults to `ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC`.
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
             runtime_rows (bool, optional): with a TILE_LAYOUT output and an interleaved output and weight table, derive the per-core rows on device so one program serves every index length and table row count (an interleaved TILE_LAYOUT table is then converted by the native untilize the same way). Defaults to `False`.

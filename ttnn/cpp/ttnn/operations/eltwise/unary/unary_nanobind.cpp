@@ -1849,7 +1849,15 @@ void py_module(nb::module_& mod) {
         R"doc(System memory is not supported.)doc",
         R"doc(\mathrm{output\_tensor}_i = \max(\mathrm{input\_tensor}_i, \verb|lower_limit|))doc");
     bind_unary_operation_with_float_parameter<"rpow", &ttnn::rpow>(
-        mod, "exponent", "exponent value. Non-positive values are not supported.", "");
+        mod,
+        "exponent",
+        "the scalar value, which is the base of the power: output = scalar ** input_tensor, so the input tensor is the "
+        "exponent. A zero or negative scalar follows pow semantics: a negative "
+        "base with a non-integer exponent gives NaN",
+        "Raises the scalar (passed as `exponent`) to the power of each element of :attr:`input_tensor`.",
+        "BFLOAT16",
+        "",
+        R"doc(\mathrm{output\_tensor}_i = \mathrm{scalar}^{\mathrm{input\_tensor}_i})doc");
     bind_unary_operation_with_float_parameter_default<"celu", &ttnn::celu>(
         mod, "alpha", "The alpha parameter for the CELU function", 1.0f, "", R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     // The up half of Moonshot's SiTU activation. No default beta: it is a model
