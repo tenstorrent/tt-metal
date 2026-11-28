@@ -70,6 +70,9 @@ inline void _init_rsqrt_() {
     }
 }
 
+// Whether BF16 DEST runs the generated rsqrt kernel as one call over the whole tile.
+inline constexpr bool rsqrt_bf16_whole_tile = false;
+
 /**
  * @brief Compute the reciprocal square root (1/sqrt(x)) in-place over a Dest tile.
  *
