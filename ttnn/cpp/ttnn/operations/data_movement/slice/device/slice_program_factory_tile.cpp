@@ -98,6 +98,17 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input, args.slice_start);
 
+    // A begin row inside a tile: output row r of a tile comes from row r + row_shift of the input tile the walk is on,
+    // or of the tile below it, so the reader stages both and recombines them. tile_rows_left is how many input tile
+    // rows the walk can reach from its first one; rows past them are written as zeros.
+    const uint32_t row_shift = args.slice_start[-2] % TILE_HEIGHT;
+    const uint32_t tile_rows_left = num_total_Yt - args.slice_start[-2] / TILE_HEIGHT;
+    ScratchpadSpec tile_pair_scratch{
+        .unique_id = TILE_PAIR,
+        // Unused when row_shift is 0, but the kernel always binds it.
+        .size_per_node = row_shift != 0 ? 2 * single_tile_size : static_cast<uint32_t>(sizeof(uint32_t)),
+    };
+
     KernelSpec reader{
         .unique_id = TILE_READER,
         .source =
@@ -117,6 +128,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .scratchpad_spec_name = TILE_ID_PER_DIM,
                     .accessor_name = "id_per_dim",
                 },
+                ScratchpadBinding{
+                    .scratchpad_spec_name = TILE_PAIR,
+                    .accessor_name = "tile_pair",
+                },
             },
         .tensor_bindings =
             {
@@ -125,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "src",
                 },
             },
-        .compile_time_args = {{"num_dims", num_dims}},
+        .compile_time_args = {{"num_dims", num_dims}, {"row_shift", row_shift}, {"tile_rows_left", tile_rows_left}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"start_id", "num_tiles"},
@@ -215,7 +230,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .name = "slice_tile",
         .kernels = {std::move(reader), std::move(writer)},
         .dataflow_buffers = {std::move(dfb_in)},
-        .scratchpads = {std::move(id_per_dim_scratch)},
+        .scratchpads = {std::move(id_per_dim_scratch), std::move(tile_pair_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
