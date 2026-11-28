@@ -397,6 +397,7 @@ Note:
     - ``alpha.shape == beta.shape``; both may only have non-1 size on the last dimension, which must equal ``input_tensor.shape[-1]``.
 
 Example:
+    >>> input_tensor = ttnn.from_torch(torch.ones(1, 1, 48, 48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     >>> alpha = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     >>> beta = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     >>> output = ttnn.snake_beta(input_tensor, alpha, beta)

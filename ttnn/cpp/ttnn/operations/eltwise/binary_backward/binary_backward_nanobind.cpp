@@ -241,7 +241,7 @@ void bind_binary_backward_bias_gelu(
                 - `Accurate`: piecewise-CDF (BF16) or FP32-erf derivative.
                 - `Tanh`: derivative of the FP32 Hendrycks tanh approximation.
                 - `FastLut`: not supported because no matching backward kernel is available.
-            approximate (string): Legacy approximation mode (`"none"` or `"tanh"`).
+            approximate (string): Legacy approximation mode (`"none"` or `"tanh"`). A separate overload: pass either `variant` or `approximate`, not both; it has no default when used.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`.
 
         Returns:
@@ -859,7 +859,8 @@ void py_module(nb::module_& module) {
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor or scalar.
+            input_tensor_b (ttnn.Tensor): the divisor tensor (tensor overload).
+            scalar (float): the divisor (scalar overload, passed instead of input_tensor_b).
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -905,7 +906,8 @@ void py_module(nb::module_& module) {
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor or scalar.
+            input_tensor_b (ttnn.Tensor): the divisor tensor (tensor overload).
+            scalar (float): the divisor (scalar overload, passed instead of input_tensor_b).
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
