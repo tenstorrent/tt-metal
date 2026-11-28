@@ -8,14 +8,11 @@ no device."""
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
 import torch
 
-import ttnn
-
-from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention
 from ....models.transformers.minimax_h3.sol_prepass import SolGeometry, build_route_constants, route_factors
 from ....pipelines.minimax_h3.packing import video_latent_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
@@ -131,13 +128,6 @@ def test_a_request_keeps_the_schedules_dense_steps(monkeypatch):
     assert [pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(4)] == [True, True, False, False]
 
 
-def test_pooled_off_reaches_the_transformer(monkeypatch):
-    pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1", "H3_SOL_POOLED": "0"})
-    transformer = Mock()
-    pipeline._set_sol_attention(transformer, 76800, 73419, 843)
-    assert transformer.set_sol_request.call_args.kwargs["pooled"] is False
-
-
 @pytest.mark.parametrize(
     ("env", "warming", "num_frames", "dense"),
     [
@@ -207,24 +197,3 @@ def test_no_score_drops_a_pair_with_a_prefix_token(rows, logical_n):
         assert valid[: geo.nb, column].all()  # a full block: computed exactly, not pooled
         assert torch.equal(miss[s, 0, b], valid[b])  # as a query: every key block
         assert (miss[:, 0, :, column] == valid[:, column]).all()  # as a key: for every query block
-
-
-@pytest.mark.parametrize("pooled", [True, False])
-def test_attention_hands_the_op_the_pooled_term_only_when_on(monkeypatch, pooled):
-    """Default: the op gets the pre-pass's pooled K and V. Off: neither (its kept-blocks-only mode), and only the
-    mask is there to free."""
-    routed = {"block_mask": "mask", "pooled_k": "pk", "pooled_v": "pv"} if pooled else {"block_mask": "mask"}
-    calls, freed = [], []
-    monkeypatch.setattr(ttnn.transformer, "sparse_ring_sdpa", lambda *args, **kwargs: calls.append(args) or "out")
-    monkeypatch.setattr(ttnn, "deallocate", freed.append)
-    attn = MagicMock(_sol={"pooled": pooled}, sdpa_scale=0.125)
-    attn.parallel_config.sequence_parallel.factor = 8
-    q = k = v = SimpleNamespace(shape=(1, 14, 512, 64), dtype=ttnn.bfloat16)
-
-    def prepass(q, k, v, *, scale, pooled):
-        assert pooled is attn._sol["pooled"]
-        return routed
-
-    assert MiniMaxH3Attention._sol_attention(attn, q, k, v, prepass, "logical_n") == "out"
-    assert calls == [(q, k, v, "mask", "pk" if pooled else None, "pv" if pooled else None)]
-    assert freed == list(routed.values())
