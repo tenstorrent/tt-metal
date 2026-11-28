@@ -14,9 +14,14 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_sharded_to_interleaved_program_descriptor import DEFAULT_KNOBS, build_plan, cached_plan, get_program
-
-TILE = 32
+from .g6_sharded_to_interleaved_program_descriptor import (
+    DEFAULT_KNOBS,
+    TILE,
+    build_plan,
+    cached_plan,
+    lookup_program,
+    store_program,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +156,7 @@ def validate(input_tensor, memory_config):
 
 
 def _dispatch(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+    key, program, plan = lookup_program(input_tensor, memory_config, knobs)
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,
@@ -158,7 +164,8 @@ def _dispatch(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
         input_tensor.device(),
         memory_config,
     )
-    program = get_program(input_tensor, output_tensor, memory_config, knobs)
+    if program is None:
+        program = store_program(key, input_tensor, output_tensor, plan)
     return ttnn.generic_op([input_tensor, output_tensor], program.bind(input_tensor, output_tensor))
 
 

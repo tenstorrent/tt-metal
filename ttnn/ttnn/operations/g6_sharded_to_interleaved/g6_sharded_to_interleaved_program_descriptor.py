@@ -24,7 +24,6 @@ CB_INPUT_SHARD = 0
 
 # Blocking-model knobs (op_design.md -> Blocking Model). Each is defined once here; every dependent
 # quantity (lane rectangles, block extents, kernel instances, RT args) is derived from them.
-#
 
 
 @dataclass(frozen=True)
@@ -116,7 +115,9 @@ def build_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
             f"tensor is {tensor_tile_rows}"
         )
     if not 1 <= knobs.num_write_lanes <= len(_LANE_CONFIGS):
-        raise RuntimeError(f"g6_sharded_to_interleaved: num_write_lanes={knobs.num_write_lanes} not in [1, 2]")
+        raise RuntimeError(
+            f"g6_sharded_to_interleaved: num_write_lanes={knobs.num_write_lanes} not in [1, {len(_LANE_CONFIGS)}]"
+        )
     for cap in (knobs.block_tile_rows, knobs.block_tile_cols):
         if cap is not None and cap < 1:
             raise RuntimeError(f"g6_sharded_to_interleaved: block extent {cap} < 1")
@@ -194,9 +195,11 @@ def _block_extent(cap, extent):
 
 def create_program_descriptor(input_tensor, output_tensor, plan):
     """ProgramDescriptor for `plan`. Addresses in it belong to this call's tensors; see `CachedProgram.bind`."""
-    if output_tensor.buffer_page_size() != plan.page_size:
+    # The accessor strides banks by `page_size`, so the output's aligned page must equal it exactly.
+    out_pages = (output_tensor.buffer_page_size(), output_tensor.buffer_aligned_page_size())
+    if out_pages != (plan.page_size, plan.page_size):
         raise RuntimeError(
-            f"g6_sharded_to_interleaved: output page {output_tensor.buffer_page_size()} B != input page {plan.page_size} B"
+            f"g6_sharded_to_interleaved: output page / aligned page {out_pages} B != input page {plan.page_size} B"
         )
 
     grid = input_tensor.memory_config().shard_spec.grid
@@ -282,14 +285,21 @@ def program_key(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
     )
 
 
-def get_program(input_tensor, output_tensor, memory_config, knobs=DEFAULT_KNOBS):
+def lookup_program(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
+    """(key, cached program or None, plan). On a miss the plan is built and checked against the L1 bound
+    (BB-05) here, so a refused shape is refused before the caller allocates its output."""
     key = program_key(input_tensor, memory_config, knobs)
     cached = _PROGRAMS.get(key)
-    if cached is None:
-        plan = build_plan(input_tensor, memory_config, knobs)
-        _check_l1_budget(plan, input_tensor.device(), memory_config)
-        cached = CachedProgram(plan, create_program_descriptor(input_tensor, output_tensor, plan))
-        _PROGRAMS[key] = cached
+    if cached is not None:
+        return key, cached, cached.plan
+    plan = build_plan(input_tensor, memory_config, knobs)
+    _check_l1_budget(plan, input_tensor.device(), memory_config)
+    return key, None, plan
+
+
+def store_program(key, input_tensor, output_tensor, plan):
+    cached = CachedProgram(plan, create_program_descriptor(input_tensor, output_tensor, plan))
+    _PROGRAMS[key] = cached
     return cached
 
 
