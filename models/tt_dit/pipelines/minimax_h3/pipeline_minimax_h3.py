@@ -96,13 +96,14 @@ from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TI
 from ...models.transformers.minimax_h3.agmm_config import AgmmMode
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
-from ...models.transformers.minimax_h3.step_cache import FirstBlockCache, step_cache_config_from_env
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
+from ...utils.dbcache import DBCacheConfig
+from ...utils.dbcache_runner import DBCache
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.torch_threads import cap_torch_threads
 from ...utils.tracing import StateTensor, Tracer
@@ -205,6 +206,20 @@ def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAUL
 
 
 _DYNAMIC_LENGTH_ENV = "MINIMAX_H3_DYNAMIC_LENGTH"
+_STEP_CACHE_ENV = "MINIMAX_H3_STEP_CACHE"
+
+
+def _step_cache_threshold() -> float:
+    """MINIMAX_H3_STEP_CACHE: a step reuses the last computed step's blocks 1.. while the relative L1 change of its
+    first block's residual stays below this. Unset or 0 turns the cache off."""
+    raw = os.environ.get(_STEP_CACHE_ENV, "").strip() or "0"
+    try:
+        threshold = float(raw)
+    except ValueError:
+        threshold = -1.0
+    if not 0.0 <= threshold < float("inf"):
+        raise ValueError(f"{_STEP_CACHE_ENV}={raw!r}: expected one threshold such as 0.08807, or 0 for off")
+    return threshold
 
 
 def _requested_dynamic_length(dynamic_length: bool | None, default: bool) -> tuple[bool, bool]:
@@ -3416,8 +3431,7 @@ class MiniMaxH3Pipeline:
         transformer = self._transformer
         if transformer is None:
             return False
-        run_blocks = type(transformer).run_blocks
-        tracers = run_blocks._tracers_keyed.get(transformer, {})
+        tracers = type(transformer).block_stack._tracers_keyed.get(transformer, {})
         return any(key[0] == rung and tracer.trace_captured for key, tracer in tracers.items())
 
     def _timestep_inputs(
@@ -3684,19 +3698,26 @@ class MiniMaxH3Pipeline:
         video_rows = lowres_handoff_rows(lowres_rows, video_rows, float(scheduler.sigmas[steps]), *video_shape)
         return video_rows, audio_rows, scheduler.window(steps, total), audio_scheduler.window(steps, total)
 
-    def _step_cache(self, rung: int, sequence_length: int) -> FirstBlockCache | None:
-        """This denoise's First Block Cache when MINIMAX_H3_STEP_CACHE turns it on, else None. Bucketed untraced
-        denoise only: the cache decides each step from a host readback, and its row mask is one rung's shape."""
-        config = step_cache_config_from_env()
-        if config is None:
-            return None
+    def _step_cache(self, transformer, rung: int, sequence_length: int) -> tuple[DBCache | None, ttnn.Tensor | None]:
+        """This denoise's First Block Cache and its row mask (1 on the sequence's rows, 0 on the rung's padding, which
+        stays out of the change test) when MINIMAX_H3_STEP_CACHE turns it on, else `(None, None)`."""
+        threshold = _step_cache_threshold()
+        if threshold == 0.0:
+            return None, None
         if self.trace_denoise or self.dynamic_length:
             self._log("step cache: off, it serves the bucketed untraced denoise only")
-            return None
+            return None, None
+        config = DBCacheConfig(
+            Fn_compute_blocks=1,
+            Bn_compute_blocks=0,
+            residual_diff_threshold=threshold,
+            max_warmup_steps=0,
+            max_continuous_cached_steps=-1,
+        )
         valid = torch.zeros(1, 1, rung, 1)
         valid[:, :, :sequence_length] = 1.0
         valid_rows = from_torch(valid, device=self.mesh_device, mesh_axes=[None, None, self.sp_axis, None])
-        return FirstBlockCache(config, mesh_device=self.mesh_device, valid_rows=valid_rows)
+        return DBCache([transformer], config, devices=[self.mesh_device], name="minimax_h3"), valid_rows
 
     def _denoise(
         self,
@@ -3995,7 +4016,14 @@ class MiniMaxH3Pipeline:
             if not (self.use_persistent_ccl_buffers or self.trace_denoise)
             else nullcontext()
         )
-        step_cache = self._step_cache(rung, layout.sequence_length)
+        step_cache, valid_rows = self._step_cache(transformer, rung, layout.sequence_length)
+
+        def forward(**inputs):
+            if step_cache is None:
+                return transformer(**inputs)
+            step_cache.start(0, diff_mask=valid_rows, **inputs)
+            return step_cache.finish()[0]
+
         with transient:
             try:
                 if precompute_adaln_modulation:
@@ -4025,7 +4053,7 @@ class MiniMaxH3Pipeline:
                         self._is_sol_dense_step(i, first_stage, num_latent_frames=num_latent_frames)
                     )
                     try:
-                        video_velocity, audio_velocity = transformer(
+                        video_velocity, audio_velocity = forward(
                             video_1BVC=self._tt_video.value,
                             audio_1BAC=self._tt_audio.value,
                             assembly_indices=state.assembly_idx.value,
@@ -4043,7 +4071,6 @@ class MiniMaxH3Pipeline:
                             **adaln_selector_kwargs(),
                             **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                             **(modulation_row_indices(i) if precompute_adaln_modulation else {}),
-                            **({} if step_cache is None else {"step_cache": step_cache}),
                         )
                     except RuntimeError as err:
                         if "Out of Memory" in str(err):
@@ -4073,10 +4100,10 @@ class MiniMaxH3Pipeline:
                     transformer.release_modulation()
                 if step_cache is not None:
                     step_cache.release()
-                    ttnn.deallocate(step_cache.valid_rows)
+                    ttnn.deallocate(valid_rows)
             state.warm = True
             if step_cache is not None:
-                self._log(step_cache.summary())
+                self._log(f"step cache: reused {len(step_cache.cached_steps)} of {len(timesteps)} steps")
             steady_steps = max(len(timesteps) - 1, 1)
             self._log(
                 f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "

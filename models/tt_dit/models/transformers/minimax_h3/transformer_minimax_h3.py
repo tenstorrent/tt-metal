@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import torch
 
@@ -21,7 +22,6 @@ from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .agmm_config import AgmmMode
 from .sol_prepass import SolGeometry, SolRouteConstants
-from .step_cache import FirstBlockCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import (
     MODALITY_NUM,
@@ -174,6 +174,23 @@ class MiniMaxH3AdaLayerNormOut(Module):
 
         shift, scale = gather(tables[0]), gather(tables[1])
         return ttnn.add(ttnn.mul(self.norm(hidden), ttnn.add(scale, 1.0)), shift)
+
+
+class H3Carry(NamedTuple):
+    """What `prologue` hands the later stages of a forward."""
+
+    # `block_stack`'s arguments after `hidden`, as `forward` passes them.
+    stack_args: tuple
+    stack_kwargs: dict
+    trace_key: tuple
+    timestep_idx: ttnn.Tensor
+    video_out_indices: ttnn.Tensor
+    audio_out_indices: ttnn.Tensor
+
+
+def _as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
+    t = ttnn.reshape(t, (1, t.shape[-1]))
+    return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
 
 class MiniMaxH3Transformer3DModel(Module):
@@ -473,7 +490,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 (1, 1, total_rows, width), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
             )
 
-    def forward(
+    def prologue(
         self,
         *,
         video_1BVC: ttnn.Tensor,
@@ -494,9 +511,10 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_expanded_indices: ttnn.Tensor | None = None,
         adaln_step_selector: ttnn.Tensor | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
-        step_cache: FirstBlockCache | None = None,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    ) -> tuple[ttnn.Tensor, H3Carry]:
         """
+        `forward`'s inputs to the packed hidden state the blocks take and what the later stages need.
+
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
 
         video_1BVC: [1, 1, V_cap, in_channels * prod(patch_size)], replicated on SP and TP. Target rows only.
@@ -521,16 +539,11 @@ class MiniMaxH3Transformer3DModel(Module):
             step's modulation tables from the resident schedule tables instead of projecting `temb`. Keys the trace.
         modulation_row_indices: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection, one
             per slot: the blocks take their adaLN tables from there instead of projecting `temb` (the untraced path).
-        step_cache: this denoise's First Block Cache, which decides per step whether blocks 1.. run (untraced only).
-
-        Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
         tile = ttnn.TILE_SIZE
         alignment = self.sp_factor * tile
         if pad_to % alignment:
             raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
-        if step_cache is not None and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
-            raise RuntimeError("the step cache decides from a host readback, so it runs untraced only")
         if self.dynamic_length and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
             raise RuntimeError(
                 "dynamic_length is eager-only: the row count is a runtime argument, so a trace captured now would "
@@ -557,10 +570,6 @@ class MiniMaxH3Transformer3DModel(Module):
         if adaln_step_selector is not None and self._adaln_tables is None:
             raise RuntimeError("adaln_step_selector needs the resident AdaLN tables: allocate_adaln_tables first")
 
-        def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
-            t = ttnn.reshape(t, (1, t.shape[-1]))
-            return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
-
         audio_rows = ttnn.to_layout(self.audio_proj_in(audio_1BAC), ttnn.ROW_MAJOR_LAYOUT)
         video_rows = ttnn.to_layout(self.proj_in(video_1BVC), ttnn.ROW_MAJOR_LAYOUT)
         total_rows = self._static_prefix_rows + audio_rows.shape[2] + video_rows.shape[2]
@@ -579,7 +588,10 @@ class MiniMaxH3Transformer3DModel(Module):
         # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
         # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
         hidden = ttnn.embedding(
-            as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+            _as_indices(assembly_indices),
+            self._source_table,
+            layout=ttnn.TILE_LAYOUT,
+            runtime_rows=self.dynamic_length,
         )
         hidden = ttnn.unsqueeze(hidden, 0)
         if not indices_already_sharded:
@@ -589,17 +601,17 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
-        adaln_idx = as_indices(adaln_indices)
+        adaln_idx = _as_indices(adaln_indices)
         if traced:
             # `norm_out` reads it eagerly after the traced block loop, but a replay may overwrite any buffer
             # allocated after its capture, so the traced path keeps one persistent copy per length.
             ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
-            ts_state.update(as_indices(timestep_indices), traced=True)
+            ts_state.update(_as_indices(timestep_indices), traced=True)
             timestep_idx = ts_state.value
         else:
             # Eager (every dynamic-length forward): nothing replays, and a per-length copy would pin one
             # buffer per served length.
-            timestep_idx = as_indices(timestep_indices)
+            timestep_idx = _as_indices(timestep_indices)
 
         # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
@@ -611,34 +623,43 @@ class MiniMaxH3Transformer3DModel(Module):
             eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
         eye = eye_state.value
 
-        hidden = self.run_blocks(
-            hidden,
-            logical_n,
-            temb,
-            adaln_idx,
-            rope_cos,
-            rope_sin,
-            eye=eye,
-            adaln_tile_map=adaln_tile_map,
-            adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
-            adaln_selector=adaln_step_selector,
-            traced=traced,
-            tracer_trace_key=(
-                pad_to,
-                adaln_tile_map is not None,
-                adaln_step_selector is not None,
-                self._sol_dense_step,
-            ),
-            **(
-                {} if modulation_row_indices is None else {"modulation_row_indices": as_indices(modulation_row_indices)}
-            ),
-            **({} if step_cache is None else {"step_cache": step_cache}),
+        carry = H3Carry(
+            stack_args=(logical_n, temb, adaln_idx, rope_cos, rope_sin),
+            stack_kwargs={
+                "eye": eye,
+                "adaln_tile_map": adaln_tile_map,
+                "adaln_expanded_indices": (
+                    _as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None
+                ),
+                "adaln_selector": adaln_step_selector,
+                **(
+                    {}
+                    if modulation_row_indices is None
+                    else {"modulation_row_indices": _as_indices(modulation_row_indices)}
+                ),
+            },
+            trace_key=(pad_to, adaln_tile_map is not None, adaln_step_selector is not None, self._sol_dense_step),
+            timestep_idx=timestep_idx,
+            video_out_indices=video_out_indices,
+            audio_out_indices=audio_out_indices,
         )
+        return hidden, carry
 
+    def forward(self, *, traced: bool = False, **inputs) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """`prologue`'s inputs to `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target
+        rows only. With `traced` the block stack runs as one trace."""
+        hidden, carry = self.prologue(traced=traced, **inputs)
+        hidden = self.block_stack(
+            hidden, *carry.stack_args, **carry.stack_kwargs, traced=traced, tracer_trace_key=carry.trace_key
+        )
+        return self.epilogue(hidden, carry)
+
+    def epilogue(self, hidden: ttnn.Tensor, carry: H3Carry, /) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The blocks' output to `forward`'s result."""
         hidden = self.norm_out(
             hidden,
-            temb,
-            timestep_idx,
+            carry.stack_args[1],  # temb
+            carry.timestep_idx,
         )
         ag_kwargs = {"num_workers_per_link": _DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
         if self.tp_factor > 1:
@@ -660,11 +681,11 @@ class MiniMaxH3Transformer3DModel(Module):
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
             # runtime_rows keeps the gather's and the TILE table's untilize's programs free of the request's length.
             gathered = ttnn.embedding(
-                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+                _as_indices(indices), table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
             )
             return ttnn.unsqueeze(gathered, 0)
 
-        return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
+        return select(video_all, carry.video_out_indices), select(audio_all, carry.audio_out_indices)
 
     def _temb(self, timestep: ttnn.Tensor, endpoint_timestep: ttnn.Tensor | None) -> ttnn.Tensor:
         # One temb for main's callers and ours: `time_embedding` also takes the ComfyUI curve embedding.
@@ -705,7 +726,7 @@ class MiniMaxH3Transformer3DModel(Module):
             block.release_modulation()
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
-    def run_blocks(
+    def block_stack(
         self,
         hidden: ttnn.Tensor,
         logical_n: ttnn.Tensor,
@@ -718,19 +739,64 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_expanded_indices: ttnn.Tensor | None = None,
         adaln_selector: ttnn.Tensor | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
-        step_cache: FirstBlockCache | None = None,
+    ) -> ttnn.Tensor:
+        """Every block: what `forward` captures as one trace."""
+        return self._block_range(
+            0,
+            self.num_blocks,
+            hidden,
+            logical_n,
+            temb,
+            adaln_indices,
+            rope_cos,
+            rope_sin,
+            eye,
+            adaln_tile_map,
+            adaln_expanded_indices,
+            adaln_selector,
+            modulation_row_indices,
+        )
+
+    @property
+    def num_blocks(self) -> int:
+        return len(self.transformer_blocks)
+
+    def run_blocks(
+        self, hidden: ttnn.Tensor, carry: H3Carry, /, *, start: int, end: int
+    ) -> tuple[ttnn.Tensor, H3Carry]:
+        """Blocks `[start, end)`, untraced: with `prologue` and `epilogue`, `dbcache_runner.CachedTransformer`."""
+        hidden = self._block_range(start, end, hidden, *carry.stack_args, **carry.stack_kwargs)
+        if end < self.num_blocks:
+            # A block's output may sit in a CCL ping-pong buffer that the later blocks write again.
+            hidden = ttnn.clone(hidden)
+        return hidden, carry
+
+    def _block_range(
+        self,
+        start: int,
+        end: int,
+        hidden: ttnn.Tensor,
+        logical_n: ttnn.Tensor,
+        temb: ttnn.Tensor,
+        adaln_indices: ttnn.Tensor,
+        rope_cos: ttnn.Tensor,
+        rope_sin: ttnn.Tensor,
+        eye: ttnn.Tensor | None,
+        adaln_tile_map: ttnn.Tensor | None,
+        adaln_expanded_indices: ttnn.Tensor | None,
+        adaln_selector: ttnn.Tensor | None,
+        modulation_row_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-
-        def run_block(index: int, hidden: ttnn.Tensor) -> ttnn.Tensor:
+        for index in range(start, end):
             block = self.transformer_blocks[index]
             modulation_tables = (
                 None
                 if adaln_selector is None
                 else block.select_modulation_tables(adaln_selector, self._adaln_tables[index])
             )
-            return block(
+            hidden = block(
                 hidden,
                 logical_n,
                 temb=temb if modulation_row_indices is None else None,
@@ -742,12 +808,6 @@ class MiniMaxH3Transformer3DModel(Module):
                 modulation_tables=modulation_tables,
                 modulation_row_indices=modulation_row_indices,
             )
-
-        if step_cache is None:
-            for index in range(len(self.transformer_blocks)):
-                hidden = run_block(index, hidden)
-        else:
-            hidden = step_cache.run_stack(hidden, run_block, len(self.transformer_blocks))
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
@@ -828,7 +888,7 @@ class MiniMaxH3Transformer3DModel(Module):
         """Run the blocks' ring attention through Sol-Attn for this request shape, or (None) dense again.
 
         The first `dense_layers` blocks stay dense. See `MiniMaxH3Attention.set_sol_request`. A new packed length or
-        sink moves the shared route constants in place, so captured `run_blocks` traces stay valid; the caller
+        sink moves the shared route constants in place, so captured `block_stack` traces stay valid; the caller
         releases them only when tau, `dense_layers` or `pooled` changes.
         """
         constants = None if request is None else self._sol_route_constants(request)
@@ -852,16 +912,16 @@ class MiniMaxH3Transformer3DModel(Module):
     def set_sol_dense_step(self, dense: bool) -> None:
         """Run the next forwards dense (True) or through the Sol-Attn request (False), leaving the request armed.
 
-        The flag is part of `run_blocks`' trace key, so a bucket holds one dense trace and one Sol trace.
+        The flag is part of `block_stack`'s trace key, so a bucket holds one dense trace and one Sol trace.
         """
         self._sol_dense_step = dense
         for block in self.transformer_blocks:
             block.attn._sol["dense_step"] = dense
 
     def release_traces(self) -> None:
-        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
-        run_blocks = type(self).run_blocks
-        tracers = [run_blocks._tracers.get(self), *run_blocks._tracers_keyed.get(self, {}).values()]
+        """Release every captured `block_stack` trace, across all `tracer_trace_key` buckets."""
+        block_stack = type(self).block_stack
+        tracers = [block_stack._tracers.get(self), *block_stack._tracers_keyed.get(self, {}).values()]
         for tracer in tracers:
             if tracer is not None:
                 tracer.release_trace()

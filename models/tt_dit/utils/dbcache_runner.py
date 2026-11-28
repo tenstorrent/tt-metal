@@ -69,6 +69,10 @@ class ResidualForecaster:
         self.prev = [alloc() for _ in range(order + 1)]
         self.reset()
 
+    def release(self) -> None:
+        for tensor in (*self.cur, *self.prev):
+            ttnn.deallocate(tensor)
+
     def reset(self) -> None:
         self.valid_cur = 0  # number of valid entries in `cur` (0 = nothing cached yet)
         self.valid_prev = 0
@@ -186,6 +190,12 @@ class DBCache:
         for runner in self._runners:
             runner.reset()
 
+    def release(self) -> None:
+        """Free every trace and device buffer, for a caller that cannot keep them between runs. The run's
+        ``cached_steps`` and ``diffs`` stay readable; ``reset`` starts the next run."""
+        for runner in self._runners:
+            runner.release()
+
     @property
     def config(self) -> DBCacheConfig:
         return self._context.config
@@ -285,6 +295,17 @@ class _Runner:
         self._pending = None
         for buffers in self._buffers.values():
             buffers.forecaster.reset()
+
+    def release(self) -> None:
+        for traces in self._traces.values():
+            for tracer in traces:
+                tracer.release_trace()
+        for buffers in self._buffers.values():
+            ttnn.deallocate(buffers.prev_fn_residual)
+            buffers.forecaster.release()
+        self._traces.clear()
+        self._buffers.clear()
+        self._current = self._pending = None
 
     @property
     def started(self) -> bool:
