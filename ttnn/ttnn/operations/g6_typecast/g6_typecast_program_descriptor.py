@@ -164,6 +164,48 @@ def create_program_descriptor(input_tensor, output_tensor):
     return _create_tile_program_descriptor(input_tensor, output_tensor)
 
 
+# R1 bank-adjacent placement (Perf 1): up to this many cores per DRAM bank, a bank's cores walk the columns of
+# the bank's row (x = core index mod grid.x: spreads the launch skew); above it they sit side by side from the
+# column the device assigns to the bank. Measured: 1-2 cores/bank spread 5-10% faster, 6-8/bank (F320 49,
+# Q2203 64 tiles) side-by-side 6-8% faster, 4/bank equal.
+PLACE_SPREAD_MAX_PER_BANK = 4
+
+
+def _tile_core_order(device, grid, first_tiles, buffer_type):
+    """R1 core order -> list of CoreCoord (one per contiguous tile range) or None for the default row-major order.
+
+    DRAM, fewer ranges than grid cores: the core of a range whose first tile t lives in DRAM bank t % num_banks
+    sits on the worker row the device names NoC0-optimal for that bank (the reader's DRAM read is ~75 ns shorter
+    from that row; writes on NoC1 showed no row dependence), nearest free core when taken.
+    Carve-outs (measured / meaningless):
+      - the split fills the whole grid: bank rows measured +3..10% slower (Q2188, Q2219, Q2187, Q2209: reads got
+        faster, writes slower) -> default order;
+      - L1 buffers: the DRAM bank table has no meaning (L1 banks are the cores) and (0,0) measured already fast.
+    """
+    n = len(first_tiles)
+    if buffer_type != ttnn.BufferType.DRAM or n >= grid.x * grid.y:
+        return None
+    num_banks = ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
+    table = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    spread = n <= PLACE_SPREAD_MAX_PER_BANK * num_banks
+    used, cores = set(), []
+    for i, t in enumerate(first_tiles):
+        bank_core = table[t % num_banks]
+        x0, y0 = (i % grid.x if spread else bank_core.x), bank_core.y
+        placed = False
+        for y in sorted(range(grid.y), key=lambda y: (abs(y - y0), y)):
+            for x in sorted(range(grid.x), key=lambda x: (abs(x - x0), x)):
+                if (x, y) not in used:
+                    used.add((x, y))
+                    cores.append(ttnn.CoreCoord(x, y))
+                    placed = True
+                    break
+            if placed:
+                break
+        assert placed
+    return cores
+
+
 def _create_tile_program_descriptor(input_tensor, output_tensor):
     device = input_tensor.device()
     shape = tuple(input_tensor.padded_shape)
@@ -185,6 +227,17 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         grid, tensor_tiles, row_wise=True
     )
     core_tiles_max = tiles_g1
+    # Ordered cores, one per contiguous tile range (row-major by default; DRAM bank rows when the split leaves
+    # cores free — Perf 1 bank-adjacent placement).
+    n1 = core_group_1.num_cores() if tiles_g1 else 0
+    n2 = core_group_2.num_cores() if tiles_g2 else 0
+    first_tiles = [k * tiles_g1 for k in range(n1)] + [n1 * tiles_g1 + k * tiles_g2 for k in range(n2)]
+    ordered = _tile_core_order(device, grid, first_tiles, input_tensor.memory_config().buffer_type)
+    if ordered is None:
+        ordered = list(ttnn.corerange_to_cores(core_group_1, row_wise=True)) if n1 else []
+        ordered += list(ttnn.corerange_to_cores(core_group_2, row_wise=True)) if n2 else []
+    else:
+        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ordered])
 
     # ---- block plan (L1 grant includes the op's own L1 output share) ----
     out_l1_bytes_per_bank = 0
@@ -227,14 +280,13 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     start_tile = 0
-    for group, count in ((core_group_1, tiles_g1), (core_group_2, tiles_g2)):
-        if count == 0 or group.num_cores() == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, row_wise=True):
-            reader_rt[core.x][core.y] = [start_tile, count]
-            writer_rt[core.x][core.y] = [start_tile, count]
-            compute_rt[core.x][core.y] = [count]
-            start_tile += count
+    for i, core in enumerate(ordered):
+        count = tiles_g1 if i < n1 else tiles_g2
+        assert start_tile == first_tiles[i]
+        reader_rt[core.x][core.y] = [start_tile, count]
+        writer_rt[core.x][core.y] = [start_tile, count]
+        compute_rt[core.x][core.y] = [count]
+        start_tile += count
     assert start_tile == tensor_tiles
 
     # ---- kernels ----
