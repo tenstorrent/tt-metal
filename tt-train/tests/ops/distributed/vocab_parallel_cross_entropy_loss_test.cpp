@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <random>
+#include <stdexcept>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -759,4 +761,43 @@ TEST_F(ShardedCrossEntropyLossTest, NoneReductionSummedMatchesMean) {
     const float mean_val = mean_xt[0](0, 0, 0, 0);
     const float none_summed = static_cast<float>(xt::sum(none_xt[0])()) / static_cast<float>(B * S);
     EXPECT_NEAR(mean_val, none_summed, 5e-2F);
+}
+
+// The loss takes each device's columns as its own slice of the vocab, so it refuses logits laid out any other way
+// across the TP axis. Replicated logits (from a head that gathers its output) would count the vocab once per device and
+// put the loss log(tp) too high. Logits sharded along the sequence hold no slice of the vocab at all.
+TEST_F(ShardedCrossEntropyLossTest, RefusesLogitsNotShardedAlongTheVocab) {
+    SKIP_FOR_WATCHER();
+
+    using namespace ttml;
+    using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
+    using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t B = 1U, S = 64U, V = 64U;
+
+    // The targets are sharded like the logits' positions, so the shape checks pass and only the layout is refused.
+    auto expect_refused = [&](Placement logits_placement, Placement targets_placement, const std::string& layout) {
+        auto logits_mapper = ttnn::distributed::TensorToMesh::create(
+            *device, {.placements = ttsl::SmallVector<Placement>{Replicate{}, logits_placement}});
+        auto targets_mapper = ttnn::distributed::TensorToMesh::create(
+            *device, {.placements = ttsl::SmallVector<Placement>{Replicate{}, targets_placement}});
+        auto logits = autograd::create_tensor(
+            core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                xt::xarray<float>(xt::zeros<float>({B, 1U, S, V})), device, ttnn::Layout::TILE, &logits_mapper),
+            true);
+        auto targets = autograd::create_tensor(
+            core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+                xt::xarray<uint32_t>(xt::zeros<uint32_t>({B, S})), device, ttnn::Layout::ROW_MAJOR, &targets_mapper),
+            false);
+        try {
+            ops::distributed::vocab_parallel_cross_entropy_loss(logits, targets, /*cluster_axis=*/1U);
+            ADD_FAILURE() << "vocab_parallel_cross_entropy_loss took " << layout << " logits";
+        } catch (const std::runtime_error& error) {
+            EXPECT_NE(std::string(error.what()).find("there they are " + layout), std::string::npos) << error.what();
+        }
+    };
+    expect_refused(Replicate{}, Replicate{}, "replicated");
+    expect_refused(Shard{2}, Shard{1}, "sharded along dim 2");
 }

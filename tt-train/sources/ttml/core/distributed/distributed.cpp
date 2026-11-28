@@ -4,10 +4,13 @@
 
 #include "core/distributed/distributed.hpp"
 
+#include <algorithm>
 #include <core/ttnn_all_includes.hpp>
+#include <optional>
 #include <stdexcept>
 #include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
+#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -19,6 +22,8 @@
 namespace ttml::core::distributed {
 
 namespace {
+
+using Placements = ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>;
 
 // fp32 sums of at least this many elements per device (1 MiB of bf16) go through a reduce-scatter in fp32 and an
 // all-gather in bf16; smaller ones through one fp32 all-reduce. Measured on a Blackhole LoudBox (8x p150b) in 2026-10:
@@ -78,6 +83,72 @@ std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t n
 }
 
 }  // namespace
+
+Placements placements_per_axis(const ttnn::Tensor& value) {
+    const auto* device = value.device();
+    TT_FATAL(
+        device != nullptr,
+        "cannot read the placement per mesh axis of a tensor that is not allocated on a device mesh (a host tensor, "
+        "or a deallocated one): its label is read against the mesh it is on");
+    std::string reason;
+    auto placements =
+        ttnn::operations::ccl::common::uncollapse_placements(value.tensor_topology(), device->shape(), &reason);
+    TT_FATAL(placements.has_value(), "cannot read the tensor's placement per mesh axis: {}", reason);
+    return std::move(*placements);
+}
+
+bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
+    const auto placements = placements_per_axis(value);
+    TT_FATAL(
+        axis < placements.size(),
+        "is_sharded_on_axis: mesh axis {} is out of range for a {}-axis device mesh",
+        axis,
+        placements.size());
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+}
+
+std::optional<int> shard_dim(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, int rank) {
+    const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement);
+    if (shard == nullptr) {
+        return std::nullopt;
+    }
+    return shard->dim < 0 ? shard->dim + rank : shard->dim;
+}
+
+void set_placements_per_axis(
+    ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements) {
+    const auto* device = value.device();
+    TT_FATAL(
+        device != nullptr,
+        "set_placements_per_axis: the tensor is not allocated on a device mesh (a host or deallocated tensor)");
+    const auto mesh_shape = device->shape();
+    TT_FATAL(
+        placements.size() == mesh_shape.dims(),
+        "set_placements_per_axis: {} placements for the {} device mesh",
+        placements.size(),
+        mesh_shape);
+    value.update_tensor_topology(
+        tt::tt_metal::TensorTopology(mesh_shape, placements, value.tensor_topology().mesh_coords()));
+}
+
+void label_grad_like_parameter_shards(const ttnn::Tensor& parameter, ttnn::Tensor& grad) {
+    if (parameter.device() == nullptr || parameter.device()->shape().mesh_size() == 1U) {
+        return;
+    }
+    const auto parameter_placements = placements_per_axis(parameter);
+    std::optional<Placements> placements;
+    for (size_t axis = 0; axis < parameter_placements.size(); ++axis) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(parameter_placements[axis])) {
+            if (!placements) {
+                placements = placements_per_axis(grad);
+            }
+            (*placements)[axis] = parameter_placements[axis];
+        }
+    }
+    if (placements) {
+        set_placements_per_axis(grad, *placements);
+    }
+}
 
 void check_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype) {
     if (reduce_dtype.has_value() && *reduce_dtype != ttnn::DataType::BFLOAT16 &&
@@ -148,29 +219,6 @@ ttnn::Tensor synchronize_tensor(
         result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
     }
     return ttnn::multiply(result, inv_scaler, dtype);
-}
-
-bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
-    const auto* device = value.device();
-    TT_FATAL(
-        device != nullptr,
-        "is_sharded_on_axis: the tensor is not allocated on a device mesh (a host tensor, or a deallocated one); its "
-        "label is read against the mesh it is on");
-    const auto mesh_shape = device->shape();
-    TT_FATAL(
-        axis < mesh_shape.dims(),
-        "is_sharded_on_axis: mesh axis {} is out of range for the {} device mesh",
-        axis,
-        mesh_shape);
-    std::string reason;
-    const auto placements =
-        ttnn::operations::ccl::common::uncollapse_placements(value.tensor_topology(), mesh_shape, &reason);
-    TT_FATAL(
-        placements.has_value(),
-        "is_sharded_on_axis: cannot tell whether the tensor is sharded on mesh axis {}: {}",
-        axis,
-        reason);
-    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>((*placements)[axis]);
 }
 
 namespace {

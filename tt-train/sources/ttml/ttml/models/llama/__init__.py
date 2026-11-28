@@ -12,6 +12,7 @@ from math import sqrt
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import ttnn
 import ttml
 from ttml.common.utils import build_rope_params_from_config
@@ -25,8 +26,11 @@ from ttml.modules import (
     VocabParallelEmbedding,
 )
 
+from ttml.common.utils import round_up_to_tile
+
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
+from ttml.parallel import SEQUENCE_DIM, TPStrategy, mark_partial
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
@@ -52,16 +56,16 @@ def _read_hf_config(path: str | os.PathLike) -> dict:
 class LlamaConfig:
     """Llama model hyper-parameters.
 
-    When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
-    size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
-    and ``intermediate_size`` — this is validated in ``__post_init__``.  The
-    vocab does *not* need to be TP-divisible: the embedding and LM-head
-    weights are padded internally to a multiple of ``32 * tp_size``, exposed as
-    ``Llama.padded_vocab_size``.
+    When ``tp_strategy`` enables tensor parallelism the mesh must already be open and the
+    ``"tp"`` axis size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
+    and ``intermediate_size`` — this is validated in ``__post_init__``.  The vocab does
+    *not* need to be TP-divisible: the embedding and LM-head weights are padded internally
+    to a multiple of ``32 * tp_size``, exposed as ``Llama.padded_vocab_size``. Under TP,
+    the logits keep the padded columns, masked to -1e4.
 
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
-    sharding) and is ignored when ``use_tp=False``.
+    sharding) and is ignored when tensor parallelism is disabled.
 
     ``use_composite_sdpa`` runs the attention of the forward without a KV cache through
     ``scaled_dot_product_attention_composite``, which also accepts non-broadcast masks such as
@@ -83,7 +87,7 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
-    use_tp: bool = False
+    tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
     use_composite_sdpa: bool = False
 
@@ -118,7 +122,7 @@ class LlamaConfig:
                 "Number of attention heads must be divisible by the number of key/value heads. "
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
-        if self.use_tp:
+        if self.tp_strategy.tensor_parallel:
             if (
                 self.weight_tying == WeightTyingType.Enabled
                 and self.embedding_placement != EmbeddingPlacement.VocabParallel
@@ -212,27 +216,29 @@ class Llama(AbstractModuleBase):
         super().__init__()
 
         self.config = config
+        sequence_parallel = config.tp_strategy.sequence_parallel
 
-        if config.use_tp:
+        if config.tp_strategy.tensor_parallel:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
-            # size must be a multiple of 32 * tp_size. The trailing padded
-            # columns are kept on-device and handled by the downstream
-            # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
-            # free to be arbitrary.
-            tp_size = ttml.mesh().axis_size("tp")
-            align = 32 * tp_size
-            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # gather_output=False: keep the LM head output vocab-sharded
-            # ([B,1,S,padded_V/tp_size] per device) so callers can route through
-            # ttml.ops.distributed.vocab_parallel_cross_entropy_loss without an
-            # all-gather of the full vocab dimension.
+            # size must be a multiple of 32 * tp_size. forward() masks the
+            # padded logits, so ``config.vocab_size`` can be anything.
+            mesh = ttml.mesh()
+            self.tp_size = mesh.axis_size("tp")
+            self._tp_axis = mesh.axis_index("tp")
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size, ttnn.TILE_SIZE * self.tp_size)
+            self._tp_vocab_pad_bias: Optional[ttnn.Tensor] = None
+            # No gather after LM head, because vocab_parallel_cross_entropy_loss
+            # expects a vocab-sharded tensor. Under SP the head input is sequence-sharded
+            # and the column-parallel input gather restores the full sequence, so the
+            # logits come out exactly as in classic TP.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
@@ -240,6 +246,7 @@ class Llama(AbstractModuleBase):
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
+                    sequence_parallel=sequence_parallel,
                     axis_name="tp",
                 )
             elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
@@ -256,7 +263,7 @@ class Llama(AbstractModuleBase):
                     weight_init=ttml.init.normal(0.0, 0.02),
                 )
         else:
-            self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size)
             self.fc = LinearLayer(
                 config.hidden_size,
                 self.padded_vocab_size,
@@ -274,6 +281,13 @@ class Llama(AbstractModuleBase):
         # configuration; the logical row count lets ttml.distributed_checkpointing reshard the weight across it.
         self.fc.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
         self.tok_emb.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
+
+        # Block 0 needs a sequence-sharded residual. Embeddings that emit the full sequence
+        # on every rank are sliced locally; the vocab-parallel one already lands sharded.
+        # At tp=1 there is nothing to slice.
+        self._slice_sequence = (
+            sequence_parallel and self.tp_size > 1 and not isinstance(self.tok_emb, VocabParallelEmbedding)
+        )
 
         rope_params = build_rope_params_from_config(config, config.hidden_size // config.num_attention_heads)
 
@@ -302,7 +316,7 @@ class Llama(AbstractModuleBase):
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
                     rms_norm_eps=config.rms_norm_eps,
-                    use_tp=config.use_tp,
+                    tp_strategy=config.tp_strategy,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
                     use_composite_sdpa=config.use_composite_sdpa,
@@ -312,6 +326,8 @@ class Llama(AbstractModuleBase):
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
+        if sequence_parallel:
+            mark_partial(self.ln_fc, "tp")
 
     def forward(
         self,
@@ -328,6 +344,18 @@ class Llama(AbstractModuleBase):
         input_shape = input.shape()
         actual_seq_len = input_shape[-1]
         padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+
+        if self.config.tp_strategy.sequence_parallel:
+            if kv_cache is not None:
+                raise NotImplementedError(
+                    "sequence_parallel does not support the KV-cache path: single-token decode has "
+                    "no sequence to shard. Run inference with TPStrategy.TENSOR."
+                )
+            if actual_seq_len % (TILE_SIZE * self.tp_size) != 0:
+                raise ValueError(
+                    "sequence_parallel requires the input sequence length divisible by 32*tp_size "
+                    f"(got seq_len={actual_seq_len}, tp_size={self.tp_size})"
+                )
 
         input_padded = input
         if padded_seq_len != actual_seq_len:
@@ -350,6 +378,9 @@ class Llama(AbstractModuleBase):
             out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
             out = ttml.autograd.create_tensor(out_val)
 
+        if self._slice_sequence:
+            out = ttml.ops.distributed.scatter(out, SEQUENCE_DIM, self._tp_axis)
+
         rope_positions = None
         if unpadded_token_positions is not None:
             rope_positions = ttml.ops.rope.RotaryEmbeddingPositions(unpadded_token_positions)
@@ -364,13 +395,27 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # In TP mode the LM head output stays vocab-sharded; the trailing
-        # padded columns are handled by vocab_parallel_cross_entropy_loss.
-        # The non-TP path returns full-vocab logits, so we still need to drop
-        # the tile-alignment padding before handing them off to the caller.
-        if not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
-            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+        if self.padded_vocab_size != self.config.vocab_size:
+            if self.config.tp_strategy.tensor_parallel:
+                # Vocab-sharded logits can't be sliced, so mask the padded columns: at -1e4 they get zero probability
+                # and zero gradient.
+                logits = ttml.ops.binary.add(
+                    logits, self._vocab_pad_bias(logits.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype)
+                )
+            else:
+                logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
+
+    def _vocab_pad_bias(self, dtype: ttnn.DataType) -> ttml.autograd.Tensor:
+        """The mask added to the vocab-sharded logits: 0 on real columns, -1e4 on padded ones, in ``dtype``."""
+        if self._tp_vocab_pad_bias is None or self._tp_vocab_pad_bias.dtype != dtype:
+            bias = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)
+            bias[..., self.config.vocab_size :] = -1e4
+            mapper = ttml.mesh().axis_mapper("tp", tdim=3)
+            self._tp_vocab_pad_bias = ttml.autograd.Tensor.from_numpy(bias, ttnn.Layout.TILE, dtype, mapper).get_value(
+                ttml.autograd.PreferredPrecision.NATIVE
+            )
+        return ttml.autograd.create_tensor(self._tp_vocab_pad_bias, requires_grad=False)
 
 
 # C++ Llama bindings from _ttml.models.llama

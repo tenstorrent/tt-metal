@@ -54,6 +54,7 @@ from ttml.distributed_checkpointing._state_dict import label_of, local_coords
 from ttml.distributed_checkpointing._topology import Label, chunk_boxes, global_shape
 from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
 from ttml.modules import LoraConfig, LoraModel, Parameter
+from ttml.parallel import TPStrategy
 from ttml.sharding import Sharding
 
 from dcp_oracle import Loader, advance_generators
@@ -133,7 +134,7 @@ def build(tp: bool, fsdp: bool, tie: bool, sizes: dict, bias: bool = False, lora
     config = LlamaConfig(
         **{**TINY, **sizes},
         attention_bias=bias,
-        use_tp=tp,
+        tp_strategy=TPStrategy.from_flags(tp),
         weight_tying=WeightTyingType.Enabled if tie else WeightTyingType.Disabled,
         # A tied LM head is vocab-parallel, so the embedding must share that layout (LlamaConfig refuses otherwise).
         embedding_placement=EmbeddingPlacement.VocabParallel if (tp and tie) else EmbeddingPlacement.Replicated,
@@ -192,7 +193,7 @@ def loss_of(model, config: LlamaConfig, tokens, mask, targets):
     same quantity. A mean over the local logits is not: its element count and its padded columns differ per world,
     and a step taken on two worlds could never be compared."""
     logits = model(tokens, mask)
-    if not config.use_tp:
+    if not config.tp_strategy.tensor_parallel:
         return ttml.ops.loss.cross_entropy_loss(logits, targets, ttml.ops.ReduceType.MEAN)
     tp_axis = ttml.mesh().axis_index("tp")
     if model.padded_vocab_size != config.vocab_size:
@@ -221,17 +222,15 @@ def train(
     if start == 0:
         set_seed(seed)
         advance_generators()  # a checkpoint then holds the generators mid-stream, not as seeding left them
-    mesh = ttml.mesh()
-    needs_sync = any(mesh.axis_size(name) > 1 for name in mesh.axis_names if name != "tp")
     for step in range(start, start + steps):
         tokens, mask, targets = inputs(config, seed + step)
         optimizer.zero_grad()
         loss = loss_of(model, config, tokens, mask, targets)
         loss.backward(False)
         mark(f"step {step}: forward and backward done")
-        if needs_sync:
-            ttml.sync_gradients(params)
-            mark(f"step {step}: gradients synced over the non-TP axes")
+        # Averages over the data axes and sums the gradients marked partial across tp, such as LoRA's lora_A.
+        ttml.sync_gradients(params)
+        mark(f"step {step}: gradients synced")
         optimizer.step()
         scheduler.step()
         loader.advance()
@@ -354,8 +353,8 @@ def local_reference(model, params, optimizer, scheduler, loader, config, seed: i
     out["meta"] = np.asarray(
         json.dumps(
             {
-                "tp": mesh.axis_size("tp") if config.use_tp else 1,
-                "tp_axis": mesh.axis_index("tp") if config.use_tp else -1,
+                "tp": mesh.axis_size("tp") if config.tp_strategy.tensor_parallel else 1,
+                "tp_axis": mesh.axis_index("tp") if config.tp_strategy.tensor_parallel else -1,
                 "mesh": list(mesh.shape),
             }
         )

@@ -36,8 +36,9 @@ DP+TP support:
   every device in the mesh.
 
   After backward, call:
-    ttml.core.distributed.synchronize_gradients(model.parameters(), 0)
-  to average gradients across DP groups.
+    ttml.sync_gradients(model.parameters())
+  to average gradients across DP groups and sum the partial ones across TP
+  (the per-head norms and LoRA's lora_A, marked with ttml.parallel.mark_partial).
 
 Usage (TP only):
     ttml.open_device_mesh(ttml.Mesh((1, tp_size), ("dp", "tp")))
@@ -87,6 +88,7 @@ from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
+    tp_axis_name,
     make_sharded_weight,
     make_sharded_zeros,
     make_replicated_zeros,
@@ -250,6 +252,10 @@ class DistributedQwen3Attention(AbstractModuleBase):
 
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        if tp > 1:
+            # Applied per head, they see only this device's heads.
+            ttml.parallel.mark_partial(self.q_norm, tp_axis_name(shard_dim))
+            ttml.parallel.mark_partial(self.k_norm, tp_axis_name(shard_dim))
 
         self.rope_params = rope_params
 

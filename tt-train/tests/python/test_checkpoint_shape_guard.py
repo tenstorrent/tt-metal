@@ -49,6 +49,11 @@ def _gathered_shape(tensor) -> tuple:
     return tuple(ttml.Sharding.from_tensor(tensor).gather(tensor).shape)
 
 
+def _label_shape(tensor) -> list:
+    """The distribution shape exactly as the label spells it, with one entry for a collapsed 1-D label."""
+    return list(tensor.get_value(NATIVE).tensor_topology().distribution_shape())
+
+
 def _sharded_param_name(params) -> str:
     """Name of one parameter that is sharded on some mesh axis (the guard is vacuous for a replicated one)."""
     for name, t in params.items():
@@ -216,7 +221,7 @@ def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp
     halves = ttml.autograd.Tensor.from_numpy(
         wide, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3)
     )
-    assert len(ttml.Sharding.from_tensor(halves).dist_shape) == 1, "precondition: a collapsed 1-D label"
+    assert len(_label_shape(halves)) == 1, "precondition: a collapsed 1-D label"
     _forge_replicate(halves)
     params = ttml.NamedParameters()
     params["halves"] = halves
@@ -232,7 +237,7 @@ def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp
         ttnn.DataType.BFLOAT16,
         ttnn.replicate_tensor_to_mesh_mapper(device),
     )
-    assert len(ttml.Sharding.from_tensor(same).dist_shape) == 1, "precondition: a collapsed 1-D label"
+    assert len(_label_shape(same)) == 1, "precondition: a collapsed 1-D label"
     replicated = ttml.NamedParameters()
     replicated["same"] = same
     checkpointing.save_checkpoint(path, header={}, model_params=replicated)
@@ -261,7 +266,7 @@ def test_save_keeps_tensors_under_nd_labels(tp_mesh, tmp_path):
         data = rng.standard_normal(shape, dtype=np.float32)
         mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
         params[name] = ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-        assert len(ttml.Sharding.from_tensor(params[name]).dist_shape) == 2, f"precondition: {name} has an N-D label"
+        assert len(_label_shape(params[name])) == 2, f"precondition: {name} has an N-D label"
         expected[name] = data.astype(ml_dtypes.bfloat16).astype(np.float32)
     for verify in (True, False):
         path = str(tmp_path / f"nd_{verify}.ckpt")

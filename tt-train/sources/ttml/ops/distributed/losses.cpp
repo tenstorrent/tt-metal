@@ -8,10 +8,12 @@
 
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/distributed.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -36,6 +38,25 @@ ttnn::Tensor fused_subtract_exp_fp32(const ttnn::Tensor& a, const ttnn::Tensor& 
         /*memory_config=*/std::nullopt,
         /*output=*/std::nullopt,
         post_activations);
+}
+
+void check_sharded_along_the_vocab(const ttnn::Tensor& logits, std::optional<uint32_t> cluster_axis) {
+    const auto placements = core::distributed::placements_per_axis(logits);
+    const auto mesh_shape = logits.device()->shape();
+    const int rank = static_cast<int>(logits.logical_shape().rank());
+    for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        if (mesh_shape[axis] == 1 || (cluster_axis.has_value() && axis != *cluster_axis)) {
+            continue;
+        }
+        const auto dim = core::distributed::shard_dim(placements[axis], rank);
+        TT_FATAL(
+            dim == rank - 1,
+            "vocab_parallel_cross_entropy_loss takes logits sharded along the vocab (dim {}) across mesh axis {}, but "
+            "there they are {}. Logits that hold the whole vocab go to cross_entropy_loss.",
+            rank - 1,
+            axis,
+            dim.has_value() ? fmt::format("sharded along dim {}", *dim) : std::string("replicated"));
+    }
 }
 
 }  // namespace
@@ -63,6 +84,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         throw std::logic_error(
             fmt::format("vocab_parallel_cross_entropy_loss: logits must be rank 4, got shape {}", logits_shape));
     }
+    check_sharded_along_the_vocab(logits->get_value(), cluster_axis);
     if (targets_shape.rank() != 2U && targets_shape.rank() != 4U) {
         throw std::logic_error(
             fmt::format("vocab_parallel_cross_entropy_loss: targets must be rank 2 or 4, got shape {}", targets_shape));

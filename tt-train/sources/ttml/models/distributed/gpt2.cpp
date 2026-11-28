@@ -4,6 +4,7 @@
 
 #include "gpt2.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
@@ -20,30 +21,21 @@
 
 namespace ttml::models::distributed::gpt2 {
 
-namespace {
-
-void weights_initialization(DistributedTransformer& model) {
-    auto params = model.parameters();
-    for (auto& [name, tensor_ptr] : params) {
-        const auto& tensor = tensor_ptr->get_value();
-        if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.logical_shape();
-            auto* device = &autograd::ctx().get_device();
-            auto num_devices = static_cast<uint32_t>(device->num_devices());
-            tensor_shape[0] *= num_devices;
-            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
-            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
-        } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
-        }
-    }
-}
-
-}  // namespace
-
 DistributedTransformer::DistributedTransformer(const TransformerConfig& config) {
+    // These TP layers shard over the whole mesh, not one axis, so on a 2D mesh (DP x TP) their collectives would mix
+    // the data-parallel groups.
+    const auto mesh_shape = autograd::ctx().get_device().shape();
+    uint32_t axes_larger_than_one = 0;
+    for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        axes_larger_than_one += mesh_shape[axis] > 1U ? 1U : 0U;
+    }
+    if (axes_larger_than_one > 1U) {
+        throw std::logic_error(fmt::format(
+            "DistributedTransformer (GPT-2) shards its TP layers over the whole mesh, so at most one mesh axis can be "
+            "larger than 1; got mesh shape {}. To combine TP with another axis, use Llama.",
+            mesh_shape));
+    }
+
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -92,14 +84,10 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
                 ttml::modules::PositionalEmbeddingConfig{
                     .embedding_dim = embedding_dim,
                     .sequence_length = max_sequence_length,
-                    .dropout_prob = dropout_prob,
-                    .use_dropout_seed_per_device = false});
+                    .dropout_prob = dropout_prob});
         } else {
             return std::make_shared<ttml::modules::PositionalEmbedding>(ttml::modules::PositionalEmbeddingConfig{
-                .embedding_dim = embedding_dim,
-                .sequence_length = max_sequence_length,
-                .dropout_prob = dropout_prob,
-                .use_dropout_seed_per_device = false});
+                .embedding_dim = embedding_dim, .sequence_length = max_sequence_length, .dropout_prob = dropout_prob});
         }
     };
     pos_emb = create_positional_embedding();
@@ -127,7 +115,7 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
         throw std::logic_error("Weight tying is not supported yet for DistributedTransformer!");
     }
 
-    weights_initialization(*this);
+    common::transformer::initialize_weights_gpt2_tensor_parallel(*this);
 }
 
 ttml::autograd::TensorPtr DistributedTransformer::operator()(

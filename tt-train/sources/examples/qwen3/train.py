@@ -139,12 +139,9 @@ def evaluate(
     causal_mask,
     distributed=False,
     dp_mapper=None,
-    tp_size=1,
-    shard_dim=1,
 ):
     """Compute average validation loss over num_batches."""
     model.eval()
-    use_tp = tp_size > 1
     ctx = ttml.autograd.AutoContext.get_instance()
     with no_grad():
         losses = []
@@ -156,12 +153,7 @@ def evaluate(
 
             logits = model(input_tensor, causal_mask)
             target_tensor = create_target_tensor(y_np, dp_mapper)
-            if use_tp:
-                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                    logits, target_tensor, cluster_axis=shard_dim
-                )
-            else:
-                loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
+            loss = ttml.parallel.cross_entropy_loss(logits, target_tensor, ttml.ops.ReduceType.MEAN)
             losses.append(get_loss_value(loss, distributed))
             ctx.reset_graph()
 
@@ -751,8 +743,6 @@ def main():
         causal_mask,
         distributed,
         dp_mapper,
-        tp_size=tp_size,
-        shard_dim=shard_dim if shard_dim is not None else 1,
     )
     print(f"  Initial val loss: {initial_val_loss:.4f}")
     if tb_val_writer is not None:
@@ -834,12 +824,7 @@ def main():
 
             # Cross-entropy loss
             target_tensor = create_target_tensor(y_np, dp_mapper)
-            if tp_size > 1:
-                loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                    logits, target_tensor, cluster_axis=shard_dim
-                )
-            else:
-                loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
+            loss = ttml.parallel.cross_entropy_loss(logits, target_tensor, ttml.ops.ReduceType.MEAN)
             t0 = _tlog(step, "loss_compute", t0)
 
             accum_loss += get_loss_value(loss, distributed)
@@ -861,11 +846,10 @@ def main():
             ctx.reset_graph()
             t0 = _tlog(step, "reset_graph", t0)
 
-        # Synchronize gradients across DP groups (all-reduce along mesh dim 0)
-        if dp_size > 1:
-            t0 = time.time()
-            ttml.core.distributed.synchronize_gradients(ttml_model.parameters())
-            t0 = _tlog(step, "sync_grads", t0)
+        # Average gradients across DP groups and sum the partial ones across TP
+        t0 = time.time()
+        ttml.sync_gradients(ttml_model.parameters())
+        t0 = _tlog(step, "sync_grads", t0)
 
         # Average accumulated loss
         step_loss = accum_loss / accum_steps
@@ -964,8 +948,6 @@ def main():
                 causal_mask,
                 distributed,
                 dp_mapper,
-                tp_size=tp_size,
-                shard_dim=shard_dim if shard_dim is not None else 1,
             )
             _tlog(step, "eval", t0)
             val_losses.append((step, val_loss))

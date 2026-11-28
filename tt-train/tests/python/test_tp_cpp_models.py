@@ -10,11 +10,14 @@
 "Not implemented", and ``model(x, None)`` matched no overload at all.
 """
 
+import re
+
 import numpy as np
 import pytest
 import ttml
 import ttnn
 from ttml.common.utils import build_causal_mask
+from tp_block import assert_identical_across_devices
 
 pytestmark = pytest.mark.requires_device
 
@@ -22,6 +25,10 @@ pytestmark = pytest.mark.requires_device
 # and 32 vocab columns of the LM head.
 HIDDEN = VOCAB = 64
 SEQ = 32
+
+# Parameters the models' modules build replicated across tp: the embeddings and the norms. GPT-2's weight init then
+# redraws every weight for the whole model, and must leave these with one value on every device.
+REPLICATED = re.compile(r"/(tok_emb|pos_emb|ln\w*|\w*_norm)/")
 
 
 def _llama():
@@ -66,3 +73,15 @@ def test_mask_none_matches_dense_causal_mask(tp_mesh, make_model):
     assert dense.shape == causal.shape == (1, 1, SEQ, VOCAB)
     pcc = np.corrcoef(dense.ravel(), causal.ravel())[0, 1]
     assert pcc > 0.999, f"PCC {pcc}"
+
+
+@pytest.mark.parametrize("make_model", [_llama, _gpt2], ids=["llama", "gpt2"])
+def test_replicated_parameters_hold_one_value_on_every_device(tp_mesh, make_model):
+    tp_axis = ttml.mesh().axis_index("tp")
+    checked = []
+    for name, param in make_model().parameters().items():
+        if REPLICATED.search(name):
+            assert ttml.sharding.shard_dim(param, tp_axis) is None, f"{name} is sharded across tp"
+            assert_identical_across_devices(param.get_value(ttml.autograd.PreferredPrecision.NATIVE), name)
+            checked.append(name)
+    assert any("/tok_emb/" in name for name in checked), checked

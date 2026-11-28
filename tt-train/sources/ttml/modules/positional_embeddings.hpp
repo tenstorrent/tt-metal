@@ -16,7 +16,6 @@ struct PositionalEmbeddingConfig {
     uint32_t embedding_dim{};
     uint32_t sequence_length{1024U};
     float dropout_prob{0.F};
-    bool use_dropout_seed_per_device{true};
 };
 
 class PositionalEmbedding : public ModuleBase {

@@ -16,32 +16,6 @@
 
 namespace ttml::models::distributed::llama {
 
-namespace {
-
-[[maybe_unused]] void initialize_weights(DistributedLlama& model) {
-    auto params = model.parameters();
-    auto& pctx = autograd::ctx().get_parallelism_context();
-    auto tp_axis = pctx.get_tp_axis();
-    auto tp_size = pctx.get_tp_size();
-
-    for (auto& [name, tensor_ptr] : params) {
-        const auto& tensor = tensor_ptr->get_value();
-        if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.logical_shape();
-            auto* device = &autograd::ctx().get_device();
-            tensor_shape[0] *= tp_size;
-            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, tp_axis);
-            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
-        } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
-        }
-    }
-}
-
-}  // namespace
-
 DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();

@@ -18,7 +18,7 @@ DistributedGPTMLP::DistributedGPTMLP(uint32_t embedding_size, float dropout_prob
     m_fc2 = std::make_shared<RowParallelLinear>(
         embedding_size * 4, embedding_size, /* has_bias */ true, /* input_is_parallel */ true);
 
-    m_dropout = std::make_shared<DropoutLayer>(dropout_prob, /* use_per_device_seed */ false);
+    m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
 
     create_name("gpt_mlp");
     register_module(m_fc1, "fc1");

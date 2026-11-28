@@ -75,7 +75,7 @@ logits = model(input_tokens, mask)
 loss = ttml.ops.loss.cross_entropy_loss(logits, targets, reduce=ttml.ops.ReduceType.MEAN)
 loss.backward(False)
 
-ttml.sync_gradients(model.parameters())  # no-op on a pure-FSDP mesh
+ttml.sync_gradients(model.parameters())  # managed params are already reduce-scattered; averages only unsharded ones
 optimizer.step()
 ```
 
@@ -186,9 +186,8 @@ matrices or embeddings.
 
 **Gradient sync.** Each FSDP rank sees different data, so the training loop
 must average replicated gradients over the FSDP axis with
-`ttml.sync_gradients(model.parameters(), axis_names=("fsdp",))` (or
-`("dp", "fsdp")` under HSDP). It skips sharded parameters, so one call
-covers the whole model. `SFTTrainer` and `GRPOTrainer` already do this.
+`ttml.sync_gradients(model.parameters())`, which covers DDP, FSDP and HSDP.
+It skips sharded parameters, so one call covers the whole model. `SFTTrainer` and `GRPOTrainer` already do this.
 
 ---
 
@@ -291,19 +290,21 @@ host-roundtrip:
 
 ### Gradient sync
 
-Call `ttml.sync_gradients(model.parameters(), axis_names=("dp", "fsdp"))`,
-as `SFTTrainer` and `GRPOTrainer` do. Axes missing from the mesh are
-skipped, so the same call works for DDP, FSDP and HSDP. Each parameter is
-filtered per axis:
+Call `ttml.sync_gradients(model.parameters())`, as `SFTTrainer` and
+`GRPOTrainer` do. Axes missing from the mesh are skipped, so the same call
+works for DDP, FSDP and HSDP. Each parameter is filtered per axis:
 
-- FSDP-sharded parameters skip `"fsdp"`, since `backward_post` already
-  reduce-scattered their gradients. Under HSDP they still all-reduce over
-  `"dp"`.
+- A parameter skips every axis its own label shards it on. That covers
+  FSDP-sharded parameters on `"fsdp"`, since `backward_post` already
+  reduce-scattered their gradients; under HSDP they still all-reduce over
+  `"dp"`. It also covers a parameter its model shards on `"dp"`, such as
+  MoE experts placed on that axis.
 - Replicated parameters (from `replicate=`, or ones that couldn't be
   sharded) all-reduce over both axes.
 
-`axis_names=("dp",)` alone, as in plain DDP, is not enough under FSDP: it
-never averages replicated gradients over `"fsdp"`.
+After the average, `sync_gradients` sums the gradients of parameters marked
+with `ttml.parallel.mark_partial` across the axes they are partial on, such
+as the sequence-parallel norms over `"tp"`.
 
 ## Gradient accumulation
 
@@ -362,7 +363,7 @@ In this layout:
 - During backward:
   - The FSDP backward-post hook reduce-scatters grads across the
     `"fsdp"` axis (size F) — same as pure FSDP.
-  - `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))` then runs
+  - `ttml.sync_gradients(params)` then runs
     a per-param filter: FSDP-managed grads skip the `"fsdp"` axis
     (already reduce-scattered) but all-reduce across `"dp"` to average
     each shard over DP replicas. Any non-FSDP / replicated parameter
@@ -397,9 +398,9 @@ In this layout:
   wrapped module. Useful to manually inspect a parameter's full value
   outside the training loop.
 - **`ttml.fsdp.is_fsdp_managed(param.tensor)`** returns `True` for any
-  parameter `fully_shard` has touched. `sync_gradients` doesn't read
-  this marker: for each parameter it skips the axes the value's
-  topology label says it is sharded on.
+  parameter `fully_shard` has touched. `average_gradients`, and so
+  `sync_gradients`, doesn't read this marker: for each parameter it skips
+  the axes the value's topology label says it is sharded on.
 
 ---
 

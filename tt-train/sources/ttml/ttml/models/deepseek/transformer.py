@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, Parameter, RowParallelLinear
+from ttml.modules.linear import replicate_for_tp, sum_tp_partials
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -27,7 +28,9 @@ class DeepSeekMLP(AbstractModuleBase):
 
     def __init__(self, dim: int, inter_dim: int, *, tp_axis_name: str | None = None) -> None:
         super().__init__()
+        self._tp_axis = None
         if tp_axis_name is not None:
+            self._tp_axis = ttml.mesh().axis_index(tp_axis_name)
             self.w1 = ColumnParallelLinear(
                 dim,
                 inter_dim,
@@ -46,7 +49,6 @@ class DeepSeekMLP(AbstractModuleBase):
                 inter_dim,
                 dim,
                 has_bias=False,
-                input_is_parallel=True,
                 axis_name=tp_axis_name,
             )
         else:
@@ -54,22 +56,23 @@ class DeepSeekMLP(AbstractModuleBase):
             self.w3 = LinearLayer(dim, inter_dim, has_bias=False)
             self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
-    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        # The fused op bypasses the parallel layers' forwards, so their collectives are added here:
-        # the broadcast ColumnParallelLinear does on its input (all-reduces the input grad in backward)
-        # and the all-reduce RowParallelLinear does on its partial output.
-        tp = isinstance(self.w2, RowParallelLinear)
-        if tp:
-            x = ttml.ops.distributed.broadcast(x, self.w1.cluster_axis)
-        y = ttml.ops.swiglu.swiglu(
+    def partial_forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """The SwiGLU on this rank's slice of the MLP, without the tensor-parallel collectives: across the tp axis its
+        output is a partial sum still to be added up, and the gradient it sends ``x`` is partial too."""
+        return ttml.ops.swiglu.swiglu(
             x,
             self.w1.weight.tensor,
             self.w2.weight.tensor,
             self.w3.weight.tensor,
         )
-        if tp:
-            y = ttml.ops.distributed.all_reduce(y, True, self.w2.cluster_axis)
-        return y
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        if self._tp_axis is not None:
+            x = replicate_for_tp(x, self._tp_axis, sequence_parallel=False)
+        out = self.partial_forward(x)
+        if self._tp_axis is not None:
+            out = sum_tp_partials(out, self._tp_axis, sequence_parallel=False)
+        return out
 
 
 def resolve_moe_ep_axis(config) -> str | None:

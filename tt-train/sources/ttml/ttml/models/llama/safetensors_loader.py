@@ -162,17 +162,15 @@ def _tp_axis() -> _TpAxis | None:
     return _TpAxis(mesh.axis_index("tp"), mesh.axis_size("tp"))
 
 
-def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
-    """Which tensor dim *param* shards over 'tp', or ``None`` if replicated. A shard over any other
-    axis raises."""
-    placements = ttml.Sharding.from_tensor(param).placements
+def _sharded_dim(sharding: ttml.Sharding, tp: _TpAxis | None, subject: str) -> int | None:
+    """Which tensor dim a parameter laid out as *sharding* shards over 'tp', or ``None`` if replicated. A
+    shard over any other axis raises."""
+    placements = sharding.placements
     tp_index = tp.index if tp else None
     for axis, placement in enumerate(placements):
         if isinstance(placement, ttnn.PlacementShard) and axis != tp_index:
             raise RuntimeError(f"{subject}: sharded over mesh axis {axis}; this loader places weights over 'tp' only.")
-    if tp is None or tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
-        return None
-    placement = placements[tp.index]
+    placement = placements[tp_index] if tp else None
     if not isinstance(placement, ttnn.PlacementShard):
         return None
     if placement.dim not in (ROW_DIM, COL_DIM):
@@ -180,15 +178,6 @@ def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
             f"{subject}: sharded on dim {placement.dim} over 'tp'; expected {ROW_DIM} (rows) or {COL_DIM} (cols)."
         )
     return placement.dim
-
-
-def _global_shape(param, shard_dim: int | None, mesh_size: int) -> tuple[int, int]:
-    """The parameter's shape before sharding, i.e. the shape the checkpoint should supply."""
-    rows, cols = param.shape()[-2:]
-    return (
-        rows * mesh_size if shard_dim == ROW_DIM else rows,
-        cols * mesh_size if shard_dim == COL_DIM else cols,
-    )
 
 
 @dataclass(frozen=True)
@@ -215,13 +204,15 @@ def _load_plan(
     rule: _Rule, param, tp: _TpAxis | None, mesh_size: int, checkpoint: _Checkpoint
 ) -> tuple[int | None, tuple[int, int]]:
     """Return the dim *param* is sharded on over 'tp', and the shape to pad its sources to."""
-    shard_dim = _sharded_dim(param, tp, rule.param)
+    sharding = ttml.Sharding.from_tensor(param)
+    shard_dim = _sharded_dim(sharding, tp, rule.param)
     shapes = [checkpoint.shape(s) for s in rule.sources]
     for source, (rows, _), expected in zip(rule.sources, shapes, rule.block_rows or ()):
         if rows != expected:
             raise RuntimeError(f"{rule.param}: {source} has {rows} rows; the config implies {expected}")
     assembled = _assembled_shape(shapes, shard_dim, mesh_size, rule.param)
-    param_shape = _global_shape(param, shard_dim, mesh_size)
+    # A checkpoint holds whole tensors, so the sources are planned against the global shape.
+    param_shape = tuple(sharding.global_shape[-2:])
     return shard_dim, resolve_padded_load_shape(
         assembled, param_shape, rule.source_shape or param_shape, name=rule.param
     )

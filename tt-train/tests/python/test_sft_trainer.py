@@ -307,7 +307,6 @@ def _stepped_lrs(monkeypatch, start_step=0, lr=1.0, **lr_kwargs):
         def set_group_lrs(self, lrs):
             (self.lr,) = lrs
 
-    monkeypatch.setattr(SFTTrainer, "_build_loss_fn", lambda self: None)  # needs a device mesh; unused here
     monkeypatch.setattr("ttml.trainers.sft_trainer.profiler_marker", lambda *args, **kwargs: None)
     optimizer = MockOptimizer()
     trainer = SFTTrainer(

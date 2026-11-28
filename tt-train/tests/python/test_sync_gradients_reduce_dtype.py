@@ -38,7 +38,7 @@ def test_unset_and_bf16_reduce_dtype_sum_as_before(dp_mesh, reduce_dtype):
     parameters, parameter = _parameters_with_gradients(values)
     before = ttnn.multiply(ttml.core.distributed.all_reduce(parameter.get_grad(), cluster_axis=_DP_AXIS), 0.5)
 
-    ttml.sync_gradients(parameters, axis_names=("dp",), reduce_dtype=reduce_dtype)
+    ttml.sync_gradients(parameters, reduce_dtype=reduce_dtype)
 
     np.testing.assert_array_equal(per_device(parameter.get_grad()), per_device(before))
 
@@ -64,7 +64,7 @@ def test_takes_reduce_dtype_by_keyword_only(expect_error):
 
 def _synchronized(values: np.ndarray, **reduce_dtype) -> np.ndarray:
     parameters, parameter = _parameters_with_gradients(values)
-    ttml.sync_gradients(parameters, axis_names=("dp",), **reduce_dtype)
+    ttml.sync_gradients(parameters, **reduce_dtype)
     return per_device(parameter.get_grad())
 
 

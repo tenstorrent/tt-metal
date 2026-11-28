@@ -22,7 +22,7 @@ class TPBlock(AbstractModuleBase):
         super().__init__()
         self.inp = LinearLayer(dim, dim)
         self.up = ColumnParallelLinear(dim, dim, has_bias=True)
-        self.down = RowParallelLinear(dim, dim, has_bias=True, input_is_parallel=True)
+        self.down = RowParallelLinear(dim, dim, has_bias=True)
 
     def forward(self, x):
         return self.down(self.up(self.inp(x)))
@@ -32,6 +32,29 @@ def device_slices(value: ttnn.Tensor) -> list:
     """Each device's slice of ``value`` as a float32 numpy array, in mesh order. No composer is involved, so nothing
     here trusts the tensor's topology label."""
     return [ttnn.to_torch(shard).float().numpy() for shard in ttnn.get_device_tensors(value)]
+
+
+def gather_like(value: ttnn.Tensor, param: ttml.autograd.Tensor) -> np.ndarray:
+    """``value`` (``param``'s value or gradient) assembled on the host as ``param`` is laid out on the mesh."""
+    sharding = ttml.Sharding.from_tensor(param)
+    local_shape = tuple(param.get_value(ttml.autograd.PreferredPrecision.NATIVE).shape)
+    full = np.empty(sharding.global_shape, np.float32)
+    first = {}  # where a slice goes -> the first device holding it
+    for coord, piece in zip(np.ndindex(*ttml.mesh().shape), device_slices(value)):
+        # A piece of another shape would leave part of ``full`` unwritten.
+        assert piece.shape == local_shape, f"device {coord} holds {piece.shape}, its slice of param is {local_shape}"
+        where = [slice(None)] * piece.ndim
+        for axis, index in enumerate(coord):
+            dim = sharding.shard_dim(axis)
+            if dim is not None:
+                where[dim] = slice(index * piece.shape[dim], (index + 1) * piece.shape[dim])
+        key = tuple((s.start, s.stop) for s in where)
+        if key in first:
+            np.testing.assert_array_equal(piece, full[tuple(where)], err_msg=f"device {coord} vs its copy {first[key]}")
+        else:
+            first[key] = coord
+            full[tuple(where)] = piece
+    return full
 
 
 def assert_identical_across_devices(value: ttnn.Tensor, what: str) -> np.ndarray:
@@ -48,7 +71,7 @@ def make_adamw(params):
 
 
 def train_step(model, opt, dim: int, input_scale: float = 1.0) -> None:
-    """One forward/backward/optimizer step on a ``(1, 1, dim, dim)`` input, so every moment exists and has been
+    """One forward/backward/sync/optimizer step on a ``(1, 1, dim, dim)`` input, so every moment exists and has been
     touched by the update kernel (and, for FSDP, so the gather -> compute -> reduce-scatter -> reshard hooks ran)."""
     ctx = ttml.autograd.AutoContext.get_instance()
     x = ttml.autograd.Tensor.from_numpy(
@@ -59,6 +82,7 @@ def train_step(model, opt, dim: int, input_scale: float = 1.0) -> None:
     opt.zero_grad()
     loss = ttml.ops.unary.mean(model(x))
     loss.backward(False)
+    ttml.sync_gradients(model.parameters())
     opt.step()
     ctx.reset_graph()
 

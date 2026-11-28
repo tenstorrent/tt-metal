@@ -44,10 +44,26 @@ ttnn::Tensor synchronize_tensor(
     const ttsl::SmallVector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 
-// True when `value` is Shard on mesh axis `axis` of the mesh it is on. A collapsed `{N}, [placement]` label counts as
-// that placement on every axis of size > 1; a host tensor, or a label that is neither per-axis nor a collapsed label
-// covering the mesh, is an error.
+// `value`'s placement on each axis of its device mesh. A collapsed 1-D label, such as the default mappers'
+// `{N}, [placement]`, means that placement on every axis of size > 1. Any other label that does not cover the mesh
+// is an error.
+ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
+    const ttnn::Tensor& value);
+
+// Whether `value` is sharded on mesh axis `axis`, as placements_per_axis reads it.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
+
+// The dim of a rank-`rank` tensor that `placement` shards along, a negative dim counted from the end, or nullopt where
+// it replicates.
+std::optional<int> shard_dim(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, int rank);
+
+// Relabels `value` with `placements`, one per mesh axis. Ops call it when ttnn's default label, which copies each
+// input's shard dim, misdescribes their output.
+void set_placements_per_axis(
+    ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements);
+
+// Relabels `grad`, a gradient of `parameter`, on the mesh axes `parameter` is sharded on.
+void label_grad_like_parameter_shards(const ttnn::Tensor& parameter, ttnn::Tensor& grad);
 
 // Averages every parameter's gradient along the mesh axes the parallelism context reduces (context parallel, then
 // data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis), summing in

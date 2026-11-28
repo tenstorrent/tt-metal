@@ -14,34 +14,6 @@
 
 namespace ttml::models::distributed::pipeline_parallel_llama {
 
-namespace {
-
-void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
-    auto params = model.parameters();
-    auto* device = &autograd::ctx().get_device();
-    // Shard along the ParallelismContext's TP axis, like the blocks and the LM head.
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    TT_FATAL(
-        pctx.is_tp_enabled(), "Pipeline-parallel tensor-parallel Llama requires a ParallelismContext with TP enabled");
-    const auto tp_axis = pctx.get_tp_axis();
-    const auto tp_size = pctx.get_tp_size();
-    for (auto& [name, tensor_ptr] : params) {
-        const auto& tensor = tensor_ptr->get_value();
-        if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.logical_shape();
-            tensor_shape[0] *= tp_size;
-            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, tp_axis);
-            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
-        } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
-        }
-    }
-}
-
-}  // namespace
-
 void PipelineParallelConfig::verify() const {
     auto total_blocks = std::accumulate(
         blocks_per_rank.begin(), blocks_per_rank.end(), 0, [](int sum, const auto& pair) { return sum + pair.second; });
@@ -171,7 +143,10 @@ PipelineParallelLlama::PipelineParallelLlama(
     }
 
     if (is_tensor_parallel) {
-        initialize_weights_tensor_parallel(*this);
+        TT_FATAL(
+            autograd::ctx().get_parallelism_context().is_tp_enabled(),
+            "Pipeline-parallel tensor-parallel Llama requires a ParallelismContext with TP enabled");
+        common::transformer::initialize_weights_gpt2_tensor_parallel(*this);
     } else {
         common::transformer::initialize_weights_gpt2(*this);
     }

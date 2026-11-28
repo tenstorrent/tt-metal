@@ -130,8 +130,10 @@ gradient.
   or after building `SFTTrainer` or `GRPOTrainer`: they apply the block the same way, so they clear a value set
   before.
   C++ `synchronize_gradients()` and Python `ttml.sync_gradients()` sum in the `reduce_dtype` they are given, else in
-  the stored one. `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an
-  argument.
+  the stored one. For `ttml.sync_gradients()` that covers both of its sums: the average over `dp` and `fsdp`, and the
+  sum of `ttml.parallel.mark_partial` gradients over the axes they are partial on. A marked gradient stays in fp32
+  between the two sums, so it is rounded back to bf16 only once.
+  `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an argument.
 - **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
   stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the
   optimizer is created, so a script that shards before `create_optimizer()`, as `train.py` does, needs nothing else. A

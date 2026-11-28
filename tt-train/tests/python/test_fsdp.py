@@ -572,7 +572,7 @@ class TestFSDPEquivalence:
         ttml.ops.unary.mean(fsdp_model(x_fsdp)).backward(False)
         weight = fsdp_model.fc1.weight.tensor
         local_grad = _read_replicated_to_numpy(weight.get_grad_tensor(), self.mesh)  # rank 0's slice only
-        ttml.sync_gradients(fsdp_model.parameters(), axis_names=("fsdp",))
+        ttml.sync_gradients(fsdp_model.parameters())
         synced_grad = _read_replicated_to_numpy(weight.get_grad_tensor(), self.mesh)
         ttml.autograd.AutoContext.get_instance().reset_graph()
 

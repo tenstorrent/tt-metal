@@ -9,6 +9,9 @@ axes the module structure implies, and after ``synchronize_gradients`` each grad
 axis, keeps its Shard elsewhere and holds the mean of the per-device gradients. The tests call the explicit-axes
 overload, which runs the same loop as the ParallelismContext one without a context to set up per mesh.
 
+The Llama tests check which gradients ``ttml.sync_gradients`` reduces, and over which axes, under TP, SP (each with
+and without LoRA) and FSDP.
+
 Each mesh fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture order. DP x TP
 and HSDP on a ``[2, 2]`` are in test_sync_gradients_placements_2x2.py.
 """
@@ -20,10 +23,14 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.modules import LinearLayer
+from ttml.modules import ColumnParallelLinear, LinearLayer, RowParallelLinear
 from sync_gradients_placements_common import (
+    COLUMN_LORA_A,
     DIM,
+    FSDP_REPLICATED_NORMS,
     NATIVE,
+    NORMS,
+    ROW_LORA_B,
     TP_SHARDED_SUFFIXES,
     Model,
     _assert_mean_over_axis,
@@ -35,9 +42,14 @@ from sync_gradients_placements_common import (
     _placements,
     _reduce_set,
     _shards,
+    assert_sync_reduces_exactly,
     is_sharded_on_axis,
+    llama_backward,
+    reductions_by_rule,
+    tiny_llama,
 )
 from tp_block import TPBlock
+from ttml.parallel import TPStrategy
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -54,6 +66,25 @@ def ddp_mesh(fresh_device_mesh):
     """``[1, 2]`` with axes ``("tp", "dp")``: TP of size 1, the data-parallel axis on the two devices."""
     with fresh_device_mesh((1, 2), ("tp", "dp"), what="DDP placements tests") as mesh:
         yield mesh
+
+
+# (strategy, LoRA, gradients summed over tp).
+# Under TP, replicated parameters see the whole sequence, so their gradients are complete. The exception is the
+# column-parallel lora_A, which sees only its rank's columns. Under SP, the norms and the row-parallel lora_B see only
+# their rank's tokens.
+LLAMA_TP_CASES = {
+    "tp": (TPStrategy.TENSOR, False, []),
+    "tp-lora": (TPStrategy.TENSOR, True, [COLUMN_LORA_A]),
+    "sp": (TPStrategy.TENSOR_SEQUENCE, False, [NORMS]),
+    "sp-lora": (TPStrategy.TENSOR_SEQUENCE, True, [NORMS, COLUMN_LORA_A, ROW_LORA_B]),
+}
+
+# (FSDP replicate= patterns, gradients averaged over fsdp).
+# FSDP reduce-scatters the gradients of the parameters it shards, so the sync averages only the replicated ones.
+LLAMA_FSDP_CASES = {
+    "fsdp": ([], []),
+    "fsdp-replicated-norms": (FSDP_REPLICATED_NORMS, [NORMS]),
+}
 
 
 # --- TP on [1, 2] ("dp", "tp") ----------------------------------------------------------------------------------
@@ -95,8 +126,15 @@ class TestTP:
         forged = _input((1, 1, DIM, DIM)).get_value(NATIVE)
         coords = list(forged.tensor_topology().mesh_coords())
         forged.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementShard(0)], coords[:1]))
-        with expect_error(RuntimeError, "cannot tell whether the tensor is sharded"):
+        with expect_error(RuntimeError, "cannot read the tensor's placement per mesh axis"):
             is_sharded_on_axis(forged, tp)
+
+    def test_a_host_tensor_has_no_label_to_read_or_write(self, tp_mesh, expect_error):
+        host = _input((1, 1, DIM, DIM)).get_value(NATIVE).cpu()
+        with expect_error(RuntimeError, "not allocated on a device mesh"):
+            ttml.core.distributed.placements_per_axis(host)
+        with expect_error(RuntimeError, "not allocated on a device mesh"):
+            ttml.core.distributed.set_placements_per_axis(host, [ttnn.PlacementReplicate()] * 2)
 
     def test_constant_inits_are_labelled_per_axis(self, tp_mesh):
         """Eager ``ttml.init.ones / zeros / constant`` (norm weights, zero-init biases) replicate with one Replicate
@@ -115,6 +153,30 @@ class TestTP:
                 np.testing.assert_array_equal(
                     shard, np.full((1, 1, 1, DIM), value, dtype=shard.dtype), err_msg=f"{name}: device {device}"
                 )
+
+    @pytest.mark.parametrize("fill", [ttml.init.zeros_, ttml.init.normal_], ids=["zeros_", "normal_"])
+    def test_in_place_inits_keep_a_sharded_weight_sharded(self, tp_mesh, fill):
+        up = ColumnParallelLinear(DIM, DIM, has_bias=False)
+        down = RowParallelLinear(DIM, DIM, has_bias=False)
+        before = [str(p) for p in _placements(up.weight.tensor.get_value(NATIVE))]
+        fill(up.weight)
+        value = up.weight.tensor.get_value(NATIVE)
+        assert [str(p) for p in _placements(value)] == before
+        if fill is ttml.init.normal_:
+            first, second = _shards(value)
+            assert not np.array_equal(first, second), "both devices hold the same slice"
+        ttml.ops.unary.mean(down(up(_input((1, 1, DIM, DIM))))).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    @pytest.mark.parametrize("composite", [False, True], ids=["fused", "composite"])
+    def test_swiglu_refuses_dropout_on_a_row_parallel_w2(self, tp_mesh, expect_error, monkeypatch, composite):
+        if composite:
+            monkeypatch.setenv("TTML_SWIGLU_FORCE_COMPOSITE", "1")
+        w1, w3 = (ColumnParallelLinear(DIM, 2 * DIM, has_bias=False) for _ in range(2))
+        w2 = RowParallelLinear(2 * DIM, DIM, has_bias=False)
+        x = _input((1, 1, 32, DIM))
+        with expect_error(RuntimeError, "swiglu cannot apply dropout when w2 is sharded along its input features"):
+            ttml.ops.swiglu.swiglu(x, w1.weight.tensor, w2.weight.tensor, w3.weight.tensor, 0.1)
 
     def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
         """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp; a
@@ -139,6 +201,15 @@ class TestTP:
                     np.testing.assert_array_equal(a, b, err_msg=f"{name}: device {device}'s piece was averaged on tp")
             else:
                 _assert_mean_over_axis(before[name], after, tp_mesh.shape, tp, name)
+
+    @pytest.mark.parametrize("case", list(LLAMA_TP_CASES))
+    def test_sync_sums_exactly_the_partial_gradients(self, tp_mesh, case):
+        """The sums follow the ``mark_partial`` marks, not the gradients' labels."""
+        strategy, lora, summed = LLAMA_TP_CASES[case]
+        model = tiny_llama(strategy, lora=lora)
+        params = model.parameters()
+        llama_backward(model, ())
+        assert_sync_reduces_exactly(params, reductions_by_rule(params, [("tp", "sum", p) for p in summed]))
 
 
 # --- FSDP on [1, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
@@ -197,9 +268,8 @@ class TestFSDP:
             ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(2)], coords)
         )
         assert len(_placements(weight)) == 1, "precondition: collapsed 1-D label"
-        for axis in range(len(mesh_shape)):
-            fsdp_reading = fsdp_module._already_fsdp_sharded(_placements(weight), axis, mesh_shape)
-            assert fsdp_reading == is_sharded_on_axis(weight, axis), f"mesh axis {axis}"
+        reading = fsdp_module._param_placements(linear.weight)
+        assert [isinstance(p, ttnn.PlacementShard) for p in reading] == [size > 1 for size in mesh_shape], reading
         with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
             ttml.fsdp.fully_shard(linear)
 
@@ -208,6 +278,14 @@ class TestFSDP:
         replace_lazy_mapper(lazy.weight, ttml.core.distributed.shard_tensor_to_mesh_mapper(_device(), 2, None))
         with expect_error(RuntimeError, "already sharded on mesh axis"):
             ttml.fsdp.fully_shard(lazy)
+
+    @pytest.mark.parametrize("case", list(LLAMA_FSDP_CASES))
+    def test_sync_averages_exactly_the_replicated_gradients(self, fsdp_mesh, case):
+        replicate, averaged = LLAMA_FSDP_CASES[case]
+        model = tiny_llama(TPStrategy.NONE, fsdp_replicate=replicate)
+        params = model.parameters()
+        llama_backward(model, ("fsdp",))
+        assert_sync_reduces_exactly(params, reductions_by_rule(params, [("fsdp", "mean", p) for p in averaged]))
 
 
 # --- DDP on [1, 2] ("tp", "dp") ---------------------------------------------------------------------------------

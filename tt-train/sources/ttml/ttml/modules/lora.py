@@ -12,7 +12,17 @@ import numpy as np
 import ttnn
 import ttml
 
-from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
+from ttml.parallel import mark_partial
+
+from .linear import (
+    ColumnParallelLinear,
+    LinearLayer,
+    RowParallelLinear,
+    gather_features,
+    replicate_for_tp,
+    shard_features,
+    sum_tp_partials,
+)
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
 from _ttml.modules import RunMode
@@ -39,7 +49,9 @@ class LoraConfig:
             is useful for keeping specific non-LoRA parameters trainable
             (e.g. layer norms).
         lora_dropout: Dropout probability applied to the LoRA input during
-            training.
+            training. If that input is replicated on one mesh axis and sharded
+            on another, all devices share one mask and a warning is logged
+            once (#55947).
     """
 
     rank: int = 8
@@ -128,6 +140,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         self.in_features = base_layer.in_features
         self.out_features = base_layer.out_features
         self.gather_output = base_layer.gather_output
+        self.sequence_parallel = base_layer.sequence_parallel
         self.axis_name = base_layer.axis_name
         self.cluster_axis = base_layer.cluster_axis
 
@@ -143,6 +156,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
             self.bias.tensor.set_requires_grad(config.is_bias_trainable)
 
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
+        # Its output feeds only this rank's rows of lora_B, so its gradient is a partial sum across tp.
+        mark_partial(self.lora_A, self.axis_name)
         lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
         # On a fused base layer lora_B's rows are in the same per-shard [Q_d | K_d | V_d] order as the base output's.
@@ -150,28 +165,20 @@ class LoraColumnParallelLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
-        x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        x = replicate_for_tp(x, self.cluster_axis, self.sequence_parallel)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            base = ttml.ops.distributed.all_gather(
-                base, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            base = gather_features(base, self.cluster_axis)
         # lora_A is replicated so it operates on the full input; lora_B is
         # column-sharded, producing a sharded update that must be gathered
         # whenever the base path is gathered.
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        # Each device's grad of the replicated lora_A only carries its own
-        # lora_B shard's output columns; broadcast (identity forward, all_reduce
-        # backward) sums it across TP so every copy gets the full grad.
-        lora_A = ttml.ops.distributed.broadcast(self.lora_A.tensor, self.cluster_axis)
-        h = ttml.ops.linear.linear(lora_input, lora_A, None)
+        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
-            lora_update = ttml.ops.distributed.all_gather(
-                lora_update, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            lora_update = gather_features(lora_update, self.cluster_axis)
         return base + lora_update * self.scaling
 
 
@@ -187,7 +194,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
 
         self.in_features = base_layer.in_features
         self.out_features = base_layer.out_features
-        self.input_is_parallel = base_layer.input_is_parallel
+        self.sequence_parallel = base_layer.sequence_parallel
         self.axis_name = base_layer.axis_name
         self.cluster_axis = base_layer.cluster_axis
 
@@ -206,22 +213,23 @@ class LoraRowParallelLinear(AbstractModuleBase):
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank, mapper=lora_A_mapper))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
         self.lora_B.checkpoint_layout = lora_b_layout(self.weight)
+        if self.sequence_parallel:
+            # It multiplies the sequence-sharded sum, so like the base bias it sees only this rank's tokens.
+            mark_partial(self.lora_B, self.axis_name)
 
     def forward(self, x):
-        if not self.input_is_parallel:
-            x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
+        x = shard_features(x, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
+        base = sum_tp_partials(base, self.cluster_axis, self.sequence_parallel)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
-        # lora_A is row-sharded (each device sees a slice of in_features), so
-        # an all_reduce is needed after lora_A to sum partial projections before
-        # the replicated lora_B can be applied.
+        # lora_A is row-sharded (each device sees a slice of in_features), so its partial
+        # projections are summed exactly like the base path's before the replicated lora_B.
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
-        h = ttml.ops.distributed.all_reduce(h, self.input_is_parallel, self.cluster_axis)
+        h = sum_tp_partials(h, self.cluster_axis, self.sequence_parallel)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         return base + lora_update * self.scaling
 

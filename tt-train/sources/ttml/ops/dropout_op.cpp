@@ -4,21 +4,64 @@
 
 #include "dropout_op.hpp"
 
+#include <mutex>
+#include <tt-logger/tt-logger.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/unary/unary.hpp>
+#include <variant>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
 
 namespace ttml::ops {
 
-autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability, bool use_per_device_seed) {
+bool dropout_seed_per_device(const ttnn::Tensor& value) {
+    const auto* device = value.device();
+    TT_FATAL(device != nullptr, "dropout needs a tensor allocated on a device");
+    const auto mesh_shape = device->shape();
+    if (mesh_shape.mesh_size() == 1U) {
+        return false;
+    }
+    const auto placements = core::distributed::placements_per_axis(value);
+    std::vector<uint32_t> replicated;
+    std::vector<uint32_t> sharded;
+    for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        if (mesh_shape[axis] == 1) {
+            continue;
+        }
+        const bool is_shard =
+            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+        (is_shard ? sharded : replicated).push_back(axis);
+    }
+    if (!replicated.empty() && !sharded.empty()) {
+        // The copies need one mask and the shards different ones, which needs a dropout kernel that seeds per mesh
+        // axis. One seed for every device keeps the copies equal, at the cost of the shards dropping the same
+        // positions (#55947).
+        static std::once_flag warned;
+        std::call_once(warned, [&] {
+            log_warning(
+                tt::LogAlways,
+                "dropout draws one mask for a tensor replicated across mesh axis {} and sharded across mesh axis {}, "
+                "so its shards drop the same positions (#55947)",
+                replicated.front(),
+                sharded.front());
+        });
+        return false;
+    }
+    return !sharded.empty();
+}
+
+autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability) {
     if (probability == 0.0F) {
         return tensor;
     }
+    // Decided once from the input: the backward must draw the same masks, whatever its gradient's label says.
+    const bool use_per_device_seed = dropout_seed_per_device(tensor->get_value());
 
     auto dropout_seed = autograd::ctx().get_generator()();
     auto scaler = 1.0F / (1.0F - probability);

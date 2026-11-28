@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/distributed.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
@@ -39,9 +40,11 @@ void ttnn_linear_backward(
     if (bias) {
         auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
         auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().logical_shape());
+        core::distributed::label_grad_like_parameter_shards(bias->get_value(), bias_grad);
         bias->add_grad(bias_grad);
     }
     auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().logical_shape());
+    core::distributed::label_grad_like_parameter_shards(weight->get_value(), weight_grad);
 
     auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.logical_shape());
 
@@ -87,6 +90,36 @@ void moreh_linear_backward(
     }
 }
 
+namespace {
+
+// Works around a ttnn bug, https://github.com/tenstorrent/tt-metal/issues/64288: ttnn labels a matmul's output with
+// its operands' shard dims copied as they are. A weight stored [out, in] and sharded by output rows is Shard(-2), so
+// the output is labelled Shard(-2), the sequence, though each device holds a slice of its last dim. Remove this once
+// ttnn labels matmul outputs itself.
+void fix_ttnn_linear_output_topology(const ttnn::Tensor& weight, ttnn::Tensor& output) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    if (weight.device() == nullptr || weight.device()->shape().mesh_size() == 1U) {
+        return;
+    }
+    const auto weight_placements = core::distributed::placements_per_axis(weight);
+    const int weight_rank = static_cast<int>(weight.logical_shape().rank());
+    // The output's label is read only if it needs fixing, which most linears' outputs do not.
+    std::optional<ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>> placements;
+    for (size_t axis = 0; axis < weight_placements.size(); ++axis) {
+        if (core::distributed::shard_dim(weight_placements[axis], weight_rank) == weight_rank - 2) {
+            if (!placements) {
+                placements = core::distributed::placements_per_axis(output);
+            }
+            (*placements)[axis] = Shard{static_cast<int>(output.logical_shape().rank()) - 1};
+        }
+    }
+    if (placements) {
+        core::distributed::set_placements_per_axis(output, *placements);
+    }
+}
+
+}  // namespace
+
 autograd::TensorPtr linear_op(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
     auto out = autograd::create_tensor();
@@ -94,7 +127,7 @@ autograd::TensorPtr linear_op(
     const auto grid_size = tensor->get_value().device()->compute_with_storage_grid_size();
     auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
-    out->set_value(ttnn::linear(
+    auto value = ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
         bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
@@ -105,7 +138,9 @@ autograd::TensorPtr linear_op(
         /* program_config */ std::nullopt,
         /* activation */ std::nullopt,
         /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
-        /* core_grid */ core_grid));
+        /* core_grid */ core_grid);
+    fix_ttnn_linear_output_topology(weight->get_value(), value);
+    out->set_value(value);
 
     autograd::GradFunction grad = [weight, bias, tensor, out]() {
         auto tensor_shape = tensor->get_value().logical_shape();

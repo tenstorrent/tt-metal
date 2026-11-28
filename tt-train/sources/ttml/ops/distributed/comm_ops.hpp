@@ -8,6 +8,10 @@
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
+// A collective's backward depends on whether the gradient arriving at its output is a partial sum still to be added up
+// across ranks. A tensor's label cannot say that, since a placement is only Replicate or Shard
+// (https://github.com/tenstorrent/tt-metal/issues/62347), so the caller says it: `noop_backward` for all_reduce and
+// `grad_output_type` for all_gather.
 enum class GradOutputType { REPLICATED, SHARDED };
 
 // dim: tensor dimension to scatter/gather/reduce across (which tensor dimension will change after the operation)

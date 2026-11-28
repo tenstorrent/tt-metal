@@ -53,6 +53,7 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase
 from ttml.modules.parameter import Parameter, TensorMetadata, replace_lazy_mapper
+from ttml.parallel import partial_axes
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -64,6 +65,18 @@ class _ShardedState(Enum):
 
     SHARDED = 0
     UNSHARDED = 1
+
+
+def _label_partial_axes_replicated(param_tensor: Any, grad: Any) -> None:
+    """Label ``grad`` Replicate on the mesh axes its parameter is marked partial on (``ttml.parallel.mark_partial``)."""
+    mesh = ttml.mesh()
+    axes = [mesh.axis_index(name) for name in partial_axes(param_tensor) if mesh.has_axis(name)]
+    if not axes:
+        return
+    placements = ttml.core.distributed.placements_per_axis(grad)
+    for axis in axes:
+        placements[axis] = ttnn.PlacementReplicate()
+    ttml.core.distributed.set_placements_per_axis(grad, placements)
 
 
 def _is_fsdp_wrapped_module(module: Any) -> bool:
@@ -248,6 +261,7 @@ class FSDPState:
             # core::distributed::synchronize_tensor's fp32 route, written here
             # because FSDP keeps the shard), the grad itself otherwise.
             gathered_grad = param_tensor.get_grad()
+            _label_partial_axes_replicated(param_tensor, gathered_grad)
             grad_dtype = gathered_grad.dtype
             to_reduce = gathered_grad
             if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
@@ -301,21 +315,18 @@ class FSDPState:
             ttnn.deallocate(shard_grad)
 
     def _reshard_all_params(self) -> None:
-        """Swap managed params back to their cached shard tensors.
-
-        We grab the current gathered value before swapping so we can
-        ``ttnn.deallocate`` it explicitly rather than relying on Python GC —
-        this makes the memory-saving property of ``reshard_after_forward``
-        actually take effect on the device side at the moment we expect.
-        """
+        """Swap managed params back to their cached shard tensors."""
         for parameter, _shard_dim in self.managed:
-            param_tensor = parameter.tensor
-            shard = self._cached_shards.get(id(param_tensor))
-            if shard is None:
-                raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
-            gathered = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-            param_tensor.set_value(shard)
-            ttnn.deallocate(gathered)
+            self._reshard_param(parameter.tensor)
+
+    def _reshard_param(self, param_tensor: Any) -> None:
+        """Swap a gathered param back to its cached shard and free the gathered value."""
+        shard = self._cached_shards.get(id(param_tensor))
+        if shard is None:
+            raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
+        gathered = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+        param_tensor.set_value(shard)
+        ttnn.deallocate(gathered)
 
 
 # ---------------------------------------------------------------------------
@@ -740,9 +751,7 @@ def fully_shard(
             (``re.search``) in the parameter's dotted names relative to ``module``; a
             tied parameter matches if any of its names does.
             Raises if a matched parameter is already sharded on
-            ``mesh_axis``. The training loop must average their gradients over
-            ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
-            ``GRPOTrainer`` already do.
+            ``mesh_axis``.
         reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
             ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and keeps the mean shard in fp32.
             During backward it holds an fp32 copy of each gathered gradient plus the reduce-scatter's working buffer,

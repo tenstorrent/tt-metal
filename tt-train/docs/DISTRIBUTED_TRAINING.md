@@ -178,7 +178,7 @@ optimizer.step();
    - Output is sharded; optionally `all_gather` to get full output
 
 2. **Row Parallel** (`RowParallelLinear`): Shard input features
-   - Input must be sharded (or scatter it first)
+   - Input is sharded along the features, or replicated.
    - Each device computes partial output, then `all_reduce` to sum
 
 ```cpp
@@ -208,6 +208,37 @@ auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
 | Enables training larger models | More complex implementation |
 | Lower memory per device | Communication overhead (all-gather, reduce-scatter) |
 | Can combine with DDP | Requires model code changes |
+
+#### Parameters with partial gradients
+
+A parameter replicated across the tensor-parallel axis usually gets the same gradient on every rank. Some see only
+part of the data on each rank, though. Each rank
+then holds a partial sum of the gradient, which no label can say: a placement is only `Replicate` or `Shard`
+([#62347](https://github.com/tenstorrent/tt-metal/issues/62347)). So the module that creates such a parameter marks it, and
+`ttml.sync_gradients` adds the partial sums up:
+
+```python
+if sequence_parallel:
+    ttml.parallel.mark_partial(self.attention_norm, "tp")
+```
+
+Marked parameters:
+
+- `lora_A` of the column-parallel LoRA;
+- under SP: the norms, the row-parallel bias and `lora_B` of the row-parallel LoRA;
+- in the Qwen3 example: the per-head QK norms.
+
+Only `ttml.sync_gradients` sums these gradients, so any training loop with a TP axis must call it every step, even
+without data parallelism:
+
+```python
+loss.backward(retain_graph=False)
+ttml.sync_gradients(model.parameters())
+optimizer.step()
+```
+
+Skip it and the copies of these parameters silently drift apart. The C++
+`ttml::core::distributed::synchronize_gradients` won't help: it only averages over the data-parallel axes.
 
 ---
 
@@ -476,7 +507,8 @@ device_config:
 
 In the device config, you can specify which parallelism strategies to use:
 
-- **`enable_tp`**: Enable tensor parallelism (shard model parameters)
+- **`enable_tp`**: Enable tensor parallelism (shard model parameters). With DP and without `enable_sp`, dropout on the residual stream, which is replicated across TP ranks and sharded across DP ranks, draws the same mask on every DP rank until dropout can seed per mesh axis (#55947).
+- **`enable_sp`**: Enable Megatron sequence parallelism on top of TP (norms and residual adds run on a sequence-sharded stream; requires `enable_tp`, Llama only, `examples/train/train.py` only)
 - **`enable_ddp`**: Enable data parallelism (replicate model, shard data)
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)
 - **`enable_cp`**: Enable context parallelism (shard input along sequence dimension)

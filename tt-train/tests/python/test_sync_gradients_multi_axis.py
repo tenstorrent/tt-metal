@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The fp32 gradient sync (``reduce_dtype=FLOAT32``) on a 2x2 mesh with axes ``("dp", "tp")``: a sum over both axes,
-a gradient the tp axis already shards, and the topology label of the result.
+a gradient the tp axis already shards, the topology label of the result, and the tp sum of a gradient marked partial.
 
 Every test runs with ``ttnn.CONFIG.strict_ccl_topology`` on, so a label the CCL topology helper refuses is an error.
 """
@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import ttnn
 import ttml
+from ttml.modules import Parameter
 
 from gradient_sync_helpers import (
     device,
@@ -45,7 +46,7 @@ def test_fp32_sum_over_two_axes(dp_tp_mesh):
     expected = to_bf16(values.astype(np.float64).mean(axis=(0, 1)))
 
     fp32_parameters, fp32_parameter = one_parameter(gradient)
-    ttml.sync_gradients(fp32_parameters, axis_names=("dp", "tp"), reduce_dtype=_FP32)
+    ttml.average_gradients(fp32_parameters, ("dp", "tp"), reduce_dtype=_FP32)
     cpp_parameters, cpp_parameter = one_parameter(gradient)
     ttml.core.distributed.synchronize_gradients(cpp_parameters, [_DP_AXIS, _TP_AXIS], reduce_dtype=_FP32)
     bf16 = _per_device(ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS, _TP_AXIS]))
@@ -70,7 +71,7 @@ def test_tp_sharded_gradient_over_the_dp_axis(dp_tp_mesh, rows, tp_dim):
     gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(tp_dim)]).get_value()
 
     parameters, parameter = one_parameter(gradient)
-    ttml.sync_gradients(parameters, axis_names=("dp",), reduce_dtype=_FP32)
+    ttml.sync_gradients(parameters, reduce_dtype=_FP32)
 
     # Two devices make each element a single add, so the values match on either route; the route function tells them
     # apart.
@@ -96,3 +97,67 @@ def test_fp32_sum_labels_the_reduced_axis_replicate(dp_tp_mesh, rows):
     assert route == (3 if rows == 1024 else None)
     assert placements(fp32) == [("Replicate",), ("Replicate",)]
     assert placements(fp32) == placements(bf16)
+
+
+# sync_gradients sums a gradient marked partial on tp (ttml.parallel.mark_partial) across tp in reduce_dtype too, and
+# writes the sum in the gradient's dtype. The value is sharded on dp, so dp is not averaged and the tp sum is the only
+# collective.
+def test_partial_gradient_sum_follows_reduce_dtype(dp_tp_mesh, gradient_reduce_default):
+    values = make_gradients(64, 128, seed=4, devices=4).reshape(2, 2, 64, 128)
+    gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]).get_value()
+    fp32 = _per_device(
+        ttnn.typecast(
+            ttml.core.distributed.all_reduce(ttnn.typecast(gradient, _FP32), cluster_axis=_TP_AXIS),
+            ttnn.DataType.BFLOAT16,
+        )
+    )
+    bf16 = _per_device(ttml.core.distributed.all_reduce(gradient, cluster_axis=_TP_AXIS))
+    expected = to_bf16(values.astype(np.float64).sum(axis=1, keepdims=True))
+    assert np.mean(fp32 == expected) > np.mean(bf16 == expected)
+
+    def synced(**reduce_dtype) -> np.ndarray:
+        value = upload(np.zeros((2, 1, 64, 128), np.float32), [ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
+        ttml.parallel.mark_partial(Parameter(value), "tp")
+        value.set_grad(gradient)
+        parameters = ttml.NamedParameters()
+        parameters["parameter"] = value
+        ttml.sync_gradients(parameters, **reduce_dtype)
+        assert value.get_grad().dtype == ttnn.DataType.BFLOAT16
+        assert placements(value.get_grad()) == [("Shard", 0), ("Replicate",)]
+        return _per_device(value.get_grad())
+
+    np.testing.assert_array_equal(synced(), bf16)
+    np.testing.assert_array_equal(synced(reduce_dtype=_FP32), fp32)
+    gradient_reduce_default(_FP32)
+    np.testing.assert_array_equal(synced(), fp32)
+    np.testing.assert_array_equal(synced(reduce_dtype=ttnn.DataType.BFLOAT16), bf16)
+
+
+# A partial gradient is averaged over dp, then summed over tp; under the fp32 reduce it must stay in fp32 in between.
+# Here each tp rank's dp mean lies halfway between two bf16 values, and the tp sum cancels everything but that half
+# step, so rounding the mean to bf16 would lose it.
+def test_partial_gradient_stays_fp32_between_the_sums(dp_tp_mesh, gradient_reduce_default):
+    rng = np.random.default_rng(5)
+    x = to_bf16(np.exp2(rng.integers(-3, 4, (64, 128))) * rng.uniform(1, 2, (64, 128)))
+    half_step = np.exp2(np.floor(np.log2(x)) - 8)  # half the bf16 spacing above x
+    values = np.empty((2, 2, 64, 128), np.float32)  # [dp, tp, ...]
+    values[0, 0], values[1, 0] = x, x + 2 * half_step
+    values[:, 1] = -x
+    gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]).get_value()
+
+    def synced(**reduce_dtype) -> np.ndarray:
+        value = upload(np.zeros((1, 1, 64, 128), np.float32), [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        ttml.parallel.mark_partial(Parameter(value), "tp")
+        value.set_grad(gradient)
+        parameters = ttml.NamedParameters()
+        parameters["parameter"] = value
+        ttml.sync_gradients(parameters, **reduce_dtype)
+        assert value.get_grad().dtype == ttnn.DataType.BFLOAT16
+        assert placements(value.get_grad()) == [("Replicate",), ("Replicate",)]
+        return _per_device(value.get_grad())
+
+    expected = np.broadcast_to(half_step, (2, 2, 64, 128))
+    np.testing.assert_array_equal(synced(reduce_dtype=_FP32), expected)
+    assert not np.any(synced() == expected), "bf16 sums kept the half step too, so this test proves nothing"
+    gradient_reduce_default(_FP32)
+    np.testing.assert_array_equal(synced(), expected)

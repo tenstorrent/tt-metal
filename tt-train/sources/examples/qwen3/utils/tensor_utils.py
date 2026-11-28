@@ -54,6 +54,10 @@ def get_tp_size(shard_dim=None):
     return pctx.get_tp_size()
 
 
+def tp_axis_name(shard_dim=None) -> str:
+    return "tp" if shard_dim is None else ttml.mesh().axis_names[shard_dim]
+
+
 def tile_pad(dim: int) -> int:
     """Round *dim* up to the nearest multiple of 32 (tile alignment)."""
     return ((dim + 31) // 32) * 32

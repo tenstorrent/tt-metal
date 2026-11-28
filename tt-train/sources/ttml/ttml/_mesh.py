@@ -2,10 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import functools, operator, os, re
+import functools, operator, os, re, warnings
 from typing import Iterable
 import ttnn
 import ttml
+from .parallel import partial_axes
 
 
 def prod(x: Iterable[int]) -> int:
@@ -234,27 +235,60 @@ def mesh() -> Mesh:
 
 
 def sync_gradients(
-    parameters, axis_names: tuple[str, ...] = ("dp",), *, reduce_dtype: ttnn.DataType | None = None
+    parameters, axis_names: tuple[str, ...] | None = None, *, reduce_dtype: ttnn.DataType | None = None
 ) -> None:
+    """Turn each device's local gradient into the global one; call once per step.
+
+    ``reduce_dtype`` applies to both sums, as :func:`average_gradients` and :func:`sum_partial_gradients` take it.
+    Under ``FLOAT32``, a partial gradient stays in fp32 between the two sums, so it is rounded back to its own dtype
+    only once.
+    """
+    if axis_names is not None:
+        warnings.warn(
+            "sync_gradients(axis_names=...) is deprecated: call sync_gradients(parameters), which averages over 'dp' "
+            "and 'fsdp' and sums the gradients marked partial (ttml.parallel.mark_partial)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    widened = []
+    m = maybe_mesh()
+    if m is not None and ttml.core.distributed.resolve_reduce_dtype(reduce_dtype) == ttnn.DataType.FLOAT32:
+        for _, param in parameters.items():
+            if not param.is_grad_initialized() or not _partial_axis_indices(m, param):
+                continue
+            grad = param.get_grad()
+            if grad.dtype != ttnn.DataType.FLOAT32:
+                widened.append((param, grad.dtype))
+                param.set_grad(ttnn.typecast(grad, ttnn.DataType.FLOAT32))
+    average_gradients(
+        parameters, axis_names=("dp", "fsdp") if axis_names is None else axis_names, reduce_dtype=reduce_dtype
+    )
+    sum_partial_gradients(parameters, reduce_dtype=reduce_dtype)
+    for param, dtype in widened:
+        param.set_grad(ttnn.typecast(param.get_grad(), dtype))
+
+
+def average_gradients(parameters, axis_names: tuple[str, ...], *, reduce_dtype: ttnn.DataType | None = None) -> None:
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced
     (summed) across every axis in ``axis_names`` and then divided by the
     product of those axis sizes, leaving each device with the mean grad.
 
-    Axes listed in ``axis_names`` but not present on the active mesh are
-    silently skipped — if none are present (or ``axis_names`` is empty, or
-    no mesh is open), the function is a no-op. The default ``("dp",)``
-    matches the common DDP case. TP is intentionally excluded: sharded
-    parameters already hold per-shard-correct grads, and a layer whose
-    replicated parameter gets a TP-partial grad must sum it across TP itself
-    (e.g. ``lora_A`` in ``LoraColumnParallelLinear``). Nothing enforces this;
-    see #63970 for a known violation.
+    Axes listed in ``axis_names`` but not present on the active mesh, or of
+    size 1, are silently skipped. If none are left (or ``axis_names`` is
+    empty, or no mesh is open), the function is a no-op. TP is not averaged:
+    sharded parameters already hold per-shard-correct grads, and a replicated
+    parameter whose grad is partial across TP is marked with
+    ``ttml.parallel.mark_partial`` and summed by ``sum_partial_gradients``.
 
     The sum is ``ttml.core.distributed.synchronize_gradients`` along the listed
     axes, which skips, for each parameter, any axis its value is sharded on.
     That covers ``ttml.fsdp.fully_shard``: its backward hook reduce-scatters the
     grad into shard shape and reinstalls the Shard-labelled shard as the value.
+    It also covers a parameter sharded on a listed axis by its own label (MoE
+    experts placed on "dp", say): each rank holds a different slice, so
+    averaging would mix unrelated parameters.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
@@ -270,9 +304,45 @@ def sync_gradients(
     if m is None or not axis_names:
         return
 
-    # An axis of one device has nothing to average over.
-    axes = [m.axis_index(name) for name in axis_names if m.has_axis(name)]
-    axes = [a for a in axes if m.shape[a] > 1]
+    # A collective over a size-1 axis is an error, not a no-op: sync_gradients always names "dp" and "fsdp".
+    axes = [m.axis_index(name) for name in axis_names if m.has_axis(name) and m.axis_size(name) > 1]
     if not axes:
         return
     ttml.core.distributed.synchronize_gradients(parameters, axes, reduce_dtype=reduce_dtype)
+
+
+def sum_partial_gradients(parameters, *, reduce_dtype: ttnn.DataType | None = None) -> None:
+    """Sum each gradient across the mesh axes its parameter is marked partial on (``ttml.parallel.mark_partial``).
+
+    Axes the mesh lacks, or of size 1, are skipped. ``reduce_dtype`` is the dtype the sum runs in, as
+    :func:`average_gradients` takes it; the sum is written back in the gradient's own dtype.
+
+    Args:
+        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
+    """
+    reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(reduce_dtype)
+    m = maybe_mesh()
+    if m is None:
+        return
+
+    for _, param in parameters.items():
+        if not param.is_grad_initialized():
+            continue
+        axes = _partial_axis_indices(m, param)
+        if not axes:
+            continue
+        grad = param.get_grad()
+        grad_dtype = grad.dtype
+        if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
+            grad = ttnn.typecast(grad, ttnn.DataType.FLOAT32)
+        for axis in axes:
+            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
+        if grad.dtype != grad_dtype:
+            grad = ttnn.typecast(grad, grad_dtype)
+        param.set_grad(grad)
+
+
+def _partial_axis_indices(m: Mesh, param) -> list[int]:
+    """Indices of the axes (of size > 1) that ``param``'s gradient is partial on, sorted: every process must issue the
+    collectives in the same order, and set iteration order differs between processes."""
+    return sorted(m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1)

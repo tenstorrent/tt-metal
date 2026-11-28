@@ -317,14 +317,8 @@ def main():
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
-        # When TP is enabled the LoRA-wrapped Llama LM head returns vocab-sharded
-        # logits ([B,1,S,padded_V/tp_size] per device).
-        if use_tp:
-            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, tt_y, cluster_axis=mesh.axis_index("tp")
-            )
-        else:
-            loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
+        # Under TP the LoRA-wrapped Llama LM head returns vocab-sharded logits ([B,1,S,padded_V/tp_size] per device).
+        loss = ttml.parallel.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
         # The loss lives on every device; under TP each holds the same value.
         if use_ddp or use_tp:
@@ -342,8 +336,7 @@ def main():
 
         autograd_ctx.reset_graph()
 
-        if use_ddp:
-            ttml.sync_gradients(model.parameters())
+        ttml.sync_gradients(model.parameters())
 
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000

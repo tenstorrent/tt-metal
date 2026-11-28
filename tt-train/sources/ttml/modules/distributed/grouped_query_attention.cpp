@@ -78,7 +78,7 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
         m_out_linear =
             std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim, /* has_bias */ false);
     }
-    m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob, /* use_per_device_seed */ false);
+    m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
     // register modules
