@@ -936,10 +936,7 @@ MatmulProgramConfig get_matmul_program_config(
         output_dtype);
 }
 
-// Tile equality ignores the transpose flags, so check them separately.
-inline bool is_plain_tile(const tt::tt_metal::Tile& tile) {
-    return tile == tt::tt_metal::Tile() && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
-}
+inline bool is_plain_tile(const tt::tt_metal::Tile& tile) { return tile == tt::tt_metal::Tile(); }
 
 // The simple config splits one batch's output over the cores and loops over the batches, so a small output leaves
 // most cores idle. The batched branch of create_matmul_program_config gives each core whole batches instead.
