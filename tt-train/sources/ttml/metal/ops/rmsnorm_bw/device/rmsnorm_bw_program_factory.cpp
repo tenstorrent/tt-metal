@@ -74,6 +74,7 @@ constexpr uint32_t kPartialsSemId = 0U;
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 const std::string kComputeDgammaDefineKey = "COMPUTE_DGAMMA";
+const std::string kComputeDaDefineKey = "COMPUTE_DA";
 const std::string kGatedDefineKey = "GATED";
 
 }  // namespace
@@ -87,8 +88,8 @@ struct RMSNormBackwardBuffers {
     tt::tt_metal::Buffer* gamma;
     tt::tt_metal::Buffer* rms;
     tt::tt_metal::Buffer* dL_dout;
-    tt::tt_metal::Buffer* gate;  // nullptr unless gated
-    tt::tt_metal::Buffer* da;
+    tt::tt_metal::Buffer* gate;               // nullptr unless gated
+    tt::tt_metal::Buffer* da;                 // nullptr unless compute_da
     tt::tt_metal::Buffer* dgamma_components;  // nullptr unless compute_dgamma
     tt::tt_metal::Buffer* dgate;              // nullptr unless gated
 };
@@ -99,10 +100,10 @@ RMSNormBackwardBuffers get_buffers(const tensor_args_t& tensor_args, const tenso
         .gamma = tensor_args.gamma.buffer(),
         .rms = tensor_args.rms.buffer(),
         .dL_dout = tensor_args.dL_dout.buffer(),
-        .gate = tensor_args.gate.has_value() ? tensor_args.gate->buffer() : nullptr,
-        .da = output[0]->buffer(),
-        .dgamma_components = output[1].has_value() ? output[1]->buffer() : nullptr,
-        .dgate = output[2].has_value() ? output[2]->buffer() : nullptr,
+        .gate = get_buffer_or_null(tensor_args.gate),
+        .da = get_buffer_or_null(output[0]),
+        .dgamma_components = get_buffer_or_null(output[1]),
+        .dgate = get_buffer_or_null(output[2]),
     };
 }
 
@@ -115,7 +116,7 @@ uint32_t block_size_for(const uint32_t row_tiles) {
 }  // namespace
 
 // L1 bytes when the Wt tiles of each row a core holds stay resident: its slice with num_slices > 1, which adds the
-// partial exchange.
+// partial exchange when dL_da is computed.
 uint64_t required_l1_bytes(
     const uint32_t Wt,
     const uint32_t num_slices,
@@ -123,31 +124,36 @@ uint64_t required_l1_bytes(
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
     const bool compute_dgamma,
+    const bool compute_da,
     const bool gated) {
     const uint32_t twice_block_size = 2U * block_size_for(Wt);
 
-    // Memory of input tensors
+    // Memory of input tensors. The mask, the scaler, the matmul reduce tile and the scale are only used for dL_da;
+    // gamma and the zero tile also for dL_dgate.
+    const bool reads_gamma = compute_da || gated;
     const uint64_t input_memory = Wt * input_single_tile_size_bytes;
-    const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t gamma_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t mask_memory = compute_da ? kNumMaskTiles * bfloat16_single_tile_size_bytes : 0U;
+    const uint64_t scaler_memory = compute_da ? kNumScalerTiles * bfloat16_single_tile_size_bytes : 0U;
+    const uint64_t gamma_memory = reads_gamma ? Wt * bfloat16_single_tile_size_bytes : 0U;
     const uint64_t rms_a_memory = kNumRmsATiles * bfloat16_single_tile_size_bytes;
     // Gated mode consumes dL_dout and the gate block by block, turning them into du, which holds the whole row.
     const uint64_t dL_dout_memory = (gated ? twice_block_size : Wt) * bfloat16_single_tile_size_bytes;
     const uint64_t gate_memory = gated ? twice_block_size * bfloat16_single_tile_size_bytes : 0U;
-    const uint64_t du_memory = gated ? Wt * float32_single_tile_size_bytes : 0U;
-    const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t zero_memory = kNumZeroTiles * bfloat16_single_tile_size_bytes;
+    // du feeds dL_da and dL_dgamma_components only.
+    const uint64_t du_memory = gated && (compute_da || compute_dgamma) ? Wt * float32_single_tile_size_bytes : 0U;
+    const uint64_t matmul_reduce_memory = compute_da ? kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes : 0U;
+    const uint64_t zero_memory = reads_gamma ? kNumZeroTiles * bfloat16_single_tile_size_bytes : 0U;
     // Memory for output tensors. The output CBs are drained block-by-block by the writer, so they are
     // double-buffered (twice_block_size), independent of Wt.
-    const uint64_t dL_da_memory = twice_block_size * bfloat16_single_tile_size_bytes;
+    const uint64_t dL_da_memory = compute_da ? twice_block_size * bfloat16_single_tile_size_bytes : 0U;
     const uint64_t dL_dgamma_components_memory =
         compute_dgamma ? twice_block_size * bfloat16_single_tile_size_bytes : 0U;
     const uint64_t dL_dgate_memory = gated ? twice_block_size * bfloat16_single_tile_size_bytes : 0U;
     // Memory for intermediate computations
     const uint64_t recip_rms_a_bcasted_memory = kNumRecipRmsATiles * bfloat16_single_tile_size_bytes;
-    const uint64_t scale_memory = kNumScaleTiles * float32_single_tile_size_bytes;
-    const uint64_t partials_memory = rmsnorm::row_slice_exchange_l1_bytes(num_slices);
+    const uint64_t scale_memory = compute_da ? kNumScaleTiles * float32_single_tile_size_bytes : 0U;
+    // The slices of a row exchange partial scales, so only dL_da needs the exchange.
+    const uint64_t partials_memory = compute_da ? rmsnorm::row_slice_exchange_l1_bytes(num_slices) : 0U;
 
     // Total L1 memory required
     return input_memory + mask_memory + scaler_memory + gamma_memory + rms_a_memory + dL_dout_memory + gate_memory +
@@ -172,7 +178,8 @@ rmsnorm::RowSlicePlan make_plan(const operation_attributes_t& args, const tensor
                 input_single_tile_size_bytes,
                 bfloat16_single_tile_size_bytes,
                 float32_single_tile_size_bytes,
-                args.compute_dgamma,
+                args.outputs.grad_gamma,
+                args.outputs.grad_input,
                 gated);
         });
 }
@@ -187,7 +194,8 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     const auto& input = tensor_args.input;
     const auto& gate = tensor_args.gate;
     const bool gated = gate.has_value();
-    const bool compute_dgamma = args.compute_dgamma;
+    const bool compute_dgamma = args.outputs.grad_gamma;
+    const bool compute_da = args.outputs.grad_input;
 
     auto* device = input.device();
     tt::tt_metal::ProgramDescriptor desc;
@@ -252,46 +260,66 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     auto data_format = tt::DataFormat::Float16_b;
     auto precise_data_format = tt::DataFormat::Float32;
 
+    // The mask, the scaler, the matmul reduce tile and the scale are only used for dL_da; gamma and the zero tile also
+    // for dL_dgate.
+    const bool reads_gamma = compute_da || gated;
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kInputCbIndex, input_data_format, input_single_tile_size_bytes, num_input_tiles));
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles));
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles));
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
+    if (compute_da) {
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles));
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles));
+    }
+    if (reads_gamma) {
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
+    }
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsATiles));
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, num_dL_dout_tiles));
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles));
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kZeroCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles));
+    if (compute_da) {
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles));
+    }
+    if (reads_gamma) {
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kZeroCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles));
+    }
     // Output CBs are produced and drained one block at a time (see writer: "interleave the writes to avoid waiting
     // for the entire Wt tiles at once"), so they only need double-buffering, not a full row. Sizing them to
     // num_input_tiles (= Wt on the fits-in-L1 path) overflows L1 for large hidden dims (e.g. 32B, Wt=160).
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    if (compute_da) {
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    }
     if (compute_dgamma) {
         desc.cbs.push_back(make_cb_descriptor(
             all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     }
     desc.cbs.push_back(make_cb_descriptor(
         all_cores, kRecipRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRecipRmsATiles));
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kScaleCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumScaleTiles));
+    if (compute_da) {
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kScaleCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumScaleTiles));
+    }
     if (gated) {
         // The gate is read alongside dL_dout, so it is sized like it.
         desc.cbs.push_back(make_cb_descriptor(
             all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, num_dL_dout_tiles));
         desc.cbs.push_back(make_cb_descriptor(
             all_cores, kDLdgateCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
-        desc.cbs.push_back(
-            make_cb_descriptor(all_cores, kDuCbIndex, precise_data_format, float32_single_tile_size_bytes, Wt));
+        // du feeds dL_da and dL_dgamma_components only.
+        if (compute_da || compute_dgamma) {
+            desc.cbs.push_back(
+                make_cb_descriptor(all_cores, kDuCbIndex, precise_data_format, float32_single_tile_size_bytes, Wt));
+        }
     }
+    // The slices of a row exchange partial scales, so only dL_da needs the exchange; without it each slice is
+    // independent.
     rmsnorm::add_row_slice_exchange(
-        desc, all_cores, kSlicePartialCbIndex, kGatheredPartialsCbIndex, kPartialsSemId, num_slices);
+        desc, all_cores, kSlicePartialCbIndex, kGatheredPartialsCbIndex, kPartialsSemId, compute_da ? num_slices : 1U);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -307,6 +335,9 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     }
     if (compute_dgamma) {
         defines[kComputeDgammaDefineKey] = "1";
+    }
+    if (compute_da) {
+        defines[kComputeDaDefineKey] = "1";
     }
     if (gated) {
         defines[kGatedDefineKey] = "1";
@@ -375,8 +406,8 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     // 5) Per-core runtime args
     // -------------------------------------------------------------------------
     // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
-    // An absent gate, dL_dgamma_components or dL_dgate goes in as nullptr, which writes 0. The row slicing depends only
-    // on the hashed attributes, input spec and device.
+    // An absent gate, dL_da, dL_dgamma_components or dL_dgate goes in as nullptr, which writes 0. The row slicing
+    // depends only on the hashed attributes, input spec and device.
     // Taken after the last kernel push: a later push could reallocate desc.kernels.
     auto& reader = desc.kernels[kReaderKernelIdx];
     auto& writer = desc.kernels[kWriterKernelIdx];
@@ -419,7 +450,7 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
     const uint32_t rms_addr = buffers.rms->address();
     const uint32_t dLdout_addr = buffers.dL_dout->address();
     const uint32_t gate_addr = get_address_or_zero(buffers.gate);
-    const uint32_t dL_da_addr = buffers.da->address();
+    const uint32_t dL_da_addr = get_address_or_zero(buffers.da);
     const uint32_t dL_dgamma_components_addr = get_address_or_zero(buffers.dgamma_components);
     const uint32_t dL_dgate_addr = get_address_or_zero(buffers.dgate);
 

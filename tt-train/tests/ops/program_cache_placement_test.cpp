@@ -109,7 +109,7 @@ TEST_F(ProgramCachePlacementTest, RmsNormBw_L1InputAfterDramDoesNotReuseTheProgr
             rms,
             dL_dout,
             /*gate=*/std::nullopt,
-            /*compute_dgamma=*/true,
+            {.grad_gamma = true},
             ttml::metal::ops::rmsnorm::kMaxRowSlices,
             zeros_on_device(kShape),
             zeros_on_device(kShape));

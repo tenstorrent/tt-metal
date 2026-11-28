@@ -47,6 +47,8 @@ set(SOURCES
     ops/k_split_gram_matmul_op_test.cpp
     ops/all_gather_minimal_matmul_outer_dim_stripe_layout_test.cpp
     optimizers/adamw_fp32_parameter_test.cpp
+    ops/matmul_op_test.cpp
+    ops/grad_skipping_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
@@ -219,6 +221,7 @@ if(TARGET benchmark::benchmark)
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/rmsnorm_benchmark.cpp
+        benchmark/grad_skipping_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_kv_assemble_benchmark.cpp

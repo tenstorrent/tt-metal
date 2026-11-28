@@ -37,8 +37,9 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
-    const ttnn::Tensor& u_scaler,
+    const std::optional<ttnn::Tensor>& u_scaler,
     const float dropout_probability = 0.0F,
+    const ttml::metal::ops::sdpa_bw::device::kv::SDPABackwardKVOutputs& outputs = {},
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
 

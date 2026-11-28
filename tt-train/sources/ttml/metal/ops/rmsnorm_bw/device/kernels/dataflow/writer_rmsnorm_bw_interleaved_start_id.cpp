@@ -47,6 +47,18 @@ constexpr bool gated = true;
 constexpr bool gated = false;
 #endif
 
+#ifdef COMPUTE_DA
+constexpr bool compute_da = true;
+#else
+constexpr bool compute_da = false;
+#endif
+
+// Every output is bf16; take the tile size from one that exists.
+constexpr uint32_t cb_tile_size_idx =
+    compute_da ? cb_dL_da_idx : (compute_dgamma ? cb_dL_dgamma_components : cb_dL_dgate_idx);
+// The slices of a row exchange partial scales, which only dL_da uses; without it each slice is independent.
+constexpr bool exchanges_partials = sliced && compute_da;
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t da_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -60,7 +72,7 @@ void kernel_main() {
     // A moved last slice doesn't write its overlap, which the slice before it owns.
     const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(slice * St);
 
-    const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
+    const uint32_t tile_bytes = get_tile_size(cb_tile_size_idx);
     constexpr auto da_args = TensorAccessorArgs<7>();
     constexpr auto dgamma_args = TensorAccessorArgs<da_args.next_compile_time_args_offset()>();
     constexpr auto dgate_args = TensorAccessorArgs<dgamma_args.next_compile_time_args_offset()>();
@@ -70,7 +82,7 @@ void kernel_main() {
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
-        if constexpr (sliced) {
+        if constexpr (exchanges_partials) {
             all_gather_tile<num_slices>(
                 cb_slice_partial_idx,
                 cb_gathered_partials_idx,
@@ -81,8 +93,8 @@ void kernel_main() {
                 r - start_row,
                 peers.in_one_column);
         }
-        // Write dL_dgate (GATED), dL_da and dL_dgamma_components (COMPUTE_DGAMMA) in blocks. Compute produces the
-        // whole row's dL_dgate before the row's first dL_da, so dL_dgate is drained first; dL_da and
+        // Write dL_dgate (GATED), dL_da (COMPUTE_DA) and dL_dgamma_components (COMPUTE_DGAMMA) in blocks. Compute
+        // produces the whole row's dL_dgate before the row's first dL_da, so dL_dgate is drained first; dL_da and
         // dL_dgamma_components are interleaved to avoid waiting for the entire Wt tiles at once.
         // rmsnorm_bw() reduces dL_dgamma_components to dL_dgamma with ttnn::sum.
         if constexpr (gated) {
@@ -97,32 +109,39 @@ void kernel_main() {
                     block_size);
             }
         }
-        for (uint32_t c = 0; c < St; c += block_size) {
-            uint32_t start_idx = (r * Wt) + slice_start + c;
-            const uint32_t num_skipped = overlap_in_block(num_overlap, c, block_size);
+        // Gated mode may write dL_dgate alone.
+        if constexpr (compute_da || compute_dgamma) {
+            for (uint32_t c = 0; c < St; c += block_size) {
+                uint32_t start_idx = (r * Wt) + slice_start + c;
+                const uint32_t num_skipped = overlap_in_block(num_overlap, c, block_size);
 
-            // Write dL_da block
-            write_tiles_by_row_skipping</* UseBarrier = */ false>(
-                cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, num_skipped);
-            if constexpr (compute_dgamma) {
-                // Write dL_dgamma_components block
-                write_tiles_by_row_skipping</* UseBarrier = */ false>(
-                    cb_dL_dgamma_components,
-                    dgamma_output_addr_generator,
-                    start_idx,
-                    block_size,
-                    tile_bytes,
-                    num_skipped);
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_dL_da_idx, block_size);
-            if constexpr (compute_dgamma) {
-                cb_pop_front(cb_dL_dgamma_components, block_size);
+                if constexpr (compute_da) {
+                    // Write dL_da block
+                    write_tiles_by_row_skipping</* UseBarrier = */ false>(
+                        cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, num_skipped);
+                }
+                if constexpr (compute_dgamma) {
+                    // Write dL_dgamma_components block
+                    write_tiles_by_row_skipping</* UseBarrier = */ false>(
+                        cb_dL_dgamma_components,
+                        dgamma_output_addr_generator,
+                        start_idx,
+                        block_size,
+                        tile_bytes,
+                        num_skipped);
+                }
+                noc_async_write_barrier();
+                if constexpr (compute_da) {
+                    cb_pop_front(cb_dL_da_idx, block_size);
+                }
+                if constexpr (compute_dgamma) {
+                    cb_pop_front(cb_dL_dgamma_components, block_size);
+                }
             }
         }
     }
 
-    if constexpr (sliced) {
+    if constexpr (exchanges_partials) {
         all_gather_tile_finish(partials_sem_id);
     }
 }

@@ -77,6 +77,13 @@ const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 const std::string kHasGateDefKey = "HAS_GATE";
+const std::string kComputeGradQueryDefKey = "COMPUTE_GRAD_QUERY";
+const std::string kComputeUScalerDefKey = "COMPUTE_U_SCALER";
+const std::string kComputeGradGateDefKey = "COMPUTE_GRAD_GATE";
+const std::string kComputeGatedGradOutputDefKey = "COMPUTE_GATED_GRAD_OUTPUT";
+const std::string kComputeUDefKey = "COMPUTE_U";
+const std::string kReadAttnOutputDefKey = "READ_ATTN_OUTPUT";
+const std::string kReadGateDefKey = "READ_GATE";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward.
@@ -116,11 +123,16 @@ struct RowSplit {
     uint32_t num_cores = 0U;
 };
 
+// Pairing balances the causal K/V loop, which only runs for grad_Q; without it every row costs the same.
 RowSplit choose_row_split(
-    ttml::metal::AttentionMaskType mask_type, uint32_t St, uint32_t NC, uint32_t num_available_cores) {
+    ttml::metal::AttentionMaskType mask_type,
+    bool compute_grad_query,
+    uint32_t St,
+    uint32_t NC,
+    uint32_t num_available_cores) {
     const uint32_t total_rows = NC * St;
-    const bool balanced = (mask_type == ttml::metal::AttentionMaskType::Causal) && (St % 2 == 0) &&
-                          (total_rows > num_available_cores) && (St > 0);
+    const bool balanced = compute_grad_query && (mask_type == ttml::metal::AttentionMaskType::Causal) &&
+                          (St % 2 == 0) && (total_rows > num_available_cores) && (St > 0);
     const uint32_t units = balanced ? NC * (St / 2U) : total_rows;
     return RowSplit{.balanced = balanced, .num_cores = std::min(num_available_cores, units)};
 }
@@ -193,6 +205,19 @@ void assign_per_core_runtime_args_balanced(
 
 tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
     const q::operation_attributes_t& args, const q::tensor_args_t& tensor_args, q::tensor_return_value_t& output) {
+    // Which outputs to produce. Without grad_Q there is no K/V loop: Q, K, V, the mask, the intermediates and the
+    // dP/dS/dQ chain are all unused, and u_scaler and the gate outputs only need dY, Y and G.
+    const bool compute_grad_query = args.outputs.grad_query;
+    const bool compute_u_scaler = args.outputs.u_scaler;
+    const bool compute_grad_gate = args.outputs.grad_gate;
+    const bool compute_gated_grad_output = args.outputs.gated_grad_output;
+    // Derived once here and passed to the kernels as defines, so the CBs and the kernels agree on them:
+    // u = rowsum(dY * Y) feeds grad_Q's dS and the u_scaler output; Y feeds u and grad_gate (the gated dO alone
+    // doesn't read it); G feeds the gate helper, which produces grad_gate, the gated dO output and grad_Q's dP operand.
+    const bool compute_u = compute_grad_query || compute_u_scaler;
+    const bool read_attn_output = compute_u || compute_grad_gate;
+    const bool read_gate = args.has_gate && (compute_grad_query || compute_gated_grad_output || compute_grad_gate);
+
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
@@ -244,7 +269,7 @@ tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
     // -------------------------------------------------------------------------
     const uint32_t pairs_per_seq = St / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
-    const RowSplit row_split = choose_row_split(args.mask_type, St, NC, num_available_cores);
+    const RowSplit row_split = choose_row_split(args.mask_type, compute_grad_query, St, NC, num_available_cores);
     const bool use_balanced_parallelism = row_split.balanced;
 
     uint32_t num_cores = 0;
@@ -284,68 +309,92 @@ tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
-
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt));
-
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt));
-
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
-
-    // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
-    // Not needed for AttentionMaskType::None
-    if (args.mask_type != AttentionMaskType::None) {
-        desc.cbs.push_back(make_cb_descriptor(
-            all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kSingleTileBuffer));
+    if (read_attn_output) {
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
     }
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores,
-        kIntermediatesCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        2 * kNumOfIntermCBTiles));
+    // Inputs and intermediates of the K/V loop, which only runs for grad_Q.
+    if (compute_grad_query) {
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt));
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kMatMulReduceCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt));
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kGradQueryAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt));
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kAttentionWeightsCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+        // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
+        // Not needed for AttentionMaskType::None
+        if (args.mask_type != AttentionMaskType::None) {
+            desc.cbs.push_back(make_cb_descriptor(
+                all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kSingleTileBuffer));
+        }
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kGradAttentionCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores,
+            kIntermediatesCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            2 * kNumOfIntermCBTiles));
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kGradScoresCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kGradQueryAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt));
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kUScalarRowCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores,
+            kAttentionWeightsCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kSingleTileBuffer));
 
-    desc.cbs.push_back(
-        make_cb_descriptor(all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt));
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kGradAttentionCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
-    desc.cbs.push_back(make_cb_descriptor(
-        all_cores, kUScalerOutputCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kGradScoresCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt));
+    }
+
+    // u_scaler = rowsum(dY * Y), needed by grad_Q (for its own dS) and by the u_scaler output. compute_u_scalar_row
+    // also uses cb_u_scalar_row as scratch for the row reduction, so it exists whenever u_scaler is computed.
+    if (compute_u) {
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kMatMulReduceCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kUScalarRowCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+    }
+
+    if (compute_u_scaler) {
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kUScalerOutputCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
+    }
 
     if (args.has_gate) {
-        desc.cbs.push_back(
-            make_cb_descriptor(all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
+        if (read_gate) {
+            desc.cbs.push_back(
+                make_cb_descriptor(all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
+        }
 
-        desc.cbs.push_back(
-            make_cb_descriptor(all_cores, kGradGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
+        if (compute_grad_gate) {
+            desc.cbs.push_back(make_cb_descriptor(
+                all_cores, kGradGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
+        }
 
-        desc.cbs.push_back(make_cb_descriptor(
-            all_cores, kGatedGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
+        if (compute_gated_grad_output) {
+            desc.cbs.push_back(make_cb_descriptor(
+                all_cores, kGatedGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
+        }
 
-        desc.cbs.push_back(make_cb_descriptor(
-            all_cores, kGatedGradOutputLocalCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt));
+        // Gated dO as the dP operand, so only for grad_Q.
+        if (compute_grad_query) {
+            desc.cbs.push_back(make_cb_descriptor(
+                all_cores, kGatedGradOutputLocalCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt));
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -357,16 +406,18 @@ tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
     auto* query_buffer = query.buffer();
     auto* key_buffer = key.buffer();
     auto* value_buffer = value.buffer();
-    auto* attn_mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
+    auto* attn_mask_buffer = get_buffer_or_null(tensor_args.attn_mask);
     auto* intermediates_buffer = intermediates.buffer();
 
     auto* gate_buffer = args.has_gate ? gate.value().buffer() : nullptr;
 
+    // An output is nullopt when it was not requested; its buffer is then null and gets placeholder accessor args
+    // and a 0 address, so the writer's accessor offsets do not depend on the flags.
     auto& [grad_query_output, u_scaler_output, grad_gate_output, gated_grad_output_output] = output;
-    auto* grad_query_buffer = grad_query_output.buffer();
-    auto* u_scaler_buffer = u_scaler_output.buffer();
-    auto* grad_gate_buffer = args.has_gate ? grad_gate_output.value().buffer() : nullptr;
-    auto* gated_grad_output_buffer = args.has_gate ? gated_grad_output_output.value().buffer() : nullptr;
+    auto* grad_query_buffer = get_buffer_or_null(grad_query_output);
+    auto* u_scaler_buffer = get_buffer_or_null(u_scaler_output);
+    auto* grad_gate_buffer = get_buffer_or_null(grad_gate_output);
+    auto* gated_grad_output_buffer = get_buffer_or_null(gated_grad_output_output);
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -377,12 +428,13 @@ tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    // Set defines based on mask type (mutually exclusive)
-    if (args.mask_type == AttentionMaskType::Causal) {
+    // Set defines based on mask type (mutually exclusive). The mask is only applied in the K/V loop, so without
+    // grad_Q there is no mask CB and no mask define.
+    if (compute_grad_query && args.mask_type == AttentionMaskType::Causal) {
         reader_defines[kCausalMaskDefKey] = "1";
         writer_defines[kCausalMaskDefKey] = "1";
         compute_defines[kCausalMaskDefKey] = "1";
-    } else if (args.mask_type == AttentionMaskType::Arbitrary) {
+    } else if (compute_grad_query && args.mask_type == AttentionMaskType::Arbitrary) {
         reader_defines[kUseAttnMaskDefKey] = "1";
         compute_defines[kUseAttnMaskDefKey] = "1";
     }
@@ -399,6 +451,37 @@ tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
         reader_defines[kHasGateDefKey] = "1";
         writer_defines[kHasGateDefKey] = "1";
         compute_defines[kHasGateDefKey] = "1";
+    }
+
+    // Requested outputs
+    const auto set_define_on_all = [&](const std::string& key) {
+        reader_defines[key] = "1";
+        writer_defines[key] = "1";
+        compute_defines[key] = "1";
+    };
+    if (compute_grad_query) {
+        set_define_on_all(kComputeGradQueryDefKey);
+    }
+    if (compute_u_scaler) {
+        set_define_on_all(kComputeUScalerDefKey);
+    }
+    if (compute_grad_gate) {
+        set_define_on_all(kComputeGradGateDefKey);
+    }
+    if (compute_gated_grad_output) {
+        set_define_on_all(kComputeGatedGradOutputDefKey);
+    }
+    if (compute_u) {
+        writer_defines[kComputeUDefKey] = "1";
+        compute_defines[kComputeUDefKey] = "1";
+    }
+    if (read_attn_output) {
+        reader_defines[kReadAttnOutputDefKey] = "1";
+        compute_defines[kReadAttnOutputDefKey] = "1";
+    }
+    if (read_gate) {
+        reader_defines[kReadGateDefKey] = "1";
+        compute_defines[kReadGateDefKey] = "1";
     }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
@@ -598,21 +681,24 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
     const auto* query_buffer = tensor_args.query.buffer();
     const auto* key_buffer = tensor_args.key.buffer();
     const auto* value_buffer = tensor_args.value.buffer();
-    const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
+    const auto* mask_buffer = get_buffer_or_null(tensor_args.attn_mask);
     const auto* intermediates_buffer = tensor_args.intermediates.buffer();
-    const auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate.value().buffer() : nullptr;
+    const auto* gate_buffer = get_buffer_or_null(tensor_args.gate);
 
     auto& [grad_query_tensor, u_scaler_tensor, grad_gate_tensor, gated_grad_output_tensor] = tensor_return_value;
-    const auto* grad_query_buffer = grad_query_tensor.buffer();
-    const auto* u_scaler_buffer = u_scaler_tensor.buffer();
-    const auto* grad_gate_buffer = grad_gate_tensor.has_value() ? grad_gate_tensor.value().buffer() : nullptr;
-    const auto* gated_grad_output_buffer =
-        gated_grad_output_tensor.has_value() ? gated_grad_output_tensor.value().buffer() : nullptr;
+    const auto* grad_query_buffer = get_buffer_or_null(grad_query_tensor);
+    const auto* u_scaler_buffer = get_buffer_or_null(u_scaler_tensor);
+    const auto* grad_gate_buffer = get_buffer_or_null(grad_gate_tensor);
+    const auto* gated_grad_output_buffer = get_buffer_or_null(gated_grad_output_tensor);
 
     const auto [qB, qNH, qS, qEmbd] = tensor_args.query.padded_shape().to_array_4D();
     const auto grid = tensor_args.query.device()->compute_with_storage_grid_size();
     const RowSplit row_split = choose_row_split(
-        args.mask_type, qS / tt::constants::TILE_HEIGHT, qB * qNH, static_cast<uint32_t>(grid.x * grid.y));
+        args.mask_type,
+        args.outputs.grad_query,
+        qS / tt::constants::TILE_HEIGHT,
+        qB * qNH,
+        static_cast<uint32_t>(grid.x * grid.y));
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernel);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernel);
@@ -626,19 +712,18 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
             runtime_args[kQueryBufferIdx] = query_buffer->address();
             runtime_args[kKeyBufferIdx] = key_buffer->address();
             runtime_args[kValueBufferIdx] = value_buffer->address();
-            runtime_args[kAttnMaskBufferIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0U;
+            runtime_args[kAttnMaskBufferIdx] = get_address_or_zero(mask_buffer);
             runtime_args[kIntermediatesBufferIdx] = intermediates_buffer->address();
-            runtime_args[kGateBufferIdx] = gate_buffer != nullptr ? gate_buffer->address() : 0U;
+            runtime_args[kGateBufferIdx] = get_address_or_zero(gate_buffer);
         }
 
         // Update output buffers for writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kGradQueryBufferIdx] = grad_query_buffer->address();
-            runtime_args[kUScalerOutputBufferIdx] = u_scaler_buffer->address();
-            runtime_args[kGradGateBufferIdx] = grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U;
-            runtime_args[kGatedGradOutputBufferIdx] =
-                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U;
+            runtime_args[kGradQueryBufferIdx] = get_address_or_zero(grad_query_buffer);
+            runtime_args[kUScalerOutputBufferIdx] = get_address_or_zero(u_scaler_buffer);
+            runtime_args[kGradGateBufferIdx] = get_address_or_zero(grad_gate_buffer);
+            runtime_args[kGatedGradOutputBufferIdx] = get_address_or_zero(gated_grad_output_buffer);
         }
     });
 }
