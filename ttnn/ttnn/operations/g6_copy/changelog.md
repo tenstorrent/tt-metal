@@ -47,3 +47,27 @@
 - Tests added: `tests/ttnn/unit_tests/operations/g6_copy/test_g6_copy_dtypes_layouts.py` (values per
   non-float32 production row incl. shortest RM rows uint32/int32 `(1,)`, adversarial bits per dtype, bf16
   poisoned padding (1, 1, 1, 256), `describe_plan` determinism / full-grid / L1 per row).
+
+## Refinement 2 — Speed up the perf-flagged profile: overlap reads and writes
+- Date: 2026-11-28
+- What was done: knob-turn on the existing `streamed` plan. New single-source knob `BLOCK_BYTES = 16384` in
+  `g6_copy_program_descriptor.py`: `block_target = BLOCK_BYTES // page_bytes` (capped by the forced-test
+  `MAX_BLOCK_PAGES`). `_plan()` keeps `one_block` when the per-core assignment fits one block (so 1–4 page/core
+  shapes get no extra hand-offs) and otherwise streams `block_target`-page blocks through a
+  `STREAM_DEPTH_BLOCKS = 2` ring, so the writer drains block k while the reader fills block k+1. `BLOCK_BYTES = None`
+  restores the Phase 0 coarsest-block plan byte-for-byte. No kernel change (the reader/writer already block both
+  halves symmetrically). Knob in the descriptor cache key and reported by `describe_plan()`.
+  Reused: `_plan()`, the streamed path and both kernels. Added: one knob, one perf sweep file.
+- Measured (device kernel ns, Blackhole 11x10, fresh-cache, median of 5): (16, 12, 128, 128) fp32 68.0 → 61.6 µs
+  (samples 60.5–61.7); (8, 12, 128, 128) fp32 32.9 → 30.8 µs; bf16 (1, 1, 32, 62080) 21.3 → 19.2 µs (single run);
+  (2|1, 12, 128, 128), bf16 (1, 1, 8448, 128), bf8b (5, 1, 32, 256), bf16 RM (16, 3, 2560) within noise.
+  Depth 3 / 8 KiB / 24 KiB / 32 KiB measured, none better beyond noise across both flagged shapes.
+  Remaining headroom (61.6 vs 54.61 µs roofline): per-block `noc_async_read_barrier` hand-off and 4 KB runs —
+  Refinement 3 levers.
+- Accuracy achieved: bit-exact (fp32/bf16/int/uint), bfp8 one-step gate, on every guard shape and variant.
+- Golden test progress: slice `-k "float32 or bfloat16 or loose"` 30/30; unit directory green.
+- Issues encountered: `test_g6_copy_plan` pinned `one_block`; relaxed to the BB-08 contract (default plan per
+  `BLOCK_BYTES`). Stagger / lamp tests now pin `BLOCK_BYTES = None` since they measure the one-block plan; the
+  forced streamed test sets it to None so `MAX_BLOCK_PAGES` alone sets the extent.
+- Tests added: `tests/ttnn/unit_tests/operations/g6_copy/test_g6_copy_overlap.py` (BLOCK_BYTES × depth sweep over
+  the guard set, 5-repeat samples on the flagged shapes).

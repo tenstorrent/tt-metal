@@ -40,6 +40,7 @@ REPEATS = 3
 @pytest.mark.parametrize("variant", list(VARIANTS), ids=list(VARIANTS))
 def test_g6_copy_lamp(device, monkeypatch, variant, repeat):
     max_block_pages, depth, stagger = VARIANTS[variant]
+    monkeypatch.setattr(plan_knobs, "BLOCK_BYTES", None)  # MAX_BLOCK_PAGES alone sets the extent
     monkeypatch.setattr(plan_knobs, "MAX_BLOCK_PAGES", max_block_pages)
     monkeypatch.setattr(plan_knobs, "STREAM_DEPTH_BLOCKS", depth)
     monkeypatch.setattr(plan_knobs, "BANK_STAGGER", stagger)
@@ -64,6 +65,7 @@ PRODUCTION_SHAPES = [(1, 1), (1, 12, 128, 128), (2, 12, 128, 128), (8, 12, 128, 
 @pytest.mark.parametrize("shape", PRODUCTION_SHAPES, ids=lambda s: "x".join(map(str, s)))
 def test_g6_copy_stagger_production(device, monkeypatch, shape, stagger, repeat):
     monkeypatch.setattr(plan_knobs, "BANK_STAGGER", stagger)
+    monkeypatch.setattr(plan_knobs, "BLOCK_BYTES", None)  # stagger measured on the one-block plan
     torch.manual_seed(0)
     src_torch = torch.randn(shape, dtype=torch.float32)
     src = ttnn.from_torch(src_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)

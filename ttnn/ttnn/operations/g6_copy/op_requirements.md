@@ -87,7 +87,7 @@ Support is native. The existing page walk already is the pure-RM data-movement p
 - The 3 numerics regression tests still pass.
 - The acceptance directory is green.
 
-### [ ] Refinement 2 — Speed up the perf-flagged profile: overlap reads and writes
+### [x] Refinement 2 — Speed up the perf-flagged profile: overlap reads and writes
 
 **Type**: perf
 
@@ -143,6 +143,14 @@ block, or relative to `num_banks`, which is known only on device. The model-flag
   - bf16 TILE (1, 1, 32, 62080), (1, 1, 8448, 128).
   - bf8b TILE (5, 1, 32, 256).
   - bf16 RM (16, 3, 2560).
+
+**Outcome**: `BLOCK_BYTES = 16384` (4 fp32 / 8 bf16 tiles per block), depth 2, stagger on; shapes whose per-core
+assignment fits one block stay `one_block`. Flagged (16, 12, 128, 128) fp32: 68.0 → 61.6 µs median of 5 (max
+61.7, every sample < 68.56); (8, 12, 128, 128): 32.9 → 30.8 µs; bf16 (1, 1, 32, 62080): 21.3 → 19.2 µs; the rest
+of the guard set is on `one_block` either way or within noise. Remaining 1.13× vs the 54.61 µs roofline sits in
+the per-block drain-everything read barrier and the short (4 KB) bank runs — Refinement 3's trid / bank-affinity
+levers, not done here because they are that refinement's scope. Depth 3 (60.7 µs flagged) and 32 KiB (61.4 µs)
+are within noise of the default and regress (8, 12, 128, 128), so not taken.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile: transaction shape toward the roofline
 

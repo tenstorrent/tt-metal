@@ -19,7 +19,14 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 L1_BUDGET_BYTES = 1347776
 # Cap on cores used; None spreads the pages over the whole compute grid.
 MAX_CORES = None
-# Cap on pages per block; None lets one block hold a core's whole assignment.
+# Bytes per block: the overlap knob. A core whose assignment is larger than one block streams it
+# through STREAM_DEPTH_BLOCKS slots, so the writer drains block k while the reader fills block k+1;
+# a core whose assignment fits one block keeps the single hand-off (no extra blocks for small shapes).
+# Expressed in bytes so the block's transfer size carries across page sizes (fp32 tile: 4 pages).
+# (16, 12, 128, 128) fp32, 28 pages / core: one_block 67.6 us -> 16 KiB blocks, depth 2, see op_design.md.
+# None restores the coarsest-block default (one block per core whenever it fits L1).
+BLOCK_BYTES = 16384
+# Cap on pages per block (forced tests / sweeps); None leaves the extent to BLOCK_BYTES.
 MAX_BLOCK_PAGES = None
 # Blocks the staging CB holds on the streamed plan.
 STREAM_DEPTH_BLOCKS = 2
@@ -87,14 +94,18 @@ def _plan(grid, tensor_pages, page_bytes):
     assert len(work) == num_cores and first_page == tensor_pages
 
     core_pages_max = max(w.num_pages for w in work)
-    if core_pages_max * page_bytes <= L1_BUDGET_BYTES and (
-        MAX_BLOCK_PAGES is None or core_pages_max <= MAX_BLOCK_PAGES
-    ):
+    # The block extent the knobs ask for; None means "no cap" (the whole assignment).
+    block_target = None
+    if BLOCK_BYTES is not None:
+        block_target = max(1, BLOCK_BYTES // page_bytes)
+    if MAX_BLOCK_PAGES is not None:
+        block_target = MAX_BLOCK_PAGES if block_target is None else min(block_target, MAX_BLOCK_PAGES)
+    if core_pages_max * page_bytes <= L1_BUDGET_BYTES and (block_target is None or core_pages_max <= block_target):
         plan, block_pages, cb_depth_blocks = "one_block", core_pages_max, 1
     else:
         block_cap = L1_BUDGET_BYTES // (STREAM_DEPTH_BLOCKS * page_bytes)
-        if MAX_BLOCK_PAGES is not None:
-            block_cap = min(block_cap, MAX_BLOCK_PAGES)
+        if block_target is not None:
+            block_cap = min(block_cap, block_target)
         block_pages = max(1, block_cap)
         cb_depth_blocks = min(STREAM_DEPTH_BLOCKS, L1_BUDGET_BYTES // (block_pages * page_bytes))
         plan = "streamed"
@@ -135,6 +146,7 @@ def describe_plan(input_tensor):
         "block_pages": p.block_pages,
         "cb_depth_blocks": p.cb_depth_blocks,
         "cb_pages": p.cb_pages,
+        "block_bytes_knob": BLOCK_BYTES,
         "l1_bytes_per_core": p.cb_pages * p.page_bytes,
         "bank_stagger": BANK_STAGGER,
         "roles": roles,
@@ -197,6 +209,7 @@ def get_program_descriptor(input_tensor, output_tensor):
         input_tensor.buffer_aligned_page_size(),
         L1_BUDGET_BYTES,
         MAX_CORES,
+        BLOCK_BYTES,
         MAX_BLOCK_PAGES,
         STREAM_DEPTH_BLOCKS,
         BANK_STAGGER,

@@ -181,6 +181,7 @@ def test_g6_copy_rebinds_buffers(device):
 def test_g6_copy_streamed_plan(device, monkeypatch, shape, max_block_pages, max_cores, bank_stagger):
     """Pins the streamed plan, which no production shape selects with the
     default knobs but every shape past the L1 clamp does."""
+    monkeypatch.setattr(plan_knobs, "BLOCK_BYTES", None)  # the forced cap alone sets the extent
     monkeypatch.setattr(plan_knobs, "MAX_BLOCK_PAGES", max_block_pages)
     monkeypatch.setattr(plan_knobs, "MAX_CORES", max_cores)
     monkeypatch.setattr(plan_knobs, "BANK_STAGGER", bank_stagger)
@@ -208,13 +209,21 @@ def test_g6_copy_plan(device, shape):
     grid = device.compute_with_storage_grid_size()
     assert plan == describe_plan(x), "the plan must be deterministic (BB-08)"
     assert plan["regime"] == "page_copy"
-    assert plan["plan"] == "one_block", "every production shape must get the one-block plan (BB-08)"
+    # BB-08: the default plan. A core whose assignment fits one BLOCK_BYTES block keeps one hand-off;
+    # a larger one streams BLOCK_BYTES blocks at STREAM_DEPTH_BLOCKS so reads and writes overlap.
+    block_target = max(1, plan_knobs.BLOCK_BYTES // plan["page_bytes"])
     assert plan["tensor_pages"] == x.buffer_num_pages()
     assert plan["page_bytes"] == x.buffer_aligned_page_size()
     assert plan["num_cores"] == len(plan["core_pages"]) == min(x.buffer_num_pages(), grid.x * grid.y)
     assert sum(plan["core_pages"]) == plan["tensor_pages"]
     assert max(plan["core_pages"]) - min(plan["core_pages"]) <= 1
-    assert plan["block_pages"] == max(plan["core_pages"])
+    if max(plan["core_pages"]) <= block_target:
+        assert plan["plan"] == "one_block"
+        assert plan["block_pages"] == max(plan["core_pages"])
+    else:
+        assert plan["plan"] == "streamed"
+        assert plan["block_pages"] == block_target
+        assert plan["cb_depth_blocks"] == plan_knobs.STREAM_DEPTH_BLOCKS
     assert plan["l1_bytes_per_core"] == plan["cb_pages"] * plan["page_bytes"]
     assert plan["l1_bytes_per_core"] <= L1_BYTES_LEFT_BY_MODEL
     assert sum(1 for role in plan["roles"].values() if role != "idle") == plan["num_cores"]

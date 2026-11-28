@@ -80,7 +80,7 @@ as one page sequence with the same page → bank map, and page ids are preserved
 | `batch` | independent | folded into `page` | folded into `page` | n/a | Contiguous inside the page sequence; a copy has no per-batch structure |
 | `tile_row` | independent | folded into `page` | folded into `page` | n/a | Same |
 | `tile_col` | independent | folded into `page` | folded into `page` | n/a | Same |
-| `page` | independent | `block_pages` = whole per-core assignment (one block per core), L1-clamped | every core of the grid: `split_work_to_cores(pool, tensor_pages, row_wise=True)`, balanced to ±1 page; grid read at runtime from `compute_with_storage_grid_size()`; core count capped only by the `MAX_CORES` knob | `cb_depth_blocks` = 1 with one block per core, `STREAM_DEPTH_BLOCKS` (2) with more | Every byte crosses DRAM exactly once whatever the block size, so the block only sets fixed costs; the coarsest block pays one reserve/push, one read barrier, one wait/pop and one write flush per core. A second slot with one block per core is dead L1 |
+| `page` | independent | `block_pages = BLOCK_BYTES // page_bytes` (16 KiB: 4 fp32 / 8 bf16 tiles) when the per-core assignment exceeds it, else the whole assignment (one block per core); L1-clamped. Refinement 2 (measured) | every core of the grid: `split_work_to_cores(pool, tensor_pages, row_wise=True)`, balanced to ±1 page; grid read at runtime from `compute_with_storage_grid_size()`; core count capped only by the `MAX_CORES` knob | `cb_depth_blocks` = 1 with one block per core, `STREAM_DEPTH_BLOCKS` (2) with more | Every byte crosses DRAM exactly once whatever the block size, so the block sets fixed costs **and** read/write overlap. The coarsest block (one per core) leaves the writer idle until the whole assignment has landed (reader done at 38.5 µs, writer at 67.2 µs on the flagged shape), so Refinement 2 departs from the coarsest-block default on measurement: 16 KiB blocks at depth 2 take (16, 12, 128, 128) fp32 from 68.0 to 61.6 µs and (8, 12, 128, 128) from 32.9 to 30.8 µs (median of 5). Shapes whose assignment fits one block (≤ 4 fp32 pages per core) keep one hand-off. A second slot with one block per core is dead L1 |
 | `intra_page` | independent | whole page, not split | not assigned | n/a | A split moves the same bytes in more, smaller transactions (catalog `tile_reorder`: whole-page transfers beat sub-tile faces) |
 
 **Intermediate data.** The scheme has one stage (move) and no intermediate result. The only internal
@@ -89,14 +89,15 @@ core: every used core runs identical work on its own range, and no stage compute
 the others wait.
 
 **Interleaved default, in order.** (1) Spread `page` over the full grid (110 cores here).
-(2) Take the coarsest block that fits the core's assignment: all of it for every golden shape
-(largest: 28 float32 pages = 114,688 B per core).
+(2) Take the whole assignment as one block when it fits `BLOCK_BYTES` (16 KiB); otherwise stream
+16 KiB blocks through a depth-2 ring so reads overlap writes (Refinement 2, measured; `BLOCK_BYTES = None`
+restores the coarsest-block default).
 
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_page_staging` | `cb_depth_blocks`: 1 on the `one_block` plan; `min(STREAM_DEPTH_BLOCKS, L1_BUDGET_BYTES // (block_pages · page_bytes))` on the `streamed` plan, `STREAM_DEPTH_BLOCKS = 2` (module constant) | 1 for every golden INPUTS shape | With ≥ 2 blocks per core, the reader fills block k+1 while the writer drains block k (reads on NoC0 overlapping writes on NoC1). With one block there is nothing to overlap |
+| `cb_page_staging` | `cb_depth_blocks`: 1 on the `one_block` plan; `min(STREAM_DEPTH_BLOCKS, L1_BUDGET_BYTES // (block_pages · page_bytes))` on the `streamed` plan, `STREAM_DEPTH_BLOCKS = 2` (module constant) | 1 where the assignment fits one `BLOCK_BYTES` block; 2 otherwise (fp32 (16|8, 12, 128, 128), bf16 (1, 1, 32, 62080), (1, 1, 8448, 128), …). Depth 3 measured: 60.7 µs vs 61.6 µs on (16, 12, 128, 128) but 31.8 vs 30.8 µs on (8, 12, 128, 128), so 2 kept | With ≥ 2 blocks per core, the reader fills block k+1 while the writer drains block k (reads on NoC0 overlapping writes on NoC1). With one block there is nothing to overlap |
 
 ### Mechanism caps
 
@@ -114,8 +115,8 @@ the others wait.
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| `page_copy / one_block`: flat page ranges per core, coalesced bank runs, one CB, reader NCRISC/NoC0 + writer BRISC/NoC1 | **built** | `core_pages_max · page_bytes ≤ L1_BUDGET_BYTES` and (`MAX_BLOCK_PAGES is None` or `core_pages_max ≤ MAX_BLOCK_PAGES`). Holds for every golden INPUTS shape | `block_pages = core_pages_max`, one block per core, `cb_depth_blocks = 1` | **Minimum** against the DRAM boundary: each source page crosses once (read), each destination page once (write); 0 cross-core bytes | Per core: one `cb_reserve_back` / `cb_push_back`, one `noc_async_read_barrier`, one `cb_wait_front` / `cb_pop_front`, one write flush, `nk ≤ 8` read calls and `nk` write calls. Intended once per core. No inits or reconfigs exist (no compute) |
-| `page_copy / streamed`: same kernels, several blocks per core | **built** (same code path; only the knob values differ) | not `one_block`, and `page_bytes ≤ L1_BUDGET_BYTES`. No golden shape reaches it; the acceptance test forces it with `MAX_BLOCK_PAGES` | `block_pages = max(1, min(MAX_BLOCK_PAGES or ∞, L1_BUDGET_BYTES // (STREAM_DEPTH_BLOCKS · page_bytes)))`; `cb_depth_blocks` per the depth knob | Minimum, same as above | Same fixed costs, paid once per block: `ceil(core_pages / block_pages)` times per core |
+| `page_copy / one_block`: flat page ranges per core, coalesced bank runs, one CB, reader NCRISC/NoC0 + writer BRISC/NoC1 | **built** | `core_pages_max · page_bytes ≤ L1_BUDGET_BYTES` and `core_pages_max ≤ block_target` (`block_target = min(BLOCK_BYTES // page_bytes, MAX_BLOCK_PAGES)`, each term skipped when `None`). Small-assignment shapes | `block_pages = core_pages_max`, one block per core, `cb_depth_blocks = 1` | **Minimum** against the DRAM boundary: each source page crosses once (read), each destination page once (write); 0 cross-core bytes | Per core: one `cb_reserve_back` / `cb_push_back`, one `noc_async_read_barrier`, one `cb_wait_front` / `cb_pop_front`, one write flush, `nk ≤ 8` read calls and `nk` write calls. Intended once per core. No inits or reconfigs exist (no compute) |
+| `page_copy / streamed`: same kernels, several blocks per core | **built** (same code path; only the knob values differ) | not `one_block`, and `page_bytes ≤ L1_BUDGET_BYTES`. The default for every shape whose per-core assignment exceeds 16 KiB (Refinement 2); the acceptance test also forces it with `MAX_BLOCK_PAGES` | `block_pages = max(1, min(block_target or ∞, L1_BUDGET_BYTES // (STREAM_DEPTH_BLOCKS · page_bytes)))`; `cb_depth_blocks` per the depth knob | Minimum, same as above | Same fixed costs, paid once per block: `ceil(core_pages / block_pages)` times per core |
 | `sub_page_rows`: split `intra_page`, moving one ROW_MAJOR row in byte pieces | **deferred**: reachable only for ROW_MAJOR rows with `page_bytes > L1_BUDGET_BYTES` (> 336,944 int32/uint32 or > 673,888 bfloat16 elements per row). No golden INPUTS or production row comes near (longest 5120 B), and ROW_MAJOR is outside Phase 0 SUPPORTED. Reachable later: `load_block` / `store_block` already move byte spans at an address, and a piece is a span plus an offset | `page_bytes > L1_BUDGET_BYTES` | a byte span of one page | Minimum bytes, more transactions | — |
 | `compute_passthrough`: reader → `copy_tile` through DEST → pack → writer | rejected: superseded by `page_copy`, and illegal | — | — | Same DRAM bytes plus a second CB and unpack/pack L1 traffic per page. **Changes values**: 16-bit DEST or the TF32 srcA path cuts float32 mantissas, int32/uint32 travel a float path, bfloat8_b is re-packed — each a contract violation | — |
 | `single_core` | rejected: superseded by `page_copy` | `num_cores = 1` with `tensor_pages > 1` | whole tensor | Same bytes, one core's NoC ceiling (~122 GB/s single-core Blackhole copy, catalog `trid_double_issue`) against the 460.8 GB/s roofline | — |
@@ -134,13 +135,13 @@ num_cores      = min(tensor_pages, pool_cores)
 core_pages_max = ceil(tensor_pages / num_cores)
 if page_bytes > L1_BUDGET_BYTES:                               -> refuse on host (BB-05; sub_page_rows deferred)
 elif core_pages_max · page_bytes ≤ L1_BUDGET_BYTES
-     and (MAX_BLOCK_PAGES is None or core_pages_max ≤ MAX_BLOCK_PAGES):
+     and (block_target is None or core_pages_max ≤ block_target):   # block_target = min(BLOCK_BYTES // page_bytes, MAX_BLOCK_PAGES)
                                                                -> one_block: block_pages = core_pages_max, depth 1
 else:                                                          -> streamed:  block_pages, depth as in the table
 ```
 
-Every golden INPUTS shape (all dtypes, both layouts) selects `one_block`. `streamed` is pinned by a
-forced-knob test (Work Distribution).
+Since Refinement 2, shapes whose per-core assignment exceeds `BLOCK_BYTES` select `streamed` by default;
+the rest stay on `one_block`. Forced-knob tests still pin `streamed` at odd block sizes (Work Distribution).
 
 ### Traffic ranking
 
@@ -277,8 +278,8 @@ Not lamps here:
 
 | Phase 0 shape (fp32 TILE) | `tensor_pages` | `num_cores` | `core_pages` (value × cores) | plan | `block_pages` | runs per block | CB bytes per core |
 |---------------------------|---------------|-------------|------------------------------|------|---------------|----------------|-------------------|
-| (16, 12, 128, 128) | 3072 | 110 | 28 × 102, 27 × 8 | one_block | 28 | 8 (16 / 12 KB) | 114,688 |
-| (8, 12, 128, 128) | 1536 | 110 | 14 × 106, 13 × 4 | one_block | 14 | 8 (8 / 4 KB) | 57,344 |
+| (16, 12, 128, 128) | 3072 | 110 | 28 × 102, 27 × 8 | streamed (R2) | 4, depth 2 | 4 (4 KB) | 32,768 |
+| (8, 12, 128, 128) | 1536 | 110 | 14 × 106, 13 × 4 | streamed (R2) | 4, depth 2 | 4 (4 KB) | 32,768 |
 | (2, 12, 128, 128) | 384 | 110 | 4 × 54, 3 × 56 | one_block | 4 | 4 (4 KB) | 16,384 |
 | (1, 12, 128, 128) | 192 | 110 | 2 × 82, 1 × 28 | one_block | 2 | 2 (4 KB) | 8,192 |
 | (1, 1) | 1 | 1 | 1 × 1 | one_block | 1 | 1 | 4,096 |
@@ -291,7 +292,7 @@ Split figures for 3072 and 192 pages were probed on this board. Every other gold
 - **Core ranges (BB-17):** one kernel per role over `all_cores`, per-core RT args. `all_cores` is the
   full grid or full rows plus one partial row: ≤ 2 rectangles for every shape.
 - **Regime selection:** the function in Regimes. `describe_plan()` reports it (BB-08), and every
-  production shape must report `one_block` with DRAM-interleaved inputs.
+  production shape reports the default plan (`one_block` when the assignment fits `BLOCK_BYTES`, else `streamed`).
 - **Regime-pinned tests:** the `streamed` plan (several blocks per core, ring wrap, ragged last
   block, blocks shorter than `num_banks`) and a capped grid are reached by no production shape, so the
   acceptance test forces them through the module knobs on production shapes, with and without
@@ -366,7 +367,7 @@ No compute kernel exists, so `compute_kernel_hw_startup()` does not apply.
 
 | Item | Specification |
 |------|---------------|
-| Files | `ttnn/ttnn/operations/g6_copy/__init__.py` (exports `g6_copy`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS`, `validate`, `describe_plan`); `g6_copy.py` (registry, `validate`, entry point); `g6_copy_program_descriptor.py` (knob constants `L1_BUDGET_BYTES = 1347776`, `MAX_CORES = None`, `MAX_BLOCK_PAGES = None`, `STREAM_DEPTH_BLOCKS = 2`, `BANK_STAGGER = True` (measured lamp, see Bank-run walk); `_plan()`; descriptor builder and cache; `describe_plan()`); `kernels/g6_copy_reader.cpp`, `kernels/g6_copy_writer.cpp`, `kernels/g6_copy_page_walk.hpp` |
+| Files | `ttnn/ttnn/operations/g6_copy/__init__.py` (exports `g6_copy`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS`, `validate`, `describe_plan`); `g6_copy.py` (registry, `validate`, entry point); `g6_copy_program_descriptor.py` (knob constants `L1_BUDGET_BYTES = 1347776`, `MAX_CORES = None`, `BLOCK_BYTES = 16384` (Refinement 2), `MAX_BLOCK_PAGES = None`, `STREAM_DEPTH_BLOCKS = 2`, `BANK_STAGGER = True` (measured lamp, see Bank-run walk); `_plan()`; descriptor builder and cache; `describe_plan()`); `kernels/g6_copy_reader.cpp`, `kernels/g6_copy_writer.cpp`, `kernels/g6_copy_page_walk.hpp` |
 | `INPUT_TAGGERS` | `{"alignment": tag_alignment}`. On the shared shape: `W = shape[-1]`, `H = shape[-2]` (H = 1 for rank 1). `"w_non_aligned"` if `W % 32`, else `"h_non_aligned"` if `H % 32`, else `"tile_aligned"` |
 | `SUPPORTED` | Refinement 1: `{"dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32, ttnn.uint32], "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], "alignment": [...]}`; Phase 0 was `{"dtype": [ttnn.float32], "layout": [ttnn.TILE_LAYOUT], "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"]}` |
 | `EXCLUSIONS` | `[{"dtype": ttnn.float32, "layout": ttnn.ROW_MAJOR_LAYOUT}, {"dtype": ttnn.int32, "layout": ttnn.TILE_LAYOUT}, {"dtype": ttnn.uint32, "layout": ttnn.TILE_LAYOUT}]` |
@@ -377,7 +378,7 @@ No compute kernel exists, so `compute_kernel_hw_startup()` does not apply.
 
 | Item | Specification |
 |------|---------------|
-| Key | `(device.id(), grid (x, y), tuple(shape), dtype, layout, tensor_pages, page_bytes, L1_BUDGET_BYTES, MAX_CORES, MAX_BLOCK_PAGES, STREAM_DEPTH_BLOCKS, BANK_STAGGER)`. Knob constants are in the key so a perf pass or a forced-knob test builds a new entry instead of replaying a wrong program. Read them from the module at call time, never captured at import or as default arguments: the acceptance test overrides them with `monkeypatch.setattr` |
+| Key | `(device.id(), grid (x, y), tuple(shape), dtype, layout, tensor_pages, page_bytes, L1_BUDGET_BYTES, MAX_CORES, BLOCK_BYTES, MAX_BLOCK_PAGES, STREAM_DEPTH_BLOCKS, BANK_STAGGER)`. Knob constants are in the key so a perf pass or a forced-knob test builds a new entry instead of replaying a wrong program. Read them from the module at call time, never captured at import or as default arguments: the acceptance test overrides them with `monkeypatch.setattr` |
 | Value | the built `ttnn.ProgramDescriptor` and the indices of the reader and writer in `descriptor.kernels` |
 | Per call | only the two buffer addresses change: `descriptor.kernels[reader].common_runtime_args[0] = input_tensor.buffer_address()` and `descriptor.kernels[writer].common_runtime_args[0] = output_tensor.buffer_address()`. Probed on host this run: `pd.kernels[i]` is a reference into the descriptor and `common_runtime_args[j] = v` mutates it in place. Per-core RT args, `block_pages`, CT args and the CB size all derive from the key |
 | Device-side cache | `generic_op` hashes RT-arg counts, not values (`compute_program_descriptor_hash`, generic_op_device_operation.cpp:78-147), so the compiled program is reused across calls and buffers; on a hit the ProgramDescriptor path re-applies the descriptor's runtime args (mesh_device_operation_adapter.hpp:345-348) |
@@ -401,7 +402,7 @@ No compute kernel exists, so `compute_kernel_hw_startup()` does not apply.
 | `test_g6_copy_rebinds_buffers` | (1, 12, 128, 128), two live tensor pairs | BB-07 (cache hit with new addresses writes its own destination only) and BB-06 (repeat is bit-identical) |
 | `test_g6_copy_streamed_plan` | (16, 12, 128, 128) with `MAX_BLOCK_PAGES = 3` on the full grid, `BANK_STAGGER` off and on (blocks shorter than `num_banks`, 1-page runs, ragged 1-page last block); (1, 12, 128, 128) with `MAX_CORES = 3`, `MAX_BLOCK_PAGES = 11`, `BANK_STAGGER` on (64 pages per core: multi-page runs, a capped grid, a ragged 9-page last block) | pins the `streamed` plan: multi-block, ring wrap, ragged last block, `nk < num_banks` and `nk = num_banks`, rotated walk |
 | `test_g6_copy_dtypes_layouts.py` (Refinement 1) | the non-float32 production rows (bf16 / bf8b TILE, bf16 / int32 / uint32 RM, incl. shortest RM row `(1,)`), adversarial bits per dtype, bf16 poisoned padding (1, 1, 1, 256), `describe_plan` per row | values graded by `helpers.TOLERANCES`; plan deterministic, full-grid split, L1 ≤ 1347776 |
-| `test_g6_copy_plan` | the Phase 0 shapes | BB-08 (plan reported, deterministic, production shapes on `one_block`) and BB-05 (L1 ≤ 1347776) |
+| `test_g6_copy_plan` | the Phase 0 shapes | BB-08 (plan reported, deterministic, production shapes on the default plan) and BB-05 (L1 ≤ 1347776) |
 | `test_g6_copy_rejects_*` | shape, dtype, layout and memory-config mismatches; rank 5; host tensor | the spec's Validation list |
 | `test_g6_copy_trace_replay` (verifier) | (1, 12, 128, 128) and (16, 12, 128, 128), eager call then capture; replay into a zeroed destination, then replay after a new source is written in place | BB-16: a replay equals the eager call bit for bit and copies the source's current contents |
 | `test_g6_copy_precision_baseline` (verifier) | (1, 1), (1, 12, 128, 128), (8, 12, 128, 128), (16, 12, 128, 128) | PCC, abs / relative-RMS error, ULP and got/true ratio recorded for the verification report; gated on bit equality |
