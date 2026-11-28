@@ -74,8 +74,12 @@ private:
     // -- Per-batch state (between submit/finish) --
     // submit() is called sequentially from the program compile loop;
     // finish() runs after all submits complete.  No mutex needed.
+    // What finish() needs once a request is sent. The request itself (preprocessed sources, target
+    // recipes) is not kept: the RPC message holds the serialized copy.
     struct PendingKernel {
-        KernelCompileDescriptor descriptor;
+        std::size_t kernel_hash = 0;
+        std::string kernel_name;
+        std::vector<std::string> expected_elf_paths;
         std::shared_ptr<std::promise<void>> dedup_promise;
     };
     std::vector<std::unique_ptr<jit_server::JitCompileRpcSession>> sessions_;

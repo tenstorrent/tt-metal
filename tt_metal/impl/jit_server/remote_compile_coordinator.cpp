@@ -71,7 +71,13 @@ void RemoteCompileCoordinator::submit(
         ensure_firmware_uploaded(ep_idx);
 
         sessions_[ep_idx]->send(descriptor.request);
-        pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
+        // Keep only what finish() needs; the request is freed when descriptor goes out of scope.
+        pending_by_endpoint_[ep_idx].push_back({
+            .kernel_hash = kernel_hash,
+            .kernel_name = std::move(descriptor.request.kernel_name),
+            .expected_elf_paths = std::move(descriptor.expected_elf_paths),
+            .dedup_promise = std::move(new_promise),
+        });
     } catch (...) {
         {
             std::lock_guard lock(s_dedup_mutex_);
@@ -110,18 +116,18 @@ void RemoteCompileCoordinator::finish() {
                 TT_FATAL(
                     resp.success,
                     "Remote JIT compile failed for kernel {} (endpoint {}): {}",
-                    pend.descriptor.request.kernel_name,
+                    pend.kernel_name,
                     endpoints_[ep_idx],
                     resp.error_message);
                 TT_FATAL(
-                    resp.elf_blobs.size() == pend.descriptor.expected_elf_paths.size(),
+                    resp.elf_blobs.size() == pend.expected_elf_paths.size(),
                     "Expected {} ELF blobs but got {} for kernel {}",
-                    pend.descriptor.expected_elf_paths.size(),
+                    pend.expected_elf_paths.size(),
                     resp.elf_blobs.size(),
-                    pend.descriptor.request.kernel_name);
+                    pend.kernel_name);
 
-                for (std::size_t j = 0; j < pend.descriptor.expected_elf_paths.size(); ++j) {
-                    write_elf_blob(pend.descriptor.expected_elf_paths[j], resp.elf_blobs[j]);
+                for (std::size_t j = 0; j < pend.expected_elf_paths.size(); ++j) {
+                    write_elf_blob(pend.expected_elf_paths[j], resp.elf_blobs[j]);
                 }
 
                 pend.dedup_promise->set_value();
@@ -132,7 +138,7 @@ void RemoteCompileCoordinator::finish() {
             std::lock_guard lock(s_dedup_mutex_);
             for (auto& pend : pending) {
                 if (pend.dedup_promise) {
-                    s_dedup_cache_.erase(pend.descriptor.kernel_hash);
+                    s_dedup_cache_.erase(pend.kernel_hash);
                     pend.dedup_promise->set_exception(ex);
                 }
             }
