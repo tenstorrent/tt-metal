@@ -158,6 +158,9 @@ bool dram_to_l1_multicast(
 }  // namespace unit_tests_common::dram::test_dram_to_l1_multicast
 
 TEST_F(MeshDispatchFixture, TensixDRAMtoL1Multicast) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -170,6 +173,9 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1Multicast) {
     }
 }
 TEST_F(MeshDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,

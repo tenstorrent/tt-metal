@@ -29,6 +29,9 @@ using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
 TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -117,6 +120,9 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
 }
 
 TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
     const std::string inline_source = "void kernel_main() {}";
 

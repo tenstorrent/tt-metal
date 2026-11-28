@@ -30,6 +30,9 @@ using namespace tt;
 
 // Ensures we cannot create duplicate kernels
 TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (const auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -59,6 +62,9 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
 }
 
 TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a ComputeKernel, which Quasar rejects";
+    }
     for (const auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -97,6 +103,9 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
 }
 
 TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a ComputeKernel, which Quasar rejects";
+    }
     for ([[maybe_unused]] const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -131,6 +140,9 @@ TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
 }
 
 TEST_F(MeshDispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     for (const auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);

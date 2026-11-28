@@ -29,7 +29,15 @@
 
 namespace tt::tt_metal {
 
-using CompilerIncludePathsTest = UnitMeshAnyDispatchFixture;
+class CompilerIncludePathsTest : public UnitMeshAnyDispatchFixture {
+protected:
+    void SetUp() override {
+        UnitMeshAnyDispatchFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not ported to Quasar: creates DataMovementKernels, which Quasar rejects";
+        }
+    }
+};
 
 // Verifies that DataMovementConfig::compiler_include_paths is honored by the JIT build:
 // the user-supplied directory is added as an `-I` flag, so a header placed there is

@@ -248,6 +248,9 @@ bool dram_single_core_pre_allocated(
 }  // namespace unit_tests_common::dram::test_dram
 
 TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCore) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
@@ -264,6 +267,9 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCore) {
 }
 
 TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}},
@@ -280,6 +286,9 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
 }
 
 TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();

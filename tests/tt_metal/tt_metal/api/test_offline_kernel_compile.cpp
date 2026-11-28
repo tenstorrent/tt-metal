@@ -341,6 +341,9 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
 }
 
 TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::JitCompile);
     Program program = create_precompiled_program(*this->devices_[0], precompiled_config);
 
@@ -351,6 +354,9 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
 }
 
 TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::Error);
     Program program = create_precompiled_program(*this->devices_[0], precompiled_config);
 

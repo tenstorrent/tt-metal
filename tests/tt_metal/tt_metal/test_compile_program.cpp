@@ -248,6 +248,9 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 }  // namespace
 
 TEST_F(UnitMeshAnyDispatchFixture, CompileProgramInLoop) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ClearKernelCache(get_kernel_root_path(this->device()));
     ProgramAttributes default_attributes;
     auto program = create_program(this->device(), default_attributes);
@@ -268,6 +271,9 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramInLoop) {
 }
 
 TEST_F(UnitMeshAnyDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ClearKernelCache(get_kernel_root_path(this->device()));
 
     ProgramAttributes default_attributes;
@@ -287,6 +293,9 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory
 }
 
 TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithModifiedProgram) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_hit = {
         {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, true}};
 

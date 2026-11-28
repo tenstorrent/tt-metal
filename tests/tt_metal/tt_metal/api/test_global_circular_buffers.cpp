@@ -82,6 +82,9 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferRejectsOutOfRangeCqId) {
 }
 
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));

@@ -265,6 +265,9 @@ namespace tt::tt_metal {
 // --- Interleaved ---
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramRowMajor) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_interleaved_buffer(*mesh_device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
         verify_default_page_size(mesh_device, *buffer);
@@ -272,6 +275,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramRo
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramTilized) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_interleaved_buffer(*mesh_device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM);
         verify_default_page_size(mesh_device, *buffer);
@@ -279,6 +285,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramTi
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1RowMajor) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_interleaved_buffer(*mesh_device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, *buffer);
@@ -286,6 +295,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1RowM
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tilized) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_interleaved_buffer(*mesh_device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, *buffer);
@@ -295,6 +307,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tili
 // --- Runtime page size (RuntimePageSize relaxation, device-side isolation) ---
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         // Input is a real interleaved row-major DRAM buffer; its address is passed to the kernel but
         // its page size is NOT -- the accessor must read the page size from the runtime sentinel.
@@ -305,6 +320,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) 
 
 // The 2-arg accessor reads the runtime page size at the common runtime arg offset its args were given.
 TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDramAtRuntimeOffset) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto input = create_interleaved_buffer(*mesh_device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
         verify_runtime_page_size(mesh_device, *input, RUNTIME_PAGE_SIZE_SENTINEL, /*crta_offset=*/1);
@@ -314,6 +332,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDramAt
 // --- Legacy Sharded ---
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramRowMajor) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_legacy_sharded_buffer(
             *mesh_device,
@@ -328,6 +349,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDram
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramTilized) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_legacy_sharded_buffer(
             *mesh_device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM, {TILE_H, TILE_W}, {TILE_H, TILE_W}, {1, 1});
@@ -336,6 +360,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDram
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1RowMajor) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_legacy_sharded_buffer(
             *mesh_device,
@@ -350,6 +377,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Ro
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Tilized) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_legacy_sharded_buffer(
             *mesh_device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1, {TILE_H, TILE_W}, {TILE_H, TILE_W}, {1, 1});
@@ -378,6 +408,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeRejectedForSharde
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedDramRowMajor) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_nd_sharded_buffer(
             *mesh_device,
@@ -392,6 +425,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedDramRowM
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedDramTilized) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_nd_sharded_buffer(
             *mesh_device,
@@ -406,6 +442,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedDramTili
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedL1RowMajor) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_nd_sharded_buffer(
             *mesh_device,
@@ -420,6 +459,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedL1RowMaj
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedL1Tilized) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     for (auto& mesh_device : devices_) {
         auto buffer = create_nd_sharded_buffer(
             *mesh_device,
