@@ -147,6 +147,14 @@ public:
     static uint32_t required_config_buffer_size(uint32_t l1_alignment);
 
     /**
+     * Whether this host can use the hugepage D2H fallback (taken when the device lacks
+     * 64-bit PCIe addressing and the host has no IOMMU). The fallback needs an explicit
+     * host cache-line writeback+invalidate: x86 clflush, or RISC-V Zicbom cbo.flush where
+     * the extension is present. Resolved at run time on hosts where it is optional.
+     */
+    static bool hugepage_fallback_supported_on_host();
+
+    /**
      * @brief Constructs a D2HSocket using a caller-provided config buffer address.
      *
      * Skips the user-space MeshBuffer allocation that the standard constructor
