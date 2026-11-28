@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_typecast_zones.hpp"
 #include "g6_typecast_rm_rows.hpp"
 
 // rm_mode (regime R2 `rm_pseudo_tile_stream`): mirror of the reader. Per block of `rows_per_block` rows:
@@ -50,13 +50,13 @@ void kernel_main() {
         const uint32_t end_row = start_tile + core_tiles;
         uint32_t stage = 0;
         for (uint32_t blk = start_tile; blk < end_row; blk += rows_per_block) {
-            DeviceZoneScopedN("WRITE_BLOCK");
+            G6_ZONE("WRITE_BLOCK");
             const uint32_t rows = (end_row - blk < rows_per_block) ? (end_row - blk) : rows_per_block;
             const uint32_t block_pages = (rows * values_per_row + pseudo_tile_values - 1) / pseudo_tile_values;
             const uint32_t runs = rows < nb ? rows : nb;
             const uint32_t staging = staging0 + stage * staging_bytes;
             {
-                DeviceZoneScopedN("WRITE_WAIT_DATA");
+                G6_ZONE("WRITE_WAIT_DATA");
                 cb_wait_front(cb_output_tiles, block_pages);
             }
             if constexpr (staging_depth == 1) {
@@ -82,10 +82,10 @@ void kernel_main() {
 
     const uint32_t end_tile = start_tile + core_tiles;
     for (uint32_t block_start = start_tile; block_start < end_tile; block_start += block_tiles) {
-        DeviceZoneScopedN("WRITE_BLOCK");
+        G6_ZONE("WRITE_BLOCK");
         const uint32_t block_extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
         {
-            DeviceZoneScopedN("WRITE_WAIT_DATA");
+            G6_ZONE("WRITE_WAIT_DATA");
             cb_wait_front(cb_output_tiles, block_extent);
         }
         uint32_t l1_addr = get_read_ptr(cb_output_tiles);

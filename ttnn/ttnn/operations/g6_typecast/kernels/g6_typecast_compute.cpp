@@ -27,7 +27,7 @@
 #include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_typecast_zones.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 void kernel_main() {
@@ -74,7 +74,7 @@ void kernel_main() {
     using ChainOwned = std::integral_constant<InitReconfigOwner, InitReconfigOwner::Chain>;
     using CallerOwned = std::integral_constant<InitReconfigOwner, InitReconfigOwner::Caller>;
 
-    DeviceZoneScopedN("CONVERT");
+    G6_ZONE("CONVERT");
     for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
         const uint32_t block_extent = (core_tiles - done < block_tiles) ? (core_tiles - done) : block_tiles;
         const auto shape = IterationShape::tiles(block_extent).block_size(block_extent);

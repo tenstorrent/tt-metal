@@ -1,0 +1,28 @@
+== ablate=
+Q2198  op    ok=1 cores=1 med=946.0 B=886 N=480 T0=544 T1=160 T2=358
+Q2221  op    ok=1 cores=32 med=1096.0 B=1095 N=676 T0=750 T1=327 T2=550
+Q2185  op    ok=1 cores=110 med=35293.0 B=35249 N=15567 T0=15680 T1=12404 T2=34702
+== ablate=compute,startup
+Q2198  op    ok=0 cores=1 med=502.0 B=383 N=480 T0=493 T1=16 T2=58
+Q2221  op    ok=0 cores=32 med=745.0 B=539 N=719 T0=737 T1=187 T2=225
+Q2185  op    ok=0 cores=110 med=34750.0 B=34699 N=16407 T0=16414 T1=182 T2=34019
+== ablate=compute,startup,read
+Q2198  op    ok=0 cores=1 med=455.0 B=387 N=60 T0=107 T1=19 T2=55
+Q2221  op    ok=0 cores=32 med=542.0 B=540 N=234 T0=268 T1=181 T2=227
+Q2185  op    ok=0 cores=110 med=28370.0 B=28326 N=384 T0=414 T1=181 T2=27632
+== ablate=compute,startup,read,write
+Q2198  op    ok=0 cores=1 med=132.0 B=81 N=62 T0=93 T1=18 T2=55
+Q2221  op    ok=0 cores=32 med=286.0 B=281 N=238 T0=266 T1=182 T2=226
+Q2185  op    ok=0 cores=110 med=453.0 B=416 N=389 T0=407 T1=186 T2=387
+== ablate=write
+Q2198  op    ok=0 cores=1 med=662.0 B=604 N=479 T0=552 T1=161 T2=359
+Q2221  op    ok=0 cores=32 med=868.0 B=861 N=693 T0=769 T1=326 T2=556
+Q2185  op    ok=0 cores=110 med=11788.0 B=11740 N=11511 T0=11618 T1=10131 T2=11641
+== ablate=read
+Q2198  op    ok=0 cores=1 med=707.0 B=648 N=60 T0=226 T1=161 T2=362
+Q2221  op    ok=0 cores=32 med=844.0 B=837 N=234 T0=394 T1=328 T2=557
+Q2185  op    ok=0 cores=110 med=29294.0 B=29253 N=853 T0=1090 T1=831 T2=28579
+== ablate=write,read
+Q2198  op    ok=0 cores=1 med=421.0 B=363 N=59 T0=224 T1=161 T2=359
+Q2221  op    ok=0 cores=32 med=594.0 B=593 N=233 T0=399 T1=330 T2=552
+Q2185  op    ok=0 cores=110 med=1280.0 B=1234 N=842 T0=1088 T1=822 T2=1141

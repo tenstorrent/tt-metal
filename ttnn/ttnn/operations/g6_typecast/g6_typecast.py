@@ -181,6 +181,7 @@ def _cache_key(input_tensor, dtype):
         _pd.READ_INFLIGHT,
         _pd.L1_OP_BUDGET_BYTES,
         _pd.L1_SLACK_BYTES,
+        _pd.zones_enabled(),
     )
 
 

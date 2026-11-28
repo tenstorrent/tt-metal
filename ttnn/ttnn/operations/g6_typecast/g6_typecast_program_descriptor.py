@@ -27,6 +27,7 @@ Knobs (single source each — every dependent quantity derives from them):
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import ttnn
@@ -80,6 +81,15 @@ _NUM_CBS = 64
 # Runtime-arg slots patched on a program-cache hit (common runtime args, one per dataflow kernel).
 _READER_KERNEL_IDX = 0
 _WRITER_KERNEL_IDX = 1
+
+
+def zones_enabled():
+    """Stage zones (kernels/g6_typecast_zones.hpp) are compiled in only with G6_TYPECAST_ZONES=1."""
+    return os.environ.get("G6_TYPECAST_ZONES", "0") not in ("", "0")
+
+
+def _defines():
+    return [("G6_TYPECAST_ZONES", "1")] if zones_enabled() else []
 
 
 def _div_up(a, b):
@@ -220,6 +230,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
         common_runtime_args=[input_tensor.buffer_address()],
+        defines=_defines(),
         config=ttnn.ReaderConfigDescriptor(),
     )
 
@@ -231,6 +242,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
         common_runtime_args=[output_tensor.buffer_address()],
+        defines=_defines(),
         config=ttnn.WriterConfigDescriptor(),
     )
 
@@ -240,6 +252,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         core_ranges=all_cores,
         compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles],
         runtime_args=compute_rt,
+        defines=_defines(),
         config=compute_config,
     )
 
@@ -372,6 +385,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
         common_runtime_args=[input_tensor.buffer_address()],
+        defines=_defines(),
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer_ct = [CB_OUTPUT_TILES, block_tiles, out_aligned, 1, CB_OUTPUT_STAGING, rows_per_block, out_row_bytes]
@@ -383,6 +397,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
         common_runtime_args=[output_tensor.buffer_address()],
+        defines=_defines(),
         config=ttnn.WriterConfigDescriptor(),
     )
     compute = ttnn.KernelDescriptor(
@@ -390,6 +405,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         core_ranges=all_cores,
         compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles],
         runtime_args=compute_rt,
+        defines=_defines(),
         config=_compute_config(in_dtype, out_dtype),
     )
     program_descriptor = ttnn.ProgramDescriptor(

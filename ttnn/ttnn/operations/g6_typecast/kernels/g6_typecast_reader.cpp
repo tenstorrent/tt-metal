@@ -17,7 +17,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_typecast_zones.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "g6_typecast_rm_rows.hpp"
@@ -113,7 +113,7 @@ void kernel_main() {
             issue_block(start_tile, staging0);
         }
         for (uint32_t blk = start_tile; blk < end_row; blk += rows_per_block) {
-            DeviceZoneScopedN("READ_BLOCK");
+            G6_ZONE("READ_BLOCK");
             const uint32_t rows = block_rows(blk);
             const uint32_t block_pages = (rows * values_per_row + pseudo_tile_values - 1) / pseudo_tile_values;
             const uint32_t staging = staging0 + stage * staging_bytes;
@@ -126,7 +126,7 @@ void kernel_main() {
                 }
             }
             {
-                DeviceZoneScopedN("READ_WAIT_SPACE");
+                G6_ZONE("READ_WAIT_SPACE");
                 cb_reserve_back(cb_input_tiles, block_pages);
             }
             g6_rm::compact_block<row_bytes>(staging, in_page_bytes, nb, rows, get_write_ptr(cb_input_tiles));
@@ -180,7 +180,7 @@ void kernel_main() {
         const uint32_t cb_end = cb_base + cb_blocks * block_bytes;
         const uint32_t full_blocks = core_tiles / block_tiles;
         for (uint32_t k = 0; k < full_blocks; ++k) {
-            DeviceZoneScopedN("READ_BLOCK");
+            G6_ZONE("READ_BLOCK");
             const uint32_t trid = (k % read_inflight) + 1;
             if (k >= read_inflight) {
                 dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid);
@@ -188,7 +188,7 @@ void kernel_main() {
             }
             const uint32_t in_flight = (k < read_inflight) ? k : (read_inflight - 1);
             {
-                DeviceZoneScopedN("READ_WAIT_SPACE");
+                G6_ZONE("READ_WAIT_SPACE");
                 cb_reserve_back(cb_input_tiles, (in_flight + 1) * block_tiles);
             }
             uint32_t l1_addr = get_write_ptr(cb_input_tiles) + in_flight * block_bytes;
@@ -208,10 +208,10 @@ void kernel_main() {
         block_start = start_tile + full_blocks * block_tiles;
     }
     for (; block_start < end_tile; block_start += block_tiles) {
-        DeviceZoneScopedN("READ_BLOCK");
+        G6_ZONE("READ_BLOCK");
         const uint32_t block_extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
         {
-            DeviceZoneScopedN("READ_WAIT_SPACE");
+            G6_ZONE("READ_WAIT_SPACE");
             cb_reserve_back(cb_input_tiles, block_extent);
         }
         issue_block(block_start, block_extent, get_write_ptr(cb_input_tiles));
