@@ -5,6 +5,7 @@
 #include "softmax_device_operation.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -19,6 +20,52 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+
+SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::RowsPerPass
+SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::select_rows_per_pass(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto* device = input_tensor.device();
+    const auto arch = device->arch();
+    const bool mask_padded_data = input_tensor.padded_shape()[3] > input_tensor.logical_shape()[-1];
+    if (arch != tt::ARCH::WORMHOLE_B0 || !tensor_args.mask.has_value() || attributes.is_causal_mask ||
+        mask_padded_data || !std::holds_alternative<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config)) {
+        return {};
+    }
+    const auto& program_config = std::get<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, attributes.compute_kernel_config);
+    const tt::DataFormat in0_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const tt::DataFormat im_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const std::uint64_t im_tile_size = tt::tile_size(im_format);
+    const std::uint64_t fixed_bytes =
+        tt::tile_size(in0_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) +
+        tt::tile_size(im_format) + tt::tile_size(tt::DataFormat::Float16_b) +
+        (std::uint64_t{program_config.block_w} *
+         tt::tile_size(datatype_to_dataformat_converter(tensor_args.mask->dtype())));
+    const std::uint64_t stable = attributes.numeric_stable ? 1 : 0;
+    const std::uint64_t usable_l1 = ttnn::operations::core::usable_program_l1_capacity(device);
+    constexpr std::uint32_t rows_per_pass_budget_bytes = 300 * 1024;
+    const auto rows_that_fit = [&](bool scale_mask_rows) -> std::uint32_t {
+        for (std::uint32_t d = program_config.block_h; d >= 2; --d) {
+            const std::uint64_t pass_tiles =
+                (std::uint64_t{program_config.block_w} * d * (1 + stable + (scale_mask_rows ? 1 : 0))) +
+                (std::uint64_t{d} * (1 + stable)) + (scale_mask_rows ? 0 : program_config.block_w);
+            if (program_config.block_h % d == 0 &&
+                (program_config.block_w * (scale_mask_rows ? 3u : 2u) + 2) * d * im_tile_size <=
+                    rows_per_pass_budget_bytes &&
+                fixed_bytes + (pass_tiles * im_tile_size) <= usable_l1) {
+                return d;
+            }
+        }
+        return 1u;
+    };
+    if (const std::uint32_t d = rows_that_fit(true); d > 1) {
+        return {d, true};
+    }
+    return {rows_that_fit(false), false};
+}
 
 ttnn::device_operation::ProgramArtifacts
 SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_program_artifacts(
@@ -156,8 +203,9 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const DFBSpecName X{"x"};
     const DFBSpecName MASK_PADDED{"mask_padded"};
 
+    const RowsPerPass pass_plan = select_rows_per_pass(attributes, tensor_args);
     constexpr std::uint32_t rows_per_pass_budget_bytes = 300 * 1024;
-    const std::uint32_t rows_per_pass = [&]() -> std::uint32_t {
+    const std::uint32_t vit_rows_per_pass = [&]() -> std::uint32_t {
         if (arch != tt::ARCH::WORMHOLE_B0 || has_mask || !mask_padded_data || !attributes.numeric_stable) {
             return 1u;
         }
@@ -175,6 +223,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
         return 1u;
     }();
+    const std::uint32_t rows_per_pass = has_mask ? pass_plan.rows : vit_rows_per_pass;
+    const bool scale_mask_rows = pass_plan.scale_mask_rows;
 
     // ---- DataflowBuffers (mirrors legacy CB allocation; borrowed-memory DFBs for the sharded I/O) ----
     Group<DataflowBufferSpec> dfbs;
@@ -198,7 +248,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = SCALE_MASK,
             .entry_size = im_tile_size,
-            .num_entries = program_config.block_w,
+            .num_entries = program_config.block_w * (scale_mask_rows && rows_per_pass > 1 ? rows_per_pass : 1u),
             .data_format_metadata = im_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = FUSED_SCALE,
@@ -248,7 +298,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = X,
             .entry_size = im_tile_size,
-            .num_entries = rows_per_pass > 1 ? rows_per_pass : program_config.block_w,
+            .num_entries = has_mask ? program_config.block_w * rows_per_pass
+                                    : (rows_per_pass > 1 ? rows_per_pass : program_config.block_w),
             .data_format_metadata = im_cb_data_format});
     }
 
@@ -276,6 +327,18 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     if (rows_per_pass > 1) {
         compute_defines["ROWS_PER_PASS"] = std::to_string(rows_per_pass);
+        if (has_mask) {
+            if (scale_mask_rows) {
+                compute_defines["SCALE_MASK_ROWS"] = "1";
+            }
+            if (math_fidelity == MathFidelity::HiFi4) {
+                compute_defines["HIFI3_SUM"] = "1";
+                if (!fp32_dest_acc_en && in0_cb_data_format != tt::DataFormat::Float32) {
+                    compute_defines["HIFI3_SCALE"] = "1";
+                    compute_defines["HIFI3_OUT"] = "1";
+                }
+            }
+        }
     }
     compute_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
 

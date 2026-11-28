@@ -7,6 +7,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"
+#include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "api/compute/pack.h"  // dummy_pack
@@ -18,11 +19,100 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
-#if defined(ROWS_PER_PASS) && !defined(FUSED_SCALE_MASK) && defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE)
-#include "api/compute/eltwise_unary/exp.h"
+namespace ckl = compute_kernel_lib;
+
+#if defined(ROWS_PER_PASS) && defined(FUSED_SCALE_MASK)
+#ifdef HIFI3_OUT
+ALWI void mul_bcast_cols_hifi3_init(std::uint32_t a, std::uint32_t b) {
+    state_configure(a, b, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MathFidelity::HiFi3>(a, b)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::COL>(a, b)));
+}
+
+ALWI void mul_tiles_bcast_cols_hifi3(
+    std::uint32_t a, std::uint32_t b, std::uint32_t ia, std::uint32_t ib, std::uint32_t d) {
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::COL,
+          DST_ACCUM_MODE,
+          MathFidelity::HiFi3,
+          EltwiseBinaryReuseDestType::NONE>(a, b, d, true)));
+    UNPACK((llk_unpack_AB<BroadcastType::COL>(a, b, ia, ib, 0)));
+}
 #endif
 
-namespace ckl = compute_kernel_lib;
+#ifdef HIFI3_SUM
+template <typename SC, typename RC>
+ALWI void sum_recip_rows_hifi3(std::uint32_t rows, std::uint32_t w, SC& sc, RC& rc) {
+    reconfig_data_format(dfb::sum_scaler, dfb::exps);
+    pack_reconfig_data_format(dfb::recip_sum_exps);
+    state_configure(dfb::sum_scaler, dfb::exps, dfb::recip_sum_exps, __builtin_LINE());
+    UNPACK((llk_unpack_AB_reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb::exps, dfb::sum_scaler)));
+    MATH((llk_math_reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, MathFidelity::HiFi3>(
+        dfb::exps, dfb::sum_scaler)));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(dfb::recip_sum_exps)));
+    sc.wait_front(1);
+    for (std::uint32_t r = 0; r < rows; ++r) {
+        tile_regs_acquire();
+        for (std::uint32_t t = 0; t < w; ++t) {
+            MATH((llk_math_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, MathFidelity::HiFi3>(
+                dfb::exps, dfb::sum_scaler, 0)));
+            UNPACK(
+                (llk_unpack_AB_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb::exps, dfb::sum_scaler, r * w + t, 0)));
+        }
+        if constexpr (DST_ACCUM_MODE) {
+            recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+            recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+        } else {
+            recip_tile_init();
+            recip_tile(0);
+        }
+        rc.reserve_back(1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dfb::recip_sum_exps);
+        tile_regs_release();
+        rc.push_back(1);
+    }
+    reduce_uninit();
+}
+#endif
+
+#ifdef HIFI3_SCALE
+template <typename I0, typename FS, typename SM>
+ALWI void scale_rows_hifi3(std::uint32_t n, std::uint32_t blk, I0& in0, FS& fs, SM& sm) {
+    fs.wait_front(1);
+    reconfig_data_format(dfb::in0, dfb::fused_scale);
+    pack_reconfig_data_format(dfb::scale_mask);
+    state_configure(dfb::in0, dfb::fused_scale, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MathFidelity::HiFi3>(
+        dfb::in0, dfb::fused_scale)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(dfb::in0, dfb::fused_scale)));
+    sm.reserve_back(n);
+    for (std::uint32_t b = 0; b < n; b += blk) {
+        const std::uint32_t m = (b + blk > n) ? (n - b) : blk;
+        tile_regs_acquire();
+        for (std::uint32_t d = 0; d < m; ++d) {
+            MATH((llk_math_eltwise_binary<
+                  EltwiseBinaryType::ELWMUL,
+                  BroadcastType::SCALAR,
+                  DST_ACCUM_MODE,
+                  MathFidelity::HiFi3,
+                  EltwiseBinaryReuseDestType::NONE>(dfb::in0, dfb::fused_scale, d, true)));
+            UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(dfb::in0, dfb::fused_scale, b + d, 0)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (std::uint32_t d = 0; d < m; ++d) {
+            pack_tile(d, dfb::scale_mask);
+        }
+        tile_regs_release();
+    }
+    sm.push_back(n);
+    in0.pop_front(n);
+}
+#endif
+#endif
 
 template <
     std::uint32_t block_w,
@@ -282,6 +372,262 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (std::uint32_t d = 0; d < n; ++d) {
                     mul_tiles_bcast_cols(dfb::exps, dfb::recip_sum_exps, j * block_w + b + d, j, d);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    pack_tile(d, dfb::out0);
+                }
+                tile_regs_release();
+            }
+        }
+        dfb_out0_obj.push_back(block_w * shk);
+        dfb_exps_obj.pop_front(block_w * shk);
+        dfb_recip_sum_exps_obj.pop_front(shk);
+        dfb_out0_obj.wait_front(block_w * shk);
+        dummy_unpack(dfb::out0);
+        dfb_out0_obj.pop_front(block_w * shk);
+    }
+#elif defined(ROWS_PER_PASS) && defined(FUSED_SCALE_MASK) && defined(NUMERIC_STABLE)
+    constexpr std::uint32_t shk = (ROWS_PER_PASS <= block_h && block_h % ROWS_PER_PASS == 0) ? ROWS_PER_PASS : 1;
+    constexpr std::uint32_t sbw =
+        subblock_w < compute_kernel_lib::DEST_AUTO_LIMIT ? subblock_w : compute_kernel_lib::DEST_AUTO_LIMIT;
+    dfb_max_scaler_obj.wait_front(1);
+    for (std::uint32_t i = 0; i < block_h; i += shk) {
+        dfb_in0_obj.reserve_back(block_w * shk);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_w * shk);
+#ifdef SCALE_MASK_ROWS
+#ifdef HIFI3_SCALE
+        scale_rows_hifi3(block_w * shk, sbw, dfb_in0_obj, dfb_fused_scale_obj, dfb_scale_mask_obj);
+#else
+        ckl::mul<
+            ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+            ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(block_w * shk).block_size(subblock_w),
+            dfb_in0_obj,
+            dfb_fused_scale_obj,
+            dfb_scale_mask_obj);
+#endif
+#endif
+        for (std::uint32_t j = 0; j < shk; ++j) {
+#ifndef SCALE_MASK_ROWS
+#ifdef HIFI3_SCALE
+            scale_rows_hifi3(block_w, sbw, dfb_in0_obj, dfb_fused_scale_obj, dfb_scale_mask_obj);
+#else
+            ckl::mul<
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+                dfb_in0_obj,
+                dfb_fused_scale_obj,
+                dfb_scale_mask_obj);
+#endif
+#endif
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb::scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                    ckl::input(dfb::fused_attn, mask_bcast, mask_wait, mask_pop, ckl::InputTileMapping::Block)>{
+                    dfb_scale_mask_obj, dfb_fused_attn_obj},
+                ckl::PackTile<ckl::output(
+                    dfb::x, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                    dfb_x_obj});
+        }
+        dfb_x_obj.wait_front(block_w * shk);
+        compute_kernel_lib::reduce<
+            PoolType::MAX,
+            ReduceDim::REDUCE_ROW,
+            dfb::x,
+            dfb::max_scaler,
+            dfb::max,
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::of(shk, block_w));
+        dfb_max_obj.wait_front(shk);
+        reconfig_data_format(dfb::x, dfb::max);
+        pack_reconfig_data_format(dfb::exps);
+        sub_bcast_cols_init(dfb::x, dfb::max);
+        exp_tile_init<EXP_APPROX>();
+        dfb_exps_obj.reserve_back(block_w * shk);
+        for (std::uint32_t j = 0; j < shk; ++j) {
+            for (std::uint32_t b = 0; b < block_w; b += sbw) {
+                const std::uint32_t n = (b + sbw > block_w) ? (block_w - b) : sbw;
+                tile_regs_acquire();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    sub_tiles_bcast_cols(dfb::x, dfb::max, j * block_w + b + d, j, d);
+                }
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    exp_tile<EXP_APPROX>(d);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    pack_tile(d, dfb::exps);
+                }
+                tile_regs_release();
+            }
+        }
+        dfb_exps_obj.push_back(block_w * shk);
+        dfb_x_obj.pop_front(block_w * shk);
+        dfb_max_obj.pop_front(shk);
+        reconfig_data_format(dfb::exps, dfb::sum_scaler);
+        dfb_exps_obj.wait_front(block_w * shk);
+#ifdef HIFI3_SUM
+        sum_recip_rows_hifi3(shk, block_w, dfb_sum_scaler_obj, dfb_recip_sum_exps_obj);
+#else
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::of(shk, block_w),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](std::uint32_t) {
+                if constexpr (DST_ACCUM_MODE) {
+                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+                } else {
+                    recip_tile_init();
+                    recip_tile(0);
+                }
+            });
+#endif
+        dfb_recip_sum_exps_obj.wait_front(shk);
+        reconfig_data_format(dfb::exps, dfb::recip_sum_exps);
+        pack_reconfig_data_format(dfb::out0);
+#ifdef HIFI3_OUT
+        mul_bcast_cols_hifi3_init(dfb::exps, dfb::recip_sum_exps);
+#else
+        mul_bcast_cols_init(dfb::exps, dfb::recip_sum_exps);
+#endif
+        dfb_out0_obj.reserve_back(block_w * shk);
+        for (std::uint32_t j = 0; j < shk; ++j) {
+            for (std::uint32_t b = 0; b < block_w; b += sbw) {
+                const std::uint32_t n = (b + sbw > block_w) ? (block_w - b) : sbw;
+                tile_regs_acquire();
+                for (std::uint32_t d = 0; d < n; ++d) {
+#ifdef HIFI3_OUT
+                    mul_tiles_bcast_cols_hifi3(dfb::exps, dfb::recip_sum_exps, j * block_w + b + d, j, d);
+#else
+                    mul_tiles_bcast_cols(dfb::exps, dfb::recip_sum_exps, j * block_w + b + d, j, d);
+#endif
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (std::uint32_t d = 0; d < n; ++d) {
+                    pack_tile(d, dfb::out0);
+                }
+                tile_regs_release();
+            }
+        }
+        dfb_out0_obj.push_back(block_w * shk);
+        dfb_exps_obj.pop_front(block_w * shk);
+        dfb_recip_sum_exps_obj.pop_front(shk);
+        dfb_out0_obj.wait_front(block_w * shk);
+        dummy_unpack(dfb::out0);
+        dfb_out0_obj.pop_front(block_w * shk);
+    }
+#elif defined(ROWS_PER_PASS) && defined(FUSED_SCALE_MASK)
+    constexpr std::uint32_t shk = (ROWS_PER_PASS <= block_h && block_h % ROWS_PER_PASS == 0) ? ROWS_PER_PASS : 1;
+    constexpr std::uint32_t sbw =
+        subblock_w < compute_kernel_lib::DEST_AUTO_LIMIT ? subblock_w : compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (std::uint32_t i = 0; i < block_h; i += shk) {
+        dfb_in0_obj.reserve_back(block_w * shk);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_w * shk);
+#ifdef SCALE_MASK_ROWS
+#ifdef HIFI3_SCALE
+        scale_rows_hifi3(block_w * shk, sbw, dfb_in0_obj, dfb_fused_scale_obj, dfb_scale_mask_obj);
+#else
+        ckl::mul<
+            ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+            ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(block_w * shk).block_size(subblock_w),
+            dfb_in0_obj,
+            dfb_fused_scale_obj,
+            dfb_scale_mask_obj);
+#endif
+#endif
+        for (std::uint32_t j = 0; j < shk; ++j) {
+#ifndef SCALE_MASK_ROWS
+#ifdef HIFI3_SCALE
+            scale_rows_hifi3(block_w, sbw, dfb_in0_obj, dfb_fused_scale_obj, dfb_scale_mask_obj);
+#else
+            ckl::mul<
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+                dfb_in0_obj,
+                dfb_fused_scale_obj,
+                dfb_scale_mask_obj);
+#endif
+#endif
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb::scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                    ckl::input(dfb::fused_attn, mask_bcast, mask_wait, mask_pop, ckl::InputTileMapping::Block)>{
+                    dfb_scale_mask_obj, dfb_fused_attn_obj},
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(
+                    dfb::exps, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                    dfb_exps_obj});
+        }
+        reconfig_data_format(dfb::exps, dfb::sum_scaler);
+        dfb_exps_obj.wait_front(block_w * shk);
+#ifdef HIFI3_SUM
+        sum_recip_rows_hifi3(shk, block_w, dfb_sum_scaler_obj, dfb_recip_sum_exps_obj);
+#else
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::of(shk, block_w),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](std::uint32_t) {
+                if constexpr (DST_ACCUM_MODE) {
+                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+                } else {
+                    recip_tile_init();
+                    recip_tile(0);
+                }
+            });
+#endif
+        dfb_recip_sum_exps_obj.wait_front(shk);
+        reconfig_data_format(dfb::exps, dfb::recip_sum_exps);
+        pack_reconfig_data_format(dfb::out0);
+#ifdef HIFI3_OUT
+        mul_bcast_cols_hifi3_init(dfb::exps, dfb::recip_sum_exps);
+#else
+        mul_bcast_cols_init(dfb::exps, dfb::recip_sum_exps);
+#endif
+        dfb_out0_obj.reserve_back(block_w * shk);
+        for (std::uint32_t j = 0; j < shk; ++j) {
+            for (std::uint32_t b = 0; b < block_w; b += sbw) {
+                const std::uint32_t n = (b + sbw > block_w) ? (block_w - b) : sbw;
+                tile_regs_acquire();
+                for (std::uint32_t d = 0; d < n; ++d) {
+#ifdef HIFI3_OUT
+                    mul_tiles_bcast_cols_hifi3(dfb::exps, dfb::recip_sum_exps, j * block_w + b + d, j, d);
+#else
+                    mul_tiles_bcast_cols(dfb::exps, dfb::recip_sum_exps, j * block_w + b + d, j, d);
+#endif
                 }
                 tile_regs_commit();
                 tile_regs_wait();
