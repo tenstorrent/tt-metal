@@ -1,0 +1,850 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (disabled) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -p -m pytest -x /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py --import-mode=prepend
+========================================
+2026-11-27 20:35:22.641 | INFO     | __main__:main:381 - Using port 8087
+2026-11-27 20:35:22.641 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-27 20:35:22.657 | INFO     | __main__:run_workload:420 - Test process started
+2026-11-27 20:35:24.483 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2
+configfile: pytest.ini
+plugins: repeat-0.9.4, split-0.11.0, anyio-4.16.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[29] 2026-11-27 20:35:27.667 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-27 20:35:27.667 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-27 20:35:27.671 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-27 20:35:27.671 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-27 20:35:27.677 | info     |             UMD | Established firmware bundle version: 19.17.1 (topology_discovery.cpp:700)
+2026-11-27 20:35:27.677 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-27 20:35:27.713 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[1] and remote chip ids {} (cluster.cpp:174)
+2026-11-27 20:35:27.713 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-27 20:35:27.713 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-27 20:35:27.713 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-27 20:35:27.714 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-27 20:35:27.737 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-27 20:35:28.328 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-27 20:35:28.329 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-27 20:35:28.333 | warning  |          Device | Overrode compute_with_storage_end [x, y]=[10, 9] (core_descriptor.cpp:233)
+2026-11-27 20:35:28.334 | warning  |          Device | Overrode compute_with_storage_end [x, y]=[10, 9] (core_descriptor.cpp:233)
+2026-11-27 20:35:28.406 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+
+RB case=c29 impl=new kdir=kernels_recommended marks_row=1 extras={'input_gen': 'bf16_specials', 'seed': 1234, 'poison_padding': 'nan', 'gate': 'exact'} shape=(1, 2, 50, 96) layout=TensorMemoryLayout.INTERLEAVED shard=None
+Building ncrisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DENTRIES_PER_PAGE=1 -DPAGE_BYTES=1088 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_unary_interleaved_start_id_metal2/7679480044554145248/" -DKERNEL_COMPILE_TIME_ARGS=0,1088 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/reader_unary_interleaved_start_id_metal2/7679480044554145248/ncrisc/ncrisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/reader_unary_interleaved_start_id_metal2/7679480044554145248/ncrisc/ncrisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DENTRIES_PER_PAGE=1 -DPAGE_BYTES=2048 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary_interleaved_start_id_metal2/4366597645986528422/" -DKERNEL_COMPILE_TIME_ARGS=0,2048 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/writer_unary_interleaved_start_id_metal2/4366597645986528422/brisc/brisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/writer_unary_interleaved_start_id_metal2/4366597645986528422/brisc/brisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,495,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:495:17: note: in expansion of macro 'SrcLocNameToHash'
+  495 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,504,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:504:17: note: in expansion of macro 'SrcLocNameToHash'
+  504 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/10725325015814183110/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/10725325015814183110/trisc0/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/10725325015814183110/trisc0/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:18,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:683,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_unpack.cpp:3,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1077:5: note: in expansion of macro 'DO_PRAGMA'
+ 1077 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/10725325015814183110/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/10725325015814183110/trisc2/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/10725325015814183110/trisc2/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:15,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:683,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_pack.cpp:3,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1082:5: note: in expansion of macro 'DO_PRAGMA'
+ 1082 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/10725325015814183110/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/10725325015814183110/trisc1/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/10725325015814183110/trisc1/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:18:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFILL_PAD_DATA_FMT=DataFormat::Float16_b -DFILL_PAD_FILL_ARG=fill_bits -DFILL_PAD_FILL_FN=fill_tile_bitcast -DMASK_ELEM_UINT=uint16_t -DMASK_VALUE=0x3F80u -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="fill_pad_reader/11323568528217936398/" -DKERNEL_COMPILE_TIME_ARGS=0,2048 -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_reader/11323568528217936398/ncrisc/ncrisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_reader/11323568528217936398/ncrisc/ncrisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="fill_pad_compute/3811088805666479960/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_compute/3811088805666479960/trisc2/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_compute/3811088805666479960/trisc2/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:15,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:683,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_pack.cpp:3,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1082:5: note: in expansion of macro 'DO_PRAGMA'
+ 1082 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="fill_pad_compute/3811088805666479960/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_compute/3811088805666479960/trisc0/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_compute/3811088805666479960/trisc0/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:18,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:683,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_unpack.cpp:3,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1077:5: note: in expansion of macro 'DO_PRAGMA'
+ 1077 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFILL_PAD_DATA_FMT=DataFormat::Float16_b -DFILL_PAD_FILL_ARG=fill_bits -DFILL_PAD_FILL_FN=fill_tile_bitcast -DHAS_BOTTOM_PAD=1 -DMASK_ELEM_UINT=uint16_t -DMASK_VALUE=0x3F80u -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="fill_pad_writer/2664945053429043120/" -DKERNEL_COMPILE_TIME_ARGS=0,2048 -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_writer/2664945053429043120/brisc/brisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_writer/2664945053429043120/brisc/brisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,495,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:495:17: note: in expansion of macro 'SrcLocNameToHash'
+  495 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,504,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:504:17: note: in expansion of macro 'SrcLocNameToHash'
+  504 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="fill_pad_compute/3811088805666479960/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_compute/3811088805666479960/trisc1/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/fill_pad_compute/3811088805666479960/trisc1/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:18:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DENTRIES_PER_PAGE=1 -DPAGE_BYTES=2048 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_unary_interleaved_start_id_metal2/4022276690083978238/" -DKERNEL_COMPILE_TIME_ARGS=0,2048 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/reader_unary_interleaved_start_id_metal2/4022276690083978238/ncrisc/ncrisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/reader_unary_interleaved_start_id_metal2/4022276690083978238/ncrisc/ncrisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DENTRIES_PER_PAGE=1 -DPAGE_BYTES=1088 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary_interleaved_start_id_metal2/4468624249390205819/" -DKERNEL_COMPILE_TIME_ARGS=0,1088 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/writer_unary_interleaved_start_id_metal2/4468624249390205819/brisc/brisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/writer_unary_interleaved_start_id_metal2/4468624249390205819/brisc/brisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,495,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:495:17: note: in expansion of macro 'SrcLocNameToHash'
+  495 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,504,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:504:17: note: in expansion of macro 'SrcLocNameToHash'
+  504 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/4035292560935330582/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/4035292560935330582/trisc0/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/4035292560935330582/trisc0/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:18,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:683,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_unpack.cpp:3,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1077:5: note: in expansion of macro 'DO_PRAGMA'
+ 1077 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/4035292560935330582/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/4035292560935330582/trisc2/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/4035292560935330582/trisc2/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:15,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:683,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_pack.cpp:3,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1082:5: note: in expansion of macro 'DO_PRAGMA'
+ 1082 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/4035292560935330582/" -include named_ct_arg_map_generated.h -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/4035292560935330582/trisc1/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/eltwise_typecast/4035292560935330582/trisc1/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:18:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="g6_to_layout_tile_reader/12383634146093846149/" -DKERNEL_COMPILE_TIME_ARGS=3,2,50,96,1,1,32,0,0,3,0,1088 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_tile_reader/12383634146093846149/ncrisc/ncrisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_tile_reader/12383634146093846149/ncrisc/ncrisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: g6_tile_reader,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp,33,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp:33:5: note: in expansion of macro 'DeviceZoneScopedN'
+   33 |     DeviceZoneScopedN("g6_tile_reader");
+      |     ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp: In lambda function:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: mark_block_nans,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp,40,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp:40:9: note: in expansion of macro 'DeviceZoneScopedN'
+   40 |         DeviceZoneScopedN("mark_block_nans");
+      |         ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: reserve_tile_window,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp,75,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp:75:13: note: in expansion of macro 'DeviceZoneScopedN'
+   75 |             DeviceZoneScopedN("reserve_tile_window");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: load_block,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp,80,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp:80:13: note: in expansion of macro 'DeviceZoneScopedN'
+   80 |             DeviceZoneScopedN("load_block");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: tile_window_read_barrier,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp,93,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1077:5: note: in expansion of macro 'DO_PRAGMA'
+ 1077 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_tile_reader.cpp:93:17: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   93 |                 DeviceZoneScopedSumN1("tile_window_read_barrier");
+      |                 ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="g6_to_layout_untilize_compute/18096956035361221148/" -DKERNEL_COMPILE_TIME_ARGS=3,2,50,96,1,1,32,0,1,0 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_untilize_compute/18096956035361221148/trisc0/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_untilize_compute/18096956035361221148/trisc0/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/compute/pack_untilize.h:7,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp:6,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_untilize_compute.cpp:14,
+                 from ../chlkc_unpack.cpp:4,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1077:5: note: in expansion of macro 'DO_PRAGMA'
+ 1077 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/e09e718542ef06ea/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="g6_to_layout_staged_writer/17547152125544075802/" -DKERNEL_COMPILE_TIME_ARGS=3,2,50,96,1,1,32,1,1,0,1,3,0,192 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_staged_writer/17547152125544075802/brisc/brisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_staged_writer/17547152125544075802/brisc/brisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,495,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:495:17: note: in expansion of macro 'SrcLocNameToHash'
+  495 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,504,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:504:17: note: in expansion of macro 'SrcLocNameToHash'
+  504 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,650,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:650:5: note: in expansion of macro 'SrcLocNameToHash'
+  650 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: g6_staged_writer,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp,50,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp:50:5: note: in expansion of macro 'DeviceZoneScopedN'
+   50 |     DeviceZoneScopedN("g6_staged_writer");
+      |     ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: wait_row_block,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp,110,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp:110:13: note: in expansion of macro 'DeviceZoneScopedN'
+  110 |             DeviceZoneScopedN("wait_row_block");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: store_block,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp,114,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp:114:13: note: in expansion of macro 'DeviceZoneScopedN'
+  114 |             DeviceZoneScopedN("store_block");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: row_block_writes_flushed,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp,127,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1077:5: note: in expansion of macro 'DO_PRAGMA'
+ 1077 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp:127:17: note: in expansion of macro 'DeviceZoneScopedSumN1'
+  127 |                 DeviceZoneScopedSumN1("row_block_writes_flushed");
+      |                 ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: final_write_barrier,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp,139,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1013:5: note: in expansion of macro 'DO_PRAGMA'
+ 1013 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_staged_writer.cpp:139:9: note: in expansion of macro 'DeviceZoneScopedN'
+  139 |         DeviceZoneScopedN("final_write_barrier");
+      |         ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="g6_to_layout_untilize_compute/18096956035361221148/" -DKERNEL_COMPILE_TIME_ARGS=3,2,50,96,1,1,32,0,1,0 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_untilize_compute/18096956035361221148/trisc2/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_untilize_compute/18096956035361221148/trisc2/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/compute/pack_untilize.h:7,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp:6,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended/g6_to_layout_untilize_compute.cpp:14,
+                 from ../chlkc_pack.cpp:4,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1082:5: note: in expansion of macro 'DO_PRAGMA'
+ 1082 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/cpp -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/api/ -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/runtime/sfpi/include -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/kernels_recommended -include /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache/pch/6f4b41a36927b557/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="g6_to_layout_untilize_compute/18096956035361221148/" -DKERNEL_COMPILE_TIME_ARGS=3,2,50,96,1,1,32,0,1,0 -c -o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_untilize_compute/18096956035361221148/trisc1/trisck.12325679746031768730_493591.o /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/chip_scope/cache/tt-metal-cache9957800640679114378/kernels/g6_to_layout_untilize_compute/18096956035361221148/trisc1/trisck.12325679746031768730_493591.d
+In file included from /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:18:
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1072:5: note: in expansion of macro 'DO_PRAGMA'
+ 1072 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+FAILED2026-11-27 20:35:31.659 | info     |           Metal | Device kernel duration perf summary (device=0): count=5, min=930ns, avg=4496.4ns, max=8382ns (profiler_analysis.cpp:729)
+2026-11-27 20:35:31.659 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=800ns, range=[800..8800), underflow(<800ns)=0, overflow(>=8800ns)=0) (profiler_analysis.cpp:772)
+2026-11-27 20:35:31.659 | info     |           Metal |   [         800 ..         1600) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        1600 ..         2400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        2400 ..         3200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        3200 ..         4000) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        4000 ..         4800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        4800 ..         5600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        5600 ..         6400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        6400 ..         7200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        7200 ..         8000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.659 | info     |           Metal |   [        8000 ..         8800) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-27 20:35:31.671 | INFO     | conftest:pytest_runtest_teardown:1233 - In custom teardown, open device ids: {0}
+
+
+=================================== FAILURES ===================================
+________________________________ test_bench[29] ________________________________
+
+case = '29', device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7b1348cac610>
+
+    @pytest.mark.use_module_device
+    @pytest.mark.parametrize("case", CASES)
+    def test_bench(case, device, monkeypatch):
+        monkeypatch.setattr(pd, "KERNEL_DIR", KDIR)
+        if MARKS_ROW:
+            _install_row_marks(monkeypatch)
+        op_mod._PLAN_CACHE.clear()
+        op_mod._PROGRAM_CACHE.clear()
+        seed = zlib.crc32(f"c{case}".encode()) & 0x7FFFFFFF
+        torch.manual_seed(seed)
+        random.seed(seed)
+
+        scenario = SPEC.scenario_of(int(case))
+        if SHAPE is not None:
+            scenario["shape"] = tuple(SHAPE)
+        if SHARD is not None:
+            scenario["memory_layout"] = getattr(ttnn.TensorMemoryLayout, SHARD["layout"] + "_SHARDED")
+            scenario["shard_spec"] = {
+                "grid": [tuple(tuple(c) for c in r) for r in SHARD["grid"]],
+                "shard_shape": tuple(SHARD["shard_shape"]),
+                "orientation": ttnn.ShardOrientation.ROW_MAJOR,
+            }
+        real_op = _stock if IMPL == "stock" else HELPERS.g6_to_layout
+        calls = []
+
+        def repeated(*args, **kwargs):
+            kept = real_op(*args, **kwargs)
+            ttnn.synchronize_device(device)
+            for _ in range(LAUNCHES - 1):
+                out = real_op(*args, **kwargs)
+                ttnn.synchronize_device(device)
+                ttnn.deallocate(out)
+            calls.append(1)
+            return kept
+
+        monkeypatch.setattr(HELPERS, "g6_to_layout", repeated)
+        print(
+            f"\nRB case=c{case} impl={IMPL} kdir={KDIR.name} marks_row={int(MARKS_ROW)} extras={EXTRAS} "
+            f"shape={scenario['shape']} layout={scenario['memory_layout']} shard={scenario['shard_spec']}",
+            flush=True,
+        )
+>       HELPERS.run_g6_to_layout(
+            (scenario,),
+            dtype=scenario["dtype"],
+            layout=scenario["layout"],
+            output_dtype=HELPERS.expected_output_dtype(scenario),
+            memory_layout=scenario["memory_layout"],
+            device=device,
+            extras=EXTRAS,
+        )
+
+ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py:127:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+eval/golden_tests/g6_to_layout/helpers.py:394: in run_g6_to_layout
+    check_exact(actual, expected)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+actual = tensor([[[[-0.5938, -0.6719,  0.4844,  ..., -2.0938,  0.3438,  1.3750],
+          [-1.5000,  1.8750,  0.2188,  ...,  0...7344, -0.6250],
+          [-0.5625,  0.0938,  0.1875,  ...,  0.3438, -0.2500, -1.8125]]]],
+       dtype=torch.bfloat16)
+expected = tensor([[[[-0.5938, -0.6719,  0.4844,  ..., -2.0938,  0.3438,  1.3750],
+          [-1.5000,  1.8750,  0.2188,  ...,  0...7344, -0.6250],
+          [-0.5625,  0.0938,  0.1875,  ...,  0.3438, -0.2500, -1.8125]]]],
+       dtype=torch.bfloat16)
+
+    def check_exact(actual, expected):
+        """Bit comparison of bfloat16 logical values, NaN payloads included."""
+        if list(actual.shape) != list(expected.shape):
+            raise CheckOutputError(severity="bug",
+                                   detail=f"shape_mismatch: got {list(actual.shape)} expected {list(expected.shape)}")
+        if actual.dtype != torch.bfloat16:
+            actual = actual.to(torch.bfloat16)
+        differ = _bits(actual) != _bits(expected.to(torch.bfloat16))
+        count = int(differ.sum())
+        if count:
+            index = tuple(int(i) for i in differ.nonzero()[0])
+            got = int(_bits(actual)[index]) & 0xFFFF
+            want = int(_bits(expected)[index]) & 0xFFFF
+>           raise CheckOutputError(
+                severity="bug",
+                detail=f"bit_mismatch: {count} of {differ.numel()} values differ; first at {index}: "
+                       f"got 0x{got:04X} expected 0x{want:04X}",
+            )
+E           eval.golden_tests.g6_to_layout.helpers.CheckOutputError: CheckOutputError severity=bug bit_mismatch: 12 of 9600 values differ; first at (0, 0, 8, 78): got 0x7F80 expected 0xFFFF
+
+eval/golden_tests/g6_to_layout/helpers.py:226: CheckOutputError
+- generated xml file: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.36s call     ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[29]
+1.43s setup    ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[29]
+0.06s teardown ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[29]
+=========================== short test summary info ============================
+FAILED ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[29] - eval.golden_tests.g6_to_layout.helpers.CheckOutputError: CheckOutputError severity=bug bit_mismatch: 12 of 9600 values differ; first at (0, 0, 8, 78): got 0x7F80 expected 0xFFFF
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============================== 1 failed in 4.18s ===============================
+2026-11-27 20:35:33.606 | info     |    BuildKernels | JIT cache stats: 19/39 hits (48.7%) [19 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-27 20:35:33.606 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-27 20:35:33.616 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-27 20:35:33.616 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-27 20:35:33.639 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-27 20:35:33.639 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-27 20:35:33.639 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-27 20:35:33.868 | INFO     | __main__:main:494 - Copying /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/build/profiler/build_wasm/traces/--import-mode_prepend_2026_11_27_20_35_33.tracy
+2026-11-27 20:35:33.868 | INFO     | __main__:main:497 - Copied /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/build/profiler/build_wasm/traces/--import-mode_prepend_2026_11_27_20_35_33.tracy
+2026-11-27 20:35:33.869 | INFO     | __main__:main:506 - embed.tracy -> traces/--import-mode_prepend_2026_11_27_20_35_33.tracy
+2026-11-27 20:35:33.869 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-11-27 20:35:33.887 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-27 20:35:33.892 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-27 20:35:33.892 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+2026-11-27 20:35:33.914 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-27 20:35:33.915 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-27 20:35:33.921 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-27 20:35:33.921 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-27 20:35:33.933 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-27 20:35:33.939 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/reports/2026_11_27_20_35_33/ops_perf_results_2026_11_27_20_35_33.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/reports/2026_11_27_20_35_33/ops_perf_results_2026_11_27_20_35_33.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m14s (14s total, device-lock-acquired -> exit)

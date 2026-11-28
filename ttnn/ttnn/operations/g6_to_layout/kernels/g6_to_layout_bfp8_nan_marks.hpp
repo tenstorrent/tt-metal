@@ -14,9 +14,14 @@
 // (hidden bit explicit) has bit 6 set, and a lower mantissa bit is set; its float32 -> bfloat16 cast
 // then renders every such NaN as 0xFFFF, whatever the sign and payload. The unpack -> SrcA ->
 // pack-untilize path turns those datums into +-inf, and no compute routing emits 0xFFFF. So the
-// reader marks the NaN datums of each block on cb_nan_marks, and the writer stores 0xFFFF over them
-// in the untilized row stage before the rows leave L1. Every other datum (inf, zeros, flushed
-// values of a 0xFF group) is already bit-exact through the packer.
+// reader marks the NaN datums of each TILE-ROW on cb_nan_marks, and the writer stores 0xFFFF over
+// them in the untilized row stage before that tile-row's rows leave L1. Every other datum (inf,
+// zeros, flushed values of a 0xFF group) is already bit-exact through the packer.
+//
+// Page of cb_nan_marks (one per live tile-row):
+//   word 0       summary: nonzero iff some tile of the tile-row holds a NaN datum
+//   bytes 16..   block_cols_tiles NanMarks records (tile column j -> record j); written only when the
+//                summary is nonzero, so a clean tile-row costs the reader one store and the writer one load.
 
 namespace g6_to_layout {
 
@@ -25,9 +30,9 @@ constexpr uint32_t BFP8_GROUPS_PER_TILE = 4 * FACE_HW;
 constexpr uint32_t BFP8_GROUP_DATUMS = FACE_HW;
 constexpr uint32_t BFP8_EXPONENT_BYTES = BFP8_GROUPS_PER_TILE;
 constexpr uint16_t HOST_NAN_BITS = 0xFFFF;
+// Mirrored by the host (NAN_MARKS_ROW_HEADER_BYTES in the program descriptor).
+constexpr uint32_t NAN_MARKS_ROW_HEADER_BYTES = 16;
 
-// One record per block tile slot (tile-row i, column j -> slot i * block_cols_tiles + j) of a
-// cb_nan_marks page. Only the bitmap's groups carry a written datum mask.
 struct NanMarks {
     uint32_t groups[2];                     // bit g: group g of the tile holds a NaN datum
     uint16_t datums[BFP8_GROUPS_PER_TILE];  // bit c: datum c of the group is NaN
@@ -36,28 +41,18 @@ static_assert(sizeof(NanMarks) == 8 + 2 * BFP8_GROUPS_PER_TILE, "record size is 
 
 using NanMarksPtr = volatile tt_l1_ptr NanMarks*;
 
+FORCE_INLINE NanMarksPtr row_records(uint32_t marks_page) {
+    return reinterpret_cast<NanMarksPtr>(marks_page + NAN_MARKS_ROW_HEADER_BYTES);
+}
+
 // Nonzero iff some byte of `word` is 0xFF.
 FORCE_INLINE uint32_t has_ff_byte(uint32_t word) {
     const uint32_t inverted = ~word;
     return (inverted - 0x01010101u) & word & 0x80808080u;
 }
 
-FORCE_INLINE void mark_tile_nans(uint32_t tile_addr, NanMarksPtr marks) {
-    // Almost every tile has no 0xFF group: test all exponent words in one unrolled pass whose
-    // loads are independent (non-volatile, so they issue back to back), and skip the per-group
-    // walk. The scan precedes the writer's first row, so its cost is on the critical path.
-    const auto fast_exponents = reinterpret_cast<const tt_l1_ptr uint32_t*>(tile_addr);
-    uint32_t any_ff = 0;
-#pragma GCC unroll 16
-    for (uint32_t w = 0; w < BFP8_EXPONENT_BYTES / 4; ++w) {
-        any_ff |= has_ff_byte(fast_exponents[w]);
-    }
-    if (any_ff == 0) {
-        marks->groups[0] = 0;
-        marks->groups[1] = 0;
-        return;
-    }
-
+// Slow path of one tile (some exponent byte is 0xFF): writes its record, returns its group bitmap OR.
+FORCE_INLINE uint32_t mark_tile_nans_slow(uint32_t tile_addr, NanMarksPtr marks) {
     auto exponents = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
     uint32_t groups[2] = {0, 0};
     for (uint32_t w = 0; w < BFP8_EXPONENT_BYTES / 4; ++w) {
@@ -87,45 +82,63 @@ FORCE_INLINE void mark_tile_nans(uint32_t tile_addr, NanMarksPtr marks) {
     }
     marks->groups[0] = groups[0];
     marks->groups[1] = groups[1];
+    return groups[0] | groups[1];
 }
 
-// Reader side: marks every live tile of `block`, whose bfp8 tiles sit at their slots from `tiles`.
-FORCE_INLINE void mark_block_nans(uint32_t tiles, const Block& block, uint32_t tile_bytes, uint32_t marks_page) {
-    for (uint32_t i = 0; i < block.rows; ++i) {
-        const uint32_t row_slot = i * Geometry::block_cols_tiles;
-        for (uint32_t j = 0; j < block.cols; ++j) {
-            const uint32_t slot = row_slot + j;
-            mark_tile_nans(tiles + slot * tile_bytes, reinterpret_cast<NanMarksPtr>(marks_page) + slot);
+// Reader side: marks the `cols` tiles of one tile-row (consecutive tiles from `row_tiles`) on one
+// cb_nan_marks page. Fast path: one OR-reduce over every exponent word of the tile-row (independent,
+// non-volatile loads), one test, one store.
+FORCE_INLINE void mark_tile_row_nans(uint32_t row_tiles, uint32_t cols, uint32_t tile_bytes, uint32_t marks_page) {
+    uint32_t acc = 0;
+    uint32_t tile = row_tiles;
+    for (uint32_t j = 0; j < cols; ++j) {
+        const auto exponents = reinterpret_cast<const tt_l1_ptr uint32_t*>(tile);
+#pragma GCC unroll 16
+        for (uint32_t w = 0; w < BFP8_EXPONENT_BYTES / 4; ++w) {
+            acc |= has_ff_byte(exponents[w]);
+        }
+        tile += tile_bytes;
+    }
+    uint32_t summary = 0;
+    if ((acc & 0x80808080u) != 0) {
+        NanMarksPtr records = row_records(marks_page);
+        tile = row_tiles;
+        for (uint32_t j = 0; j < cols; ++j) {
+            summary |= mark_tile_nans_slow(tile, records + j);
+            tile += tile_bytes;
         }
     }
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(marks_page) = summary;
 }
 
-// Writer side: stores the host's NaN over every marked datum of `block` in its row stage (32 rows
-// of block_cols_tiles * 64 B per tile-row).
-FORCE_INLINE void patch_block_nans(uint32_t marks_page, const Block& block, uint32_t stage) {
-    for (uint32_t i = 0; i < block.rows; ++i) {
-        for (uint32_t j = 0; j < block.cols; ++j) {
-            NanMarksPtr marks = reinterpret_cast<NanMarksPtr>(marks_page) + i * Geometry::block_cols_tiles + j;
-            const uint32_t tile_stage = stage + i * Geometry::stage_tile_row_bytes + j * TILE_ROW_BYTES;
-            for (uint32_t half = 0; half < 2; ++half) {
-                uint32_t groups = marks->groups[half];
-                while (groups != 0) {
-                    const uint32_t group = 32 * half + __builtin_ctz(groups);
-                    groups &= groups - 1;
-                    const uint32_t face = group / FACE_HW;
-                    const uint32_t row = (face >> 1) * FACE_HW + group % FACE_HW;
-                    const uint32_t row_addr =
-                        tile_stage + row * Geometry::stage_row_bytes + (face & 1) * FACE_ROW_BYTES;
-                    uint32_t datums = marks->datums[group];
-                    while (datums != 0) {
-                        const uint32_t c = __builtin_ctz(datums);
-                        datums &= datums - 1;
-                        *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(row_addr + c * DATUM_BYTES) = HOST_NAN_BITS;
-                    }
+// Writer side: stores the host's NaN over every marked datum of one tile-row whose row stage starts at
+// `tile_row_stage` (32 rows of block_cols_tiles * 64 B), and returns the tile-row's rows that hold a
+// patched datum (bit r: row r). Call only when the page's summary word is nonzero.
+FORCE_INLINE uint32_t patch_tile_row_nans_rows(uint32_t marks_page, uint32_t cols, uint32_t tile_row_stage) {
+    NanMarksPtr records = row_records(marks_page);
+    uint32_t rows = 0;
+    for (uint32_t j = 0; j < cols; ++j) {
+        NanMarksPtr marks = records + j;
+        const uint32_t tile_stage = tile_row_stage + j * TILE_ROW_BYTES;
+        for (uint32_t half = 0; half < 2; ++half) {
+            uint32_t groups = marks->groups[half];
+            while (groups != 0) {
+                const uint32_t group = 32 * half + __builtin_ctz(groups);
+                groups &= groups - 1;
+                const uint32_t face = group / FACE_HW;
+                const uint32_t row = (face >> 1) * FACE_HW + group % FACE_HW;
+                rows |= 1u << row;
+                const uint32_t row_addr = tile_stage + row * Geometry::stage_row_bytes + (face & 1) * FACE_ROW_BYTES;
+                uint32_t datums = marks->datums[group];
+                while (datums != 0) {
+                    const uint32_t c = __builtin_ctz(datums);
+                    datums &= datums - 1;
+                    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(row_addr + c * DATUM_BYTES) = HOST_NAN_BITS;
                 }
             }
         }
     }
+    return rows;
 }
 
 }  // namespace g6_to_layout

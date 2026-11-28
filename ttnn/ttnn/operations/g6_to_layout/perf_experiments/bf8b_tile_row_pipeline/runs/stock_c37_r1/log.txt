@@ -1,0 +1,102 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-27 19:50:58] SAFE_PYTEST: waiting for device (20s) — holder pid=175516 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_check --import-mode=prepend -s " parent pid=175513 cmd="timeout 2400 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_check --import-mode=prep"
+[2026-11-27 19:51:18] SAFE_PYTEST: waiting for device (40s) — holder pid=175516 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_check --import-mode=prepend -s " parent pid=175513 cmd="timeout 2400 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_check --import-mode=prep"
+[2026-11-27 19:51:39] SAFE_PYTEST: waiting for device (60s) — holder unknown
+[2026-11-27 19:52:00] SAFE_PYTEST: waiting for device (80s) — holder pid=177563 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --precompile ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_tilize_bf16/test_tensix_tilize.py -k test_exact " parent pid=177557 cmd="timeout 1800 scripts/run_safe_pytest.sh --run-all --precompile ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_tilize_bf16/test_tensix_tiliz"
+[2026-11-27 19:52:20] SAFE_PYTEST: waiting for device (100s) — holder pid=177468 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_untilize_bf16/test_g6tu_exact.py --import-mode=prepend -k all65536_c2036 and not k " parent pid=177462 cmd="timeout 1200 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_untilize_bf16/test_g6tu_exact.py --import-"
+[2026-11-27 19:52:40] SAFE_PYTEST: waiting for device (120s) — holder pid=188191 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/small_tensor_split/test_split_bench.py::test_split_bench " parent pid=188187 cmd="timeout 900 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/small_tensor_split/test_split_bench.py::test_split_bench "
+[2026-11-27 19:53:00] SAFE_PYTEST: waiting for device (140s) — holder pid=193654 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_tilize_bf16/test_tensix_tilize.py -k test_exact " parent pid=193652 cmd="timeout 1800 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_tilize_bf16/test_tensix_tilize.py -k test_"
+[2026-11-27 19:53:21] SAFE_PYTEST: waiting for device (160s) — holder pid=185580 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepend -s " parent pid=185576 cmd="timeout 2400 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepe"
+[2026-11-27 19:53:41] SAFE_PYTEST: waiting for device (180s) — holder pid=185580 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepend -s " parent pid=185576 cmd="timeout 2400 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepe"
+[2026-11-27 19:54:01] SAFE_PYTEST: waiting for device (200s) — holder pid=197961 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/small_tensor_split/test_split_bench.py::test_split_bench " parent pid=197959 cmd="timeout 900 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/small_tensor_split/test_split_bench.py::test_split_bench "
+[2026-11-27 19:54:21] SAFE_PYTEST: waiting for device (220s) — holder pid=200667 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepend -s " parent pid=200661 cmd="timeout 2400 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepe"
+[2026-11-27 19:54:41] SAFE_PYTEST: waiting for device (240s) — holder pid=200676 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --no-py-zones ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_untilize_bf16/test_g6tu_bench.py --import-mode=prepend " parent pid=200668 cmd="timeout 1500 scripts/run_safe_pytest.sh --profile --no-py-zones ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_untilize_bf16/test_g6tu_benc"
+[2026-11-27 19:55:01] SAFE_PYTEST: waiting for device (260s) — holder pid=204316 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --no-py-zones ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_tilize_bf16/test_tensix_tilize.py -k bench " parent pid=204315 cmd="timeout 1200 scripts/run_safe_pytest.sh --profile --no-py-zones ttnn/ttnn/operations/g6_to_layout/perf_experiments/tensix_tilize_bf16/test_tensix_tili"
+[2026-11-27 19:55:22] SAFE_PYTEST: waiting for device (280s) — holder pid=205059 cmd="/bin/bash scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepend -s " parent pid=205056 cmd="timeout 2400 scripts/run_safe_pytest.sh ttnn/ttnn/operations/g6_to_layout/perf_experiments/row_noc_issue/test_row_io.py::test_perf --import-mode=prepe"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (disabled) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -p -m pytest -x /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py --import-mode=prepend
+========================================
+2026-11-27 19:55:31.703 | INFO     | __main__:main:381 - Using port 8086
+2026-11-27 19:55:31.703 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-27 19:55:31.719 | INFO     | __main__:run_workload:420 - Test process started
+2026-11-27 19:55:33.620 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2
+configfile: pytest.ini
+plugins: repeat-0.9.4, split-0.11.0, anyio-4.16.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[37] 2026-11-27 19:55:36.916 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-27 19:55:36.916 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-27 19:55:36.920 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-27 19:55:36.920 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-27 19:55:36.926 | info     |             UMD | Established firmware bundle version: 19.17.1 (topology_discovery.cpp:700)
+2026-11-27 19:55:36.926 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-27 19:55:36.962 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[1] and remote chip ids {} (cluster.cpp:174)
+2026-11-27 19:55:36.963 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-27 19:55:36.963 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-27 19:55:36.963 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-27 19:55:36.964 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-27 19:55:37.054 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-27 19:55:37.691 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-27 19:55:37.691 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-27 19:55:37.696 | warning  |          Device | Overrode compute_with_storage_end [x, y]=[10, 9] (core_descriptor.cpp:233)
+2026-11-27 19:55:37.696 | warning  |          Device | Overrode compute_with_storage_end [x, y]=[10, 9] (core_descriptor.cpp:233)
+2026-11-27 19:55:37.772 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+
+RB case=c37 impl=stock kdir=kernels_baseline marks_row=0 extras=None
+RB_OK case=c37 impl=stock kdir=kernels_baseline exact check passed
+PASSED2026-11-27 19:55:38.624 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=6889ns, avg=6910.7ns, max=6946ns (profiler_analysis.cpp:729)
+2026-11-27 19:55:38.624 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[6800..7800), underflow(<6800ns)=0, overflow(>=7800ns)=0) (profiler_analysis.cpp:772)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        6800 ..         6900) |####################                    |        2 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        6900 ..         7000) |########################################|        4 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7000 ..         7100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7100 ..         7200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7200 ..         7300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7300 ..         7400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7400 ..         7500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7500 ..         7600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7600 ..         7700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 19:55:38.624 | info     |           Metal |   [        7700 ..         7800) |                                        |        0 (profiler_analysis.cpp:777)
+
+
+- generated xml file: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.54s setup    ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[37]
+0.10s call     ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[37]
+0.08s teardown ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[37]
+============================== 1 passed in 1.95s ===============================
+2026-11-27 19:55:40.347 | info     |    BuildKernels | JIT cache stats: 24/24 hits (100.0%) [24 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-27 19:55:40.347 | info     |    BuildKernels | JIT telemetry: 37 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-27 19:55:40.357 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-27 19:55:40.357 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-27 19:55:40.455 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-27 19:55:40.456 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-27 19:55:40.456 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-27 19:55:40.681 | INFO     | __main__:main:494 - Copying /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/build/profiler/build_wasm/traces/--import-mode_prepend_2026_11_27_19_55_40.tracy
+2026-11-27 19:55:40.682 | INFO     | __main__:main:497 - Copied /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/build/profiler/build_wasm/traces/--import-mode_prepend_2026_11_27_19_55_40.tracy
+2026-11-27 19:55:40.682 | INFO     | __main__:main:506 - embed.tracy -> traces/--import-mode_prepend_2026_11_27_19_55_40.tracy
+2026-11-27 19:55:40.682 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-11-27 19:55:40.709 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-27 19:55:40.715 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-27 19:55:40.716 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+2026-11-27 19:55:40.758 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-27 19:55:40.759 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-27 19:55:40.786 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-27 19:55:40.787 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-27 19:55:40.800 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-27 19:55:40.807 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/reports/2026_11_27_19_55_40/ops_perf_results_2026_11_27_19_55_40.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/reports/2026_11_27_19_55_40/ops_perf_results_2026_11_27_19_55_40.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m11s (11s total, device-lock-acquired -> exit)

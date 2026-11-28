@@ -12,9 +12,11 @@
 //   bfp8: the unpacker consumes whole tiles (shared exponents + datums), so a tile is read whole.
 // R4 (sharded): cb_tile_window is backed on the resident shard, so the block is already in place;
 // the reader publishes the shard's live tile-rows at once. No NoC traffic.
-// bfp8 only: once a block's tiles are in place, the reader marks its NaN datums on cb_nan_marks (one
-// page per block, see g6_to_layout_bfp8_nan_marks.hpp). The scan reads the tiles after they are
-// pushed: the consumer only reads them, and their slots are not refilled before the next reserve.
+// bfp8 only: once a block's tiles are in place, the reader marks its NaN datums on cb_nan_marks, one
+// page per live tile-row pushed as soon as that tile-row is scanned, so the writer starts on
+// tile-row 0 while the rest is scanned (g6_to_layout_bfp8_nan_marks.hpp). The scan reads the tiles
+// after they are pushed: the consumer only reads them, and their slots are not refilled before the
+// next reserve.
 // Zones (profiler builds only): per interleaved block, the reserve wait and the block's reads each
 // have a zone; the read barrier inside is a sum zone (TT_METAL_PROFILER_SUM). Every block's NaN scan
 // has a zone.
@@ -69,9 +71,13 @@ void kernel_main() {
 
     auto mark_nans = [&](uint32_t tiles) {
         DeviceZoneScopedN("mark_block_nans");
-        cb_reserve_back(cb_nan_marks, 1);
-        mark_block_nans(tiles, block, tile_bytes, get_write_ptr(cb_nan_marks));
-        cb_push_back(cb_nan_marks, 1);
+        uint32_t row_tiles = tiles;
+        for (uint32_t i = 0; i < block.rows; ++i) {
+            cb_reserve_back(cb_nan_marks, 1);
+            mark_tile_row_nans(row_tiles, block.cols, tile_bytes, get_write_ptr(cb_nan_marks));
+            cb_push_back(cb_nan_marks, 1);
+            row_tiles += Geometry::block_cols_tiles * tile_bytes;
+        }
     };
 
     if constexpr (sharded) {

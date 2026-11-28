@@ -1,0 +1,101 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (disabled) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -p -m pytest -x /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py --import-mode=prepend
+========================================
+2026-11-27 20:04:14.283 | INFO     | __main__:main:381 - Using port 8086
+2026-11-27 20:04:14.283 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-27 20:04:14.297 | INFO     | __main__:run_workload:420 - Test process started
+2026-11-27 20:04:16.122 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2
+configfile: pytest.ini
+plugins: repeat-0.9.4, split-0.11.0, anyio-4.16.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[20] 2026-11-27 20:04:19.295 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-27 20:04:19.295 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-27 20:04:19.299 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-27 20:04:19.299 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-27 20:04:19.305 | info     |             UMD | Established firmware bundle version: 19.17.1 (topology_discovery.cpp:700)
+2026-11-27 20:04:19.305 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-27 20:04:19.342 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[1] and remote chip ids {} (cluster.cpp:174)
+2026-11-27 20:04:19.342 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-27 20:04:19.342 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-27 20:04:19.342 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-27 20:04:19.343 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-27 20:04:19.437 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-27 20:04:20.030 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-27 20:04:20.030 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-27 20:04:20.035 | warning  |          Device | Overrode compute_with_storage_end [x, y]=[10, 9] (core_descriptor.cpp:233)
+2026-11-27 20:04:20.035 | warning  |          Device | Overrode compute_with_storage_end [x, y]=[10, 9] (core_descriptor.cpp:233)
+2026-11-27 20:04:20.111 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+
+RB case=c20 impl=new kdir=kernels_deferred marks_row=1 extras=None
+RB_OK case=c20 impl=new kdir=kernels_deferred exact check passed
+PASSED2026-11-27 20:04:20.876 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=1281ns, avg=1297.5ns, max=1326ns (profiler_analysis.cpp:729)
+2026-11-27 20:04:20.876 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[1200..2200), underflow(<1200ns)=0, overflow(>=2200ns)=0) (profiler_analysis.cpp:772)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1200 ..         1300) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1300 ..         1400) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1400 ..         1500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1500 ..         1600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1600 ..         1700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1700 ..         1800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1800 ..         1900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        1900 ..         2000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        2000 ..         2100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-27 20:04:20.876 | info     |           Metal |   [        2100 ..         2200) |                                        |        0 (profiler_analysis.cpp:777)
+
+
+- generated xml file: /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.50s setup    ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[20]
+0.05s teardown ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[20]
+0.04s call     ttnn/ttnn/operations/g6_to_layout/perf_experiments/bf8b_tile_row_pipeline/test_rowpipe_bench.py::test_bench[20]
+============================== 1 passed in 1.77s ===============================
+2026-11-27 20:04:22.066 | info     |    BuildKernels | JIT cache stats: 24/24 hits (100.0%) [24 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-27 20:04:22.066 | info     |    BuildKernels | JIT telemetry: 38 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-27 20:04:22.077 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-27 20:04:22.077 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-27 20:04:22.139 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-27 20:04:22.139 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-27 20:04:22.139 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-27 20:04:22.549 | INFO     | __main__:main:494 - Copying /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/build/profiler/build_wasm/traces/--import-mode_prepend_2026_11_27_20_04_22.tracy
+2026-11-27 20:04:22.550 | INFO     | __main__:main:497 - Copied /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/build/profiler/build_wasm/traces/--import-mode_prepend_2026_11_27_20_04_22.tracy
+2026-11-27 20:04:22.550 | INFO     | __main__:main:506 - embed.tracy -> traces/--import-mode_prepend_2026_11_27_20_04_22.tracy
+2026-11-27 20:04:22.550 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-11-27 20:04:22.593 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-27 20:04:22.600 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-27 20:04:22.600 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+2026-11-27 20:04:22.680 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-27 20:04:22.680 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+Traceback (most recent call last):
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tools/tracy/__main__.py", line 538, in <module>
+    main()
+  File "/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tools/tracy/__main__.py", line 514, in main
+    generate_report(
+  File "/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tools/tracy/__init__.py", line 175, in generate_report
+    process_ops(
+  File "/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tools/tracy/process_ops_logs.py", line 1859, in process_ops
+    deviceOps, traceOps = append_device_data(
+  File "/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tools/tracy/process_ops_logs.py", line 1006, in append_device_data
+    host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+  File "/localdev/pmilojevic/campaign/bh-lb-18/slots/chip2/tools/tracy/process_ops_logs.py", line 723, in _enrich_ops_from_perf_csv
+    assert candidates, (
+AssertionError: Device data missing: Op 7168 not present in cpp_device_perf_report.csv for device 0 (trace_id=None)
+========================================
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 1; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m10s (10s total, device-lock-acquired -> exit)

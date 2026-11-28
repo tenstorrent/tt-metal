@@ -77,7 +77,8 @@ SLOT_IMAGE_DEPTH = 3
 READER_SLOT_EIGHTHS = 5
 WRITER_SLOT_NOC_COPIES = True
 TILE_BLOCK_DEPTH = 2  # R1/R3 blocks in cb_tile_window, R5/R6 blocks in cb_row_stage (reader -> compute)
-# cb_nan_marks pages: the reader can run TILE_BLOCK_DEPTH + ROW_DEPTH blocks ahead of the writer.
+# cb_nan_marks holds one page per tile-row; the reader can run TILE_BLOCK_DEPTH + ROW_DEPTH blocks ahead
+# of the writer.
 NAN_MARKS_DEPTH = TILE_BLOCK_DEPTH + ROW_DEPTH
 # Target blocks per core; sets block_rows_tiles below its L1 cap so pipeline fill/drain stays near
 # 1/17 of a core's run. Measured against {1 (the L1-cap block), 4, 64}: 5-6% faster than the L1-cap
@@ -98,6 +99,14 @@ SHORT_IMAGE_BLOCK_COLS = 8
 # (measured: 256-B rows on 110 cores gain from a ~30-cycle issue, 512-B rows lose 30% at that rate);
 # an L1 source spaces each core's row reads to stay under it (kernels/g6_to_layout_row_issue.hpp).
 L1_ROW_READ_GRID_BYTES_PER_CYCLE = 780
+# Reader / writer NoCs swapped on every other core (checkerboard on logical x + y), so the grid's
+# all-to-all row and tile traffic is spread over both NoCs instead of every write on NoC1 (Perf 1, us:
+# c37 6.50 -> 4.77, c29 3.66 -> 3.23, c272 16.2 -> 10.0, c296 58.0 -> 38.3, c301 102 -> 90; c49 15.5 ->
+# 17.4). Carved out where measured slower:
+#   staged_reorder: DRAM-bound bf16 reads/writes run best on reader NoC0 / writer NoC1 (c283 362 ->
+#     412, c295 11.7 -> 12.4, c304 2691 -> 2789, c2036 26.4 -> 27.3);
+#   the face regimes: their DRAM-bound run writes measured 1497 vs 866 us on NoC0 (Refinement 3).
+NOC_CHECKERBOARD = True
 
 # L1 per core the model leaves to the op (BB-05); an L1 output's pages on a core count inside it.
 L1_BUDGET_BYTES = 1347776
@@ -117,6 +126,8 @@ ROW_MAJOR_TO_TILE = "row_major_to_tile"
 PACKER_TILIZE = "packer_tilize"
 SAME_BANK_SLOT_WRITES = "same_bank_slot_writes"
 _FACE_REGIMES = (FACE_DIRECT, SAME_BANK_SLOT_WRITES)
+# Regimes that keep reader NoC0 / writer NoC1 on every core (see NOC_CHECKERBOARD).
+_DEFAULT_NOC_REGIMES = _FACE_REGIMES + (STAGED_REORDER,)
 # The bfloat8_b input regimes, which carry NaN marks from the reader to the writer.
 _BFP8_UNTILIZE_REGIMES = (PACKER_UNTILIZE, SHARDED_IN_PLACE)
 _UNTILIZE_REGIMES = (STAGED_REORDER,) + _BFP8_UNTILIZE_REGIMES
@@ -131,8 +142,10 @@ CB_ROW_STAGE = 4
 CB_TILE_BLOCK = 5
 CB_SLOT_IMAGE = 6
 
-# Per-tile record of a cb_nan_marks page (NanMarks in kernels/g6_to_layout_bfp8_nan_marks.hpp): a
-# 64-bit bitmap of the tile's 64 bfp8 groups plus one 16-bit datum mask per group.
+# A cb_nan_marks page (one per tile-row, kernels/g6_to_layout_bfp8_nan_marks.hpp) is a 16-B header
+# (summary word) and one NanMarks record per tile column: a 64-bit bitmap of the tile's 64 bfp8 groups
+# plus one 16-bit datum mask per group.
+NAN_MARKS_ROW_HEADER_BYTES = 16
 NAN_MARK_RECORD_BYTES = 8 + 2 * (4 * FACE_HW)
 # cb_nan_marks pages are rounded up to this; it is never a NoC endpoint, so only RISC access alignment.
 NAN_MARKS_PAGE_ALIGN = 16
@@ -212,8 +225,8 @@ def _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows):
     return block_rows_tiles * stage_rows * block_cols_tiles * TILE_ROW_BYTES
 
 
-def _nan_marks_page_bytes(block_tiles):
-    return _round_up(block_tiles * NAN_MARK_RECORD_BYTES, NAN_MARKS_PAGE_ALIGN)
+def _nan_marks_page_bytes(block_cols_tiles):
+    return _round_up(NAN_MARKS_ROW_HEADER_BYTES + block_cols_tiles * NAN_MARK_RECORD_BYTES, NAN_MARKS_PAGE_ALIGN)
 
 
 def _slot_image_bytes(block_rows_tiles, stage_rows, slot_bytes):
@@ -232,9 +245,10 @@ def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_b
         return (L1_BUDGET_BYTES - out_l1_share) // (TILE_BLOCK_DEPTH * TILE_BYTES + ROW_DEPTH * out_tile_bytes)
     if regime == STAGED_REORDER:
         return (L1_BUDGET_BYTES - out_l1_share) // ((TILE_BLOCK_DEPTH + ROW_DEPTH) * TILE_BYTES)
-    # The compute regimes' budget keeps the cb_nan_marks page rounding aside.
-    marks_budget = L1_BUDGET_BYTES - out_l1_share - NAN_MARKS_DEPTH * NAN_MARKS_PAGE_ALIGN
-    marks_per_tile = NAN_MARKS_DEPTH * NAN_MARK_RECORD_BYTES
+    # A tile-row's marks page costs at most one record per tile plus its header and rounding, charged
+    # per tile so the bound holds for any block width.
+    marks_budget = L1_BUDGET_BYTES - out_l1_share
+    marks_per_tile = NAN_MARKS_DEPTH * (NAN_MARK_RECORD_BYTES + NAN_MARKS_ROW_HEADER_BYTES + NAN_MARKS_PAGE_ALIGN)
     if regime == PACKER_UNTILIZE:
         return marks_budget // (TILE_BLOCK_DEPTH * in_tile_bytes + ROW_DEPTH * TILE_BYTES + marks_per_tile)
     assert regime == SHARDED_IN_PLACE, regime
@@ -332,7 +346,7 @@ class Plan:
 
     @property
     def nan_marks_page_bytes(self):
-        return _nan_marks_page_bytes(self.block_rows_tiles * self.block_cols_tiles)
+        return _nan_marks_page_bytes(self.block_cols_tiles)
 
     @property
     def l1_bytes_per_core(self):
@@ -498,14 +512,16 @@ def compute_plan(
         cb_bytes = {
             CB_TILE_WINDOW: TILE_BLOCK_DEPTH * block_tiles * in_tile_bytes,
             CB_ROW_BLOCK: ROW_DEPTH * block_bytes,
-            CB_NAN_MARKS: NAN_MARKS_DEPTH * _nan_marks_page_bytes(block_tiles),
+            CB_NAN_MARKS: NAN_MARKS_DEPTH * block_rows_tiles * _nan_marks_page_bytes(block_cols_tiles),
         }
     else:
         # A second row-block or marks page only helps when the shard takes more than one block.
         block_tiles = block_rows_tiles * block_cols_tiles
         cb_bytes = {
             CB_ROW_BLOCK: min(ROW_DEPTH, blocks_per_core_max) * block_bytes,
-            CB_NAN_MARKS: min(NAN_MARKS_DEPTH, blocks_per_core_max) * _nan_marks_page_bytes(block_tiles),
+            CB_NAN_MARKS: min(NAN_MARKS_DEPTH, blocks_per_core_max)
+            * block_rows_tiles
+            * _nan_marks_page_bytes(block_cols_tiles),
         }
 
     return Plan(
@@ -633,23 +649,54 @@ class G6ToLayoutProgram:
         for (x, y), args in plan.core_args:
             core_rt_args[x][y] = list(args)
 
-        self._reader = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / reader_source),
-            core_ranges=all_cores,
-            compile_time_args=reader_ct_args,
-            runtime_args=core_rt_args,
-            common_runtime_args=[input_tensor.buffer_address()],
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-        self._writer = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / writer_source),
-            core_ranges=all_cores,
-            compile_time_args=writer_ct_args,
-            runtime_args=core_rt_args,
-            common_runtime_args=[output_tensor.buffer_address()],
-            config=ttnn.WriterConfigDescriptor(),
-        )
-        self._kernels = [self._reader, self._writer]
+        # (core ranges, runtime args, reader config, writer config) per NoC assignment.
+        noc_groups = [(all_cores, core_rt_args, ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor())]
+        if NOC_CHECKERBOARD and plan.regime not in _DEFAULT_NOC_REGIMES:
+            noc_groups = []
+            for parity, reader_noc, writer_noc in (
+                (0, ttnn.NOC.NOC_0, ttnn.NOC.NOC_1),
+                (1, ttnn.NOC.NOC_1, ttnn.NOC.NOC_0),
+            ):
+                group = [(xy, args) for xy, args in plan.core_args if (xy[0] + xy[1]) % 2 == parity]
+                if not group:
+                    continue
+                group_rt_args = ttnn.RuntimeArgs()
+                for (x, y), args in group:
+                    group_rt_args[x][y] = list(args)
+                ranges = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y), _ in group]
+                )
+                noc_groups.append(
+                    (
+                        ranges,
+                        group_rt_args,
+                        ttnn.DataMovementConfigDescriptor(ttnn.DataMovementProcessor.RISCV_1, reader_noc),
+                        ttnn.DataMovementConfigDescriptor(ttnn.DataMovementProcessor.RISCV_0, writer_noc),
+                    )
+                )
+        self._readers, self._writers = [], []
+        for ranges, group_rt_args, reader_config, writer_config in noc_groups:
+            self._readers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / reader_source),
+                    core_ranges=ranges,
+                    compile_time_args=reader_ct_args,
+                    runtime_args=group_rt_args,
+                    common_runtime_args=[input_tensor.buffer_address()],
+                    config=reader_config,
+                )
+            )
+            self._writers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / writer_source),
+                    core_ranges=ranges,
+                    compile_time_args=writer_ct_args,
+                    runtime_args=group_rt_args,
+                    common_runtime_args=[output_tensor.buffer_address()],
+                    config=writer_config,
+                )
+            )
+        self._kernels = self._readers + self._writers
         if compute_ct_args is not None:
             # Fixed by the op's signature (no compute_kernel_config): a 16-bit DEST holds a bf16
             # value exactly, and the untilize / tilize does no arithmetic for fidelity to act on.
@@ -674,8 +721,10 @@ class G6ToLayoutProgram:
         return ttnn.cb_descriptor_from_sharded_tensor(CB_TILE_WINDOW, input_tensor)
 
     def descriptor_for(self, input_tensor, output_tensor):
-        self._reader.common_runtime_args = [input_tensor.buffer_address()]
-        self._writer.common_runtime_args = [output_tensor.buffer_address()]
+        for reader in self._readers:
+            reader.common_runtime_args = [input_tensor.buffer_address()]
+        for writer in self._writers:
+            writer.common_runtime_args = [output_tensor.buffer_address()]
         self._descriptor.kernels = self._kernels
         if self._sharded:
             cbs = list(self._descriptor.cbs)
