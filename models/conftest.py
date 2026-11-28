@@ -38,6 +38,28 @@ def imagenet_sample_input():
 
 
 @pytest.fixture
+def imagenet_sample_image():
+    path = "models/sample_data/ILSVRC2012_val_00048736.JPEG"
+    return Image.open(path).convert("RGB")
+
+
+@pytest.fixture
+def imagenet_sample_input_normalized():
+    # What torchvision / timm ImageNet checkpoints are trained on: resize 256, center crop 224, mean/std normalization.
+    path = "models/sample_data/ILSVRC2012_val_00048736.JPEG"
+    im = Image.open(path).convert("RGB")
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+    return preprocess(im).unsqueeze(0)
+
+
+@pytest.fixture
 def mnist_sample_input():
     path = "models/sample_data/torchvision_mnist_digit_7.jpg"
     im = Image.open(path)

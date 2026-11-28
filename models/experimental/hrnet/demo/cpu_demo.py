@@ -15,14 +15,14 @@ from torchvision.utils import save_image
     (("hrnet_w18_small"),),
 )
 def test_timm_hrnet_image_classification_inference(
-    model_name, imagenet_sample_input, imagenet_label_dict, reset_seeds
+    model_name, imagenet_sample_input, imagenet_sample_input_normalized, imagenet_label_dict, reset_seeds
 ):
     class_labels = imagenet_label_dict
 
     Timm_model = timm.create_model(model_name, pretrained=True)
 
     with torch.no_grad():
-        Timm_output = Timm_model(imagenet_sample_input)
+        Timm_output = Timm_model(imagenet_sample_input_normalized)
 
     logger.info("Timm Model answered")
     logger.info(class_labels[Timm_output[0].argmax(-1).item()])
