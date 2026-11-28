@@ -58,6 +58,7 @@ extern "C" __attribute__((noinline, used)) void transfer_read_interfaces()
     pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0}>();
     pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0To1}>();
     pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0To2}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0To3}>();
     pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0And2}>();
     pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row1And3}>();
 }
@@ -66,6 +67,7 @@ extern "C" __attribute__((noinline, used)) void transfer_read_interfaces()
 // CHECK-NEXT: ttpacr 0,0,0,0,0,0,1,0,0,0,0,0{{$}}
 // CHECK-NEXT: ttpacr 0,0,0,0,0,0,3,0,0,0,0,0{{$}}
 // CHECK-NEXT: ttpacr 0,0,0,0,0,0,7,0,0,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,15,0,0,0,0,0{{$}}
 // CHECK-NEXT: ttpacr 0,0,0,0,0,0,5,0,0,0,0,0{{$}}
 // CHECK-NEXT: ttpacr 0,0,0,0,0,0,10,0,0,0,0,0{{$}}
 // CHECK-NEXT: ret

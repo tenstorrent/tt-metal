@@ -27,9 +27,9 @@ static_assert(pack::is_valid(pack::Transfer {
     .boundary         = pack::TileBoundary::Last,
 }));
 static_assert(!pack::is_valid(pack::Transfer {.address_modifier = 4}));
-// Only the read-interface masks the Blackhole ISA supports are valid; 0b1111 is spelled ReadInterfaces::All.
+// Only the read-interface masks the Blackhole ISA supports are valid; 0b1111 is ReadInterfaces::Row0To3.
 static_assert(!pack::is_valid(pack::Transfer {.interfaces = static_cast<pack::ReadInterfaces>(0b0110)}));
-static_assert(!pack::is_valid(pack::Transfer {.interfaces = static_cast<pack::ReadInterfaces>(0b1111)}));
+static_assert(pack::is_valid(pack::Transfer {.interfaces = static_cast<pack::ReadInterfaces>(0b1111)}));
 
 // The runtime encoder is also usable in constant expressions.
 static_assert(

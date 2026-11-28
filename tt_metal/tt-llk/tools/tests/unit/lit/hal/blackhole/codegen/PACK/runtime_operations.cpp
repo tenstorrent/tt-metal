@@ -152,3 +152,13 @@ extern "C" void accept_runtime_boundaries()
 // ASSERT-LABEL: <accept_runtime_boundaries>:
 // ASSERT-NOT: ebreak
 // ASSERT: ret
+
+// A branch-free remaining-rows mask, (1 << 4) - 1 for four rows, is the supported 0b1111.
+extern "C" void accept_runtime_four_row_mask()
+{
+    pack::Packer0.transfer({.interfaces = static_cast<pack::ReadInterfaces>((1u << 4) - 1u)});
+}
+
+// ASSERT-LABEL: <accept_runtime_four_row_mask>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
