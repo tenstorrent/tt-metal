@@ -291,7 +291,9 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         }
     }
 
-    // Clear out command queue
+    // Clear out command queue. Drain it first: commands the device has not fetched yet (e.g. from device init) would
+    // be zeroed under it.
+    Finish(mesh_device_->mesh_command_queue());
     {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
