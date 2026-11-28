@@ -29,6 +29,8 @@ file(
     fold/device/kernels/*.cpp
     gather/device/kernels/*.cpp
     gather/device/kernels/*.hpp
+    get_rows/device/kernels/*.cpp
+    get_rows/device/kernels/*.hpp
     gather/codegen/kernels/*.cpp
     gather/codegen/kernels/*.hpp
     copy/device/kernels/*.cpp
@@ -143,6 +145,14 @@ target_sources(
             gather/gather_nanobind.hpp
             gather/device/gather_device_operation.hpp
             gather/device/gather_device_operation_types.hpp
+            # get_rows/
+            get_rows/get_rows.hpp
+            get_rows/get_rows_nanobind.hpp
+            # set_rows/
+            set_rows/set_rows.hpp
+            set_rows/set_rows_nanobind.hpp
+            get_rows/device/get_rows_device_operation.hpp
+            get_rows/device/get_rows_device_operation_types.hpp
             gather/tosa/gather_tosa.hpp
             gather/tosa/gather_tosa_nanobind.hpp
             # indexed_fill/

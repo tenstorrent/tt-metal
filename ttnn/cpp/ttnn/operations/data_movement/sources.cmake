@@ -203,6 +203,10 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     gather/codegen/gather_codegen_program_factory.cpp
     gather/codegen/gather_codegen_supported.cpp
     gather/tosa/gather_tosa.cpp
+    get_rows/get_rows.cpp
+    get_rows/device/get_rows_device_operation.cpp
+    get_rows/device/get_rows_program_factory.cpp
+    set_rows/set_rows.cpp
     concat/device/concat_tiled_unaligned_program_factory.cpp
     common/synthesize_output_shard_spec.cpp
 )
@@ -293,4 +297,6 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     sort/sort_nanobind.cpp
     gather/gather_nanobind.cpp
     gather/tosa/gather_tosa_nanobind.cpp
+    get_rows/get_rows_nanobind.cpp
+    set_rows/set_rows_nanobind.cpp
 )
