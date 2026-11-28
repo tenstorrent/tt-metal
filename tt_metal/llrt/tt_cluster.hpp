@@ -270,6 +270,17 @@ public:
     // Cores that connect to another cluster will show up as connected
     bool is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const;
 
+    // Returns trained link speed in Gbps of logical (post-harvest) `eth_chan`.
+    // nullopt if the link is not up, or not supported (Wormhole, simulation, mock).
+    // Throws on an invalid chip_id or eth_chan.
+    std::optional<uint32_t> get_ethernet_train_speed(ChipId chip_id, EthernetChannel eth_chan) const;
+
+    // Returns target link speed in Gbps of logical (post-harvest) `eth_chan`.
+    // Set by ethernet firmware at boot; 0 if SerDes init did not run on the port.
+    // nullopt if not supported (Wormhole, simulation, mock).
+    // Throws on an invalid chip_id or eth_chan.
+    std::optional<uint32_t> get_ethernet_target_speed(ChipId chip_id, EthernetChannel eth_chan) const;
+
     // Returns connected ethernet core on the other chip
     // If the core is connected to a device not accessible through this Cluster, it will assert
     std::tuple<ChipId, tt::tt_metal::CoreCoord> get_connected_ethernet_core(
