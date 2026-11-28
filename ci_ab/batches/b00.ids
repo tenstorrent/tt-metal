@@ -1,0 +1,63 @@
+#U 648
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_prefix_preserves_noncommuting_order_and_tp_lines[blackhole-order0-device_params0-mesh_device0]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-empty-ranks-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-end-inside-last-rank-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-end-inside-tail-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-split-mid-rank1-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-split-one-chunk-head-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-split-one-chunk-tail-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-start-beyond-span-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference[blackhole-g1-unsplit-control-galaxy-8x4]
+models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_grouped_scan_preserves_weak_decay_across_group_sizes
+#U 350
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode[num_inputA_cores=32-m=1-k=1024-n=4096]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode[num_inputA_cores=32-m=16-k=1024-n=4096]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode[num_inputA_cores=32-m=32-k=1024-n=4096]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode[num_inputA_cores=32-m=4-k=1024-n=4096]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode[num_inputA_cores=32-m=8-k=1024-n=4096]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_batched_width_sharded[num_inputA_cores=32-d0=1-d1=8-m=32-k=4096-n=1024-b_blocks=8-n_blocks=8]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_partial_width_sharded[num_inputA_cores=32-m=1-k=4096-n=1024-k_blocks=2-n_blocks=32]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_partial_width_sharded[num_inputA_cores=32-m=16-k=4096-n=1024-k_blocks=2-n_blocks=32]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_partial_width_sharded[num_inputA_cores=32-m=32-k=4096-n=1024-k_blocks=2-n_blocks=32]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_partial_width_sharded[num_inputA_cores=32-m=4-k=4096-n=1024-k_blocks=2-n_blocks=32]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_partial_width_sharded[num_inputA_cores=32-m=64-k=4096-n=1024-k_blocks=2-n_blocks=32]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode_partial_width_sharded[num_inputA_cores=32-m=8-k=4096-n=1024-k_blocks=2-n_blocks=32]
+#U 317
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_gptoss_bias_cache_hit[silicon_arch_name=blackhole-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_gptoss_bias_multi_expert[silicon_arch_name=blackhole-single-chip-e4]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_gptoss_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t128]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_gptoss_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t1k]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_gptoss_routed_expert_cache_bindings[silicon_arch_name=blackhole-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_situglu_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t128]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py::test_situglu_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t1k]
+#U 244
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_blackhole_grid_hosts_the_rectangle
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_grid_rule[blackhole-1x1]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_gemma_shapes[blackhole-1x1-row_major]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_gemma_shapes[blackhole-1x1-tile]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_gemma_shapes[blackhole-2x4-row_major]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_gemma_shapes[blackhole-2x4-tile]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_partial_tile_row_pads_are_zero[blackhole-1x1]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_small[blackhole-1x1-row_major]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_small[blackhole-1x1-tile]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_small[blackhole-2x4-row_major]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_geglu_routed_expert_small[blackhole-2x4-tile]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_routed_expert.py::test_grid_rule_over_the_ci_grids[10-10-False]
+#U 199
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_bias[situglu-live=gate]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[dsv3-t251-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[dsv3-t3001-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[dsv3-t67-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[dsv4_flash-t251-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[dsv4_pro-t768-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[glm_53-t289-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[glm_53-t3001-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[glm_53-t768-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[gptoss_120b-t67-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[minimax_m27-t289-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_fused_swiglu.py::test_moe_fused_swiglu_functional[minimax_m27-t3001-x_tile]
+#U 155
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py::test_mask_dtype_bf16_then_bfp8
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py::test_share_cache_false_then_true_program_cache_distinct
+#U 122
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_fused.py::test_mono_tinv_horner_only

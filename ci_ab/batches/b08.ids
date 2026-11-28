@@ -1,0 +1,135 @@
+#U 284
+tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_program_cache_sweep.py::test_cache_apply_twiddles[fp32]
+tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_program_cache_sweep.py::test_cache_radix_pass_with_stride[fp32]
+tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_program_cache_sweep.py::test_cache_fft_single_tile[N1024-fp32]
+tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_program_cache_sweep.py::test_cache_bluestein[v17-v1-fp32]
+tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_program_cache_sweep.py::test_cache_hit_complex_fft_uses_fresh_args[N32-fp32]
+tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_program_cache_sweep.py::test_cache_transpose_rm[bf16]
+#U 284
+tests/ttnn/unit_tests/operations/eltwise/test_pow_int.py::test_pow_int_shapes[32x32-int32]
+tests/ttnn/unit_tests/operations/eltwise/test_pow_int.py::test_pow_int_shapes[1x1x736x480-uint32]
+tests/ttnn/unit_tests/operations/eltwise/test_pow_int.py::test_pow_int_full_range_wraps[int32-exp0-l1]
+tests/ttnn/unit_tests/operations/eltwise/test_pow_int.py::test_pow_int_full_range_wraps[int32-exp32-l1]
+tests/ttnn/unit_tests/operations/eltwise/test_pow_int.py::test_pow_int_edge_values[int32-exponent=2]
+tests/ttnn/unit_tests/operations/eltwise/test_pow_int.py::test_pow_int_known_values[uint32-square]
+#U 284
+tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw[HW=32-core_grid=ttnn.CoreGrid(x=1, y=1)-C=1-input_data_type=DataType.BFLOAT16]
+tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw[HW=32-core_grid=ttnn.CoreGrid(x=1, y=1)-C=8-input_data_type=DataType.BFLOAT8_B]
+tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw[HW=64-core_grid=ttnn.CoreGrid(x=1, y=1)-C=1-input_data_type=DataType.BFLOAT16]
+tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw[HW=64-core_grid=ttnn.CoreGrid(x=1, y=1)-C=8-input_data_type=DataType.BFLOAT8_B]
+tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw[HW=64-core_grid=ttnn.CoreGrid(x=2, y=1)-C=1-input_data_type=DataType.BFLOAT16]
+tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py::test_convert_to_chw[HW=64-core_grid=ttnn.CoreGrid(x=2, y=1)-C=8-input_data_type=DataType.BFLOAT8_B]
+#U 258
+tests/ttnn/docs_examples/test_normalization_examples.py::test_group_norm
+tests/ttnn/docs_examples/test_normalization_examples.py::test_layernorm_distributed
+tests/ttnn/docs_examples/test_normalization_examples.py::test_rms_norm_distributed
+tests/ttnn/docs_examples/test_normalization_examples.py::test_batch_norm
+tests/ttnn/docs_examples/test_normalization_examples.py::test_softmax_default_program_config
+tests/ttnn/docs_examples/test_normalization_examples.py::test_softmax_in_place
+#U 207
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py::test_attn_res_block_mix[num_tokens=64-num_partials=1-num_sites=1-1]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py::test_attn_res_block_mix[num_tokens=64-num_partials=1-num_sites=24-6]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py::test_attn_res_block_mix[num_tokens=64-num_partials=4-num_sites=1-6+1]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py::test_attn_res_block_mix[num_tokens=64-num_partials=4-num_sites=24-3+1+1+2]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py::test_attn_res_block_mix[num_tokens=640-num_partials=1-num_sites=24-1]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_mix.py::test_attn_res_block_mix[num_tokens=640-num_partials=4-num_sites=1-6]
+#U 198
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_post_combine_reduce_row_index.py::test_row_indexed_combine_matches_gathered[gptoss-top4-skip=dispatch_table]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_post_combine_reduce_row_index.py::test_row_indexed_combine_matches_gathered[gptoss-top4-skip=zero_weight]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_post_combine_reduce_row_index.py::test_row_indexed_combine_matches_gathered[gptoss-top8-skip=zero_weight]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_post_combine_reduce_row_index.py::test_row_indexed_combine_matches_gathered[dsv3-top4-skip=dispatch_table]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_post_combine_reduce_row_index.py::test_row_indexed_combine_matches_gathered[dsv3-top8-skip=dispatch_table]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_post_combine_reduce_row_index.py::test_row_indexed_combine_matches_gathered[dsv3-top8-skip=zero_weight]
+#U 190
+tests/ttnn/unit_tests/operations/experimental/deepseek/test_deepseek_moe_fast_reduce_nc_fused_row_tiles.py::test_deepseek_moe_fast_reduce_nc_fused_row_tiles[silicon_arch_name=blackhole-mesh_shape=(1, 1)-mesh_device=(1, 1)-hidden_size=2048-select_experts_k=8-tokens=32]
+tests/ttnn/unit_tests/operations/experimental/deepseek/test_deepseek_moe_fast_reduce_nc_fused_row_tiles.py::test_deepseek_moe_fast_reduce_nc_fused_row_tiles[silicon_arch_name=blackhole-mesh_shape=(1, 1)-mesh_device=(1, 1)-hidden_size=2048-select_experts_k=8-tokens=40]
+tests/ttnn/unit_tests/operations/experimental/deepseek/test_deepseek_moe_fast_reduce_nc_fused_row_tiles.py::test_deepseek_moe_fast_reduce_nc_fused_row_tiles[silicon_arch_name=blackhole-mesh_shape=(1, 1)-mesh_device=(1, 1)-hidden_size=2048-select_experts_k=8-tokens=64]
+tests/ttnn/unit_tests/operations/experimental/deepseek/test_deepseek_moe_fast_reduce_nc_fused_row_tiles.py::test_deepseek_moe_fast_reduce_nc_fused_row_tiles[silicon_arch_name=blackhole-mesh_shape=(1, 1)-mesh_device=(1, 1)-hidden_size=2048-select_experts_k=8-tokens=100]
+tests/ttnn/unit_tests/operations/experimental/deepseek/test_deepseek_moe_fast_reduce_nc_fused_row_tiles.py::test_deepseek_moe_fast_reduce_nc_fused_row_tiles[silicon_arch_name=blackhole-mesh_shape=(1, 1)-mesh_device=(1, 1)-hidden_size=2048-select_experts_k=8-tokens=128]
+#U 179
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_affine_layouts_and_dtypes[tile_layout-BFLOAT16_stats-fp32]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_dit_layernorm_pre_allgather_fp32_precision[offset=0.0]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_use_cases[tp1-tile_layout-no_affine-len512-dim5120-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_use_cases[tp1-tile_layout-no_affine-len4096-dim2048-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_use_cases[tp1-tile_layout-no_affine-len9472-dim2432-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py::test_distributed_dit_layernorm_use_cases[tp1-tile_layout-with_affine-len512-dim3072-BFLOAT16_stats-BFLOAT16_in]
+#U 165
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py::test_layernorm_pre_all_gather_residual_mismatched_dtype[bf16_inp_fp32_res]
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py::test_layernorm_pre_all_gather_welford_residual[fp32_inp_fp32_stats-inp_shape=(1, 1, 32, 1024)]
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py::test_layernorm_pre_all_gather_welford_fp32_precision[inp_shape=(1, 1, 32, 128)-offset=1000000.0-use_residual=True]
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py::test_pre_all_gather_non_welford_fp32_precision[sfpu_accurate-use_residual=False-variant=rms_norm_2d-shape=(1, 1, 672, 256)]
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py::test_pre_all_gather_non_welford_fp32_precision[sfpu_accurate-use_residual=True-variant=rms_norm_2d-shape=(1, 1, 32, 128)]
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_pre_allgather.py::test_pre_all_gather_non_welford_fp32_precision[fpu_fast_approx-use_residual=False-variant=layer_norm-shape=(1, 1, 32, 128)]
+#U 154
+models/tt_dit/tests/models/minimax_h3/test_rgb_to_yuv_wide_minimax_h3.py::test_wide_rows_match_planes[blackhole-single_device-strips_shard]
+models/tt_dit/tests/models/minimax_h3/test_rgb_to_yuv_wide_minimax_h3.py::test_wide_rows_match_planes[blackhole-single_device-small]
+#U 148
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py::test_generic_ops_w_scalar_part1[dtype=torch.float32-shape=(3, 4)-dim=(-2, -1)-scalar=1.0-op=sum-correction=False]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py::test_generic_ops_w_scalar_part1[dtype=torch.float32-shape=(3, 4)-dim=(-2, -1)-scalar=1.0-op=std-correction=True]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py::test_generic_ops_w_scalar_part1[dtype=torch.float32-shape=(3, 4)-dim=(-2, -1)-scalar=-2.0-op=max-correction=False]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py::test_generic_ops_w_scalar_part1[dtype=torch.float32-shape=(3, 4)-dim=(-2, -1)-scalar=-2.0-op=var-correction=True]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py::test_generic_ops_w_scalar_part1[dtype=torch.float32-shape=(3, 4)-dim=(-2, -1)-scalar=2.0-op=std-correction=False]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_w_scalar.py::test_generic_ops_w_scalar_part1[dtype=torch.float32-shape=(1, 1, 3, 4, 5)-dim=(-2, -1)-scalar=1.0-op=mean-correction=False]
+#U 141
+tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw[input_dtype=DataType.UINT32-output_dtype=DataType.BFLOAT16-batch_size=2-seq_len=64-embedding_dim=160-num_embeddings=96]
+tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw[input_dtype=DataType.UINT32-output_dtype=DataType.BFLOAT16-batch_size=2-seq_len=32-embedding_dim=128-num_embeddings=100]
+tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw[input_dtype=DataType.UINT32-output_dtype=DataType.BFLOAT8_B-batch_size=1-seq_len=32-embedding_dim=64-num_embeddings=33]
+tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw[input_dtype=DataType.BFLOAT16-output_dtype=DataType.BFLOAT16-batch_size=2-seq_len=1024-embedding_dim=4096-num_embeddings=3200]
+tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw[input_dtype=DataType.BFLOAT16-output_dtype=DataType.BFLOAT8_B-batch_size=3-seq_len=32-embedding_dim=384-num_embeddings=320]
+tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_unindexed_rows_are_zero[num_embeddings=9]
+#U 140
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_is_accurate_and_deterministic[fp32-output-fp32-input]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_rejects_invalid_options[num_heads=12-epsilon=0.0-output_dtype=DataType.FLOAT32-gate_column_offset=0-message=epsilon must be finite and positive]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_work_golden
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_gate_column_offset_matches_sliced_gate[offset]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_rejects_invalid_tensors[case=input_layout-message=input must use TILE layout]
+#U 137
+tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax[tensor_shape=[32]-tensor_layout=Layout.ROW_MAJOR-dim=-1-keepdim=False-dtype=torch.float32-error_msg=None-enable_secondary_dm=None]
+tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax[tensor_shape=[128]-tensor_layout=Layout.ROW_MAJOR-dim=-1-keepdim=True-dtype=torch.float32-error_msg=None-enable_secondary_dm=None]
+tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax[tensor_shape=[2, 4, 64, 128]-tensor_layout=Layout.ROW_MAJOR-dim=-1-keepdim=True-dtype=torch.float32-error_msg=None-enable_secondary_dm=None]
+tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax[tensor_shape=[100, 200]-tensor_layout=Layout.ROW_MAJOR-dim=-1-keepdim=False-dtype=torch.float32-error_msg=None-enable_secondary_dm=None]
+tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax[tensor_shape=[3, 5, 96]-tensor_layout=Layout.ROW_MAJOR-dim=-1-keepdim=False-dtype=torch.int32-error_msg=None-enable_secondary_dm=True]
+tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax[tensor_shape=[2, 3, 64, 64]-tensor_layout=Layout.TILE-dim=1-keepdim=False-dtype=torch.float32-error_msg=None-enable_secondary_dm=None]
+#U 133
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py::test_generic_ops_dtypes_layouts[dtype=DataType.FLOAT32-layout=Layout.ROW_MAJOR-op=sum]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py::test_generic_ops_dtypes_layouts[dtype=DataType.FLOAT32-layout=Layout.ROW_MAJOR-op=var]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py::test_generic_ops_dtypes_layouts[dtype=DataType.FLOAT32-layout=Layout.TILE-op=std]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py::test_generic_ops_ndim_shard[op=mean-explicit_output_mem_config=False-layout=Layout.ROW_MAJOR-keepdim=True-shapes=([2, 1, 256, 2048], [1, 1, 128, 256], 2, 4)]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py::test_generic_ops_ndim_shard[op=sum-explicit_output_mem_config=False-layout=Layout.TILE-keepdim=True-shapes=([4, 4, 64, 128], [2, 2, 32, 64], 0, 0)]
+tests/ttnn/nightly/unit_tests/operations/reduction/test_generic_ops_memory_configs.py::test_generic_ops_ndim_shard[op=sum-explicit_output_mem_config=True-layout=Layout.TILE-keepdim=True-shapes=([4, 4, 64, 128], [2, 2, 32, 64], 2, 4)]
+#U 131
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_universal_input_tm_tranpose.py::test_transpose_dtype_uint8_sharded_wh[shape=(1, 1, 128, 128)]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_universal_input_tm_tranpose.py::test_transpose_rm_block_or_width_sharded_to_sharded[HC_width_to_width]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_universal_input_tm_tranpose.py::test_transpose_row_major_sharded_irregular_shapes[block_2x3_32x32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_universal_input_tm_tranpose.py::test_transpose_universal_io_row_major[WH_RM_interleaved_to_block-f32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_universal_input_tm_tranpose.py::test_transpose_universal_io_tile[WH_block_default_output-f32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_universal_input_tm_tranpose.py::test_transpose_universal_io_tile[WH_interleaved_to_height-f32]
+#U 123
+tests/ttnn/unit_tests/operations/eltwise/test_unary_lgamma.py::test_lgamma_bridge_boundary_is_no_worse_than_the_bridge[z=0.75-inside=0.7500001]
+tests/ttnn/unit_tests/operations/eltwise/test_unary_lgamma.py::test_lgamma_bridge_boundary_is_no_worse_than_the_bridge[z=1.25-inside=1.2499999]
+tests/ttnn/unit_tests/operations/eltwise/test_unary_lgamma.py::test_lgamma_bridge_boundary_is_no_worse_than_the_bridge[z=1.75-inside=1.7500001]
+tests/ttnn/unit_tests/operations/eltwise/test_unary_lgamma.py::test_lgamma_bridge_boundary_is_no_worse_than_the_bridge[z=2.25-inside=2.2499999]
+#U 122
+models/experimental/SSD512/tests/pcc/test_vgg_backbone.py::test_vgg_backbone[device_params0-512-0.99]
+#U 119
+tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_div.py::test_bw_div_binary[rounding_mode=None-input_shapes=torch.Size([1, 1, 32, 32])]
+tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_div.py::test_bw_div_binary[rounding_mode=trunc-input_shapes=torch.Size([1, 3, 320, 384])]
+tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_div.py::test_bw_div_binary_default[input_shapes=torch.Size([1, 1, 320, 384])]
+tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_div.py::test_bw_unary_div_0[scalar=0.0-rounding_mode=trunc-input_shapes=torch.Size([1, 1, 32, 32])]
+tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_div.py::test_bw_unary_div_0[scalar=0.0-rounding_mode=floor-input_shapes=torch.Size([1, 3, 320, 384])]
+tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_div.py::test_bw_unary_div[scalar=0.05-rounding_mode=trunc-input_shapes=torch.Size([1, 1, 320, 384])]
+#U 107
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_retile[dtype=DataType.BFLOAT16-output_tile_shape=(32, 32)-input_tile_shape=(32, 32)-tensor_shape=[1, 1, 128, 256]-shard_layout=None]
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_retile[dtype=DataType.BFLOAT16-output_tile_shape=(32, 32)-input_tile_shape=(32, 32)-tensor_shape=[1, 1, 64, 128]-shard_layout=None]
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_retile[dtype=DataType.BFLOAT16-output_tile_shape=(32, 32)-input_tile_shape=(32, 32)-tensor_shape=[1, 1, 32, 1024]-shard_layout=TensorMemoryLayout.WIDTH_SHARDED]
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_retile[dtype=DataType.BFLOAT16-output_tile_shape=(32, 32)-input_tile_shape=(32, 32)-tensor_shape=[1, 1, 256, 256]-shard_layout=TensorMemoryLayout.BLOCK_SHARDED]
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_retile[dtype=DataType.BFLOAT16-output_tile_shape=(32, 32)-input_tile_shape=(16, 32)-tensor_shape=[1, 1, 64, 128]-shard_layout=None]
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_retile[dtype=DataType.BFLOAT16-output_tile_shape=(32, 32)-input_tile_shape=(16, 32)-tensor_shape=[1, 1, 8, 128]-shard_layout=None]
+#U 99
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_matmul.py::test_moreh_matmul[fp32_dest_acc_en=False-bfloat8_b-use_randint=True-params=([32, 32], [32, 32], [32, 32], False, False)]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_matmul.py::test_moreh_matmul[fp32_dest_acc_en=False-bfloat8_b-use_randint=True-params=([1020, 310], [310, 1020], [1020, 1020], False, False)]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_matmul.py::test_moreh_matmul[fp32_dest_acc_en=False-bfloat8_b-use_randint=True-params=([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False)]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_matmul.py::test_moreh_matmul[fp32_dest_acc_en=False-bfloat8_b-use_randint=False-params=([1024, 128], [128, 1024], [1024, 1024], False, False)]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_matmul.py::test_moreh_matmul[fp32_dest_acc_en=False-bfloat8_b-use_randint=False-params=([128, 1020], [128, 1024], [1020, 1024], True, False)]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_matmul.py::test_moreh_matmul[fp32_dest_acc_en=False-bfloat8_b-use_randint=False-params=([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False)]

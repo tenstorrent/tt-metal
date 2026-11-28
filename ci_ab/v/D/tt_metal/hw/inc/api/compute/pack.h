@@ -1,0 +1,314 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include "common_globals.h"
+#include "sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
+#ifdef TRISC_PACK
+#include "llk_pack_tile_api.h"
+#endif
+
+namespace ckernel {
+
+// clang-format off
+/**
+ * Initializes the packer to pack tiles into the specified output circular buffer.
+ *
+ * This explicit init is only needed when packing without an op-specific init. `pack_tile` /
+ * `pack_block` do not require it once a preceding op-specific init (`tilize_init`, `reduce_init`,
+ * etc.) has already configured the packer — see the NOTE on `pack_tile`.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description                                       | Type     | Valid Range | Required |
+ * |------------|------|---------------------------------------------------|----------|-------------|----------|
+ * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::PACK>(ocb, call_line);
+    PACK((llk_pack_init(ocb)));
+}
+
+// clang-format off
+/**
+ * Copies a single tile from the DEST register buffer at a specified index to a
+ * specified CB at a given index. For the out_tile_index to be valid for this
+ * call, cb_reserve_back(n) has to be called first to reserve at least some
+ * number n > 0 of tiles in the output CB. out_tile_index = 0 then references
+ * the first tile in the reserved section of the CB, up to index n - 1, which will
+ * then be visible to the consumer in the same order after a cb_push_back call.
+ * The DEST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Each subsequent pack call will increment the write pointer in the cb by single
+ * tile size. The pointer is then again set to a valid position with space for n
+ * reserved tiles by another cb_reserve_back call.
+ *
+ * Operates in tandem with functions cb_reserve_back and cb_push_back.
+ *
+ * A typical use case is first the producer ensures that there is a number of
+ * tiles available in the buffer via cb_reserve_back, then the producer uses
+ * the pack_tile call to copy a tile from one of DEST slots to a slot in
+ * reserved space and finally cb_push_back is called to announce visibility of
+ * the reserved section of the circular buffer to the consumer.
+ *
+ * When the `out_of_order_output` flag is set to true, `pack_tile` behaves like
+ * other APIs in that it writes the output tile to the tile index specified by
+ * the user in `output_tile_index` within the reserved region of the circular
+ * buffer, but relative to the position that might have been previously updated
+ * by `cb_push_back` function. If `out_of_order_output` is false (the default),
+ * `pack_tile` always operates sequentially: it writes to the next tile index
+ * starting from index 0, and the `output_tile_index` parameter is ignored. In
+ * this mode, each call to `pack_tile` advances the internal write pointer for
+ * the reserved region, which is reset after `cb_push_back` function.
+ *
+ * NOTE: pack_tile doesn't need explicit initialization function prior to its call. Other op-specific
+ * initialization functions (such as `tilize_init`, `reduce_init`, etc.) ensure proper initialization
+ * of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly
+ * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
+ * API call.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name             | Description                                       | Type     | Valid Range                                          | Required |
+ * |------------|------------------|---------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Template   | out_of_order_output | Whether to allow out-of-order output           | bool     | true/false                                           | False    |
+ * | Function   | ifrom_dst        | The index of the tile in the DEST register        | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ * | Function   | icb              | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
+ * | Function   | output_tile_index| The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                 | False    |
+ */
+// clang-format on
+template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
+    LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
+#else
+    PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
+#endif
+}
+
+// clang-format off
+/**
+ * Copies a block of tiles from the DEST register buffer starting at a specified index
+ * to a specified circular buffer (CB). This is the uniform block entry point for the pack
+ * op group. The DEST register buffer must be in acquired
+ * state via *acquire_dst* call. This call is blocking and is only available on the
+ * compute engine. Before calling this function, cb_reserve_back(n) must be called to
+ * reserve at least n > 0 tiles in the output CB. Each call to `pack_block` will
+ * copy `ntiles` tiles from the DEST register to the reserved region of the CB, starting
+ * from index 0. The internal write pointer in the CB is advanced by `ntiles` after each
+ * call, and is reset by another cb_push_back call. Operates in tandem with functions
+ * cb_reserve_back and cb_push_back.
+ *
+ * A typical use case is for the producer to ensure that there are enough tiles available
+ * in the buffer via cb_reserve_back, then use pack_block to copy a block of tiles
+ * from the DEST slots to the reserved space in the CB, and finally call cb_push_back to
+ * announce visibility of the reserved section of the circular buffer to the consumer.
+ *
+ * NOTE: pack_block doesn't need explicit initialization function prior to its call. Other op-specific
+ * initialization functions (such as `tilize_init`, `reduce_init`, etc.) ensure proper initialization
+ * of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly
+ * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
+ * API call.
+ *
+ * NOTE: On Blackhole pack_block<ntiles>(ifrom_dst, icb) packs the block in one packer run where the layout allows;
+ * right behind matmul math, pack_block<ntiles, DST_ACCUM_MODE, K> picks the forms for K. A runtime count packs per tile.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
+ * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
+ * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#endif
+}
+
+/// @cond
+// The count as a template argument: on Blackhole the block forms. Out of the docs: the documented pack_block is the
+// run-time count above.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) {
+    LLK_SAN_FUNCTION();
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb)));
+#elif defined(ARCH_QUASAR)
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#endif
+}
+/// @endcond
+
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The count as the front end sees it: N for a constant, 0 for one known only at run time (main's loop, no block path).
+template <std::uint32_t N>
+struct pack_block_count {
+    std::uint32_t value;
+    constexpr explicit pack_block_count(std::uint32_t v) : value(v) {}
+    constexpr operator std::uint32_t() const { return value; }
+};
+
+// The macro tests the count through this call: GCC folds __builtin_constant_p of a const local whose run-time
+// initializer has equal arms (also as a by-value argument), and that local is no template argument; read through a
+// reference, the count is evaluated under the language's constant rules.
+constexpr std::uint32_t pack_fe_n(const std::uint32_t& v) { return v; }
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t N>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, pack_block_count<N> ntiles) {
+    if constexpr (N != 0) {
+        pack_block<N, is_fp32_dest_acc_en>(ifrom_dst, icb);
+    } else {
+        pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles.value);
+    }
+}
+#endif
+
+/**
+ * Full sync only: issues the destination words of the next block pack ahead of `tile_regs_wait`; same arguments as `pack_block<ntiles>`.
+ * Call it after the output reserve, then `pack_block_prepared<ntiles>` with the same arguments and no other pack in between.
+ */
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepare(std::uint32_t ifrom_dst, std::uint32_t icb) {
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block_prepare<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb)));
+#endif
+}
+
+/**
+ * `pack_block<ntiles>` after `pack_block_prepare<ntiles>` of the same block.
+ */
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb) {
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block_prepared<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb)));
+#else
+    pack_block<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb);
+#endif
+}
+
+// With the count as a function argument, as pack_block: nothing to issue early, and the pack is main's loop.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_prepare(std::uint32_t, std::uint32_t, std::uint32_t) {}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
+}
+
+// clang-format off
+/**
+ * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
+ * does NOT push/advance the CB (the surrounding cb_push_back does that). Call it between cb_reserve_back
+ * and cb_push_back when a CB is being pushed but its tile data is not needed.
+ *
+ * On Quasar this is required: the hardware needs a real packer op between a WAIT_TILES and its PUSH_TILES
+ * on the same output CB, or the PUSH can retire before the space is available (TEN-4746 / #48552). This op
+ * programs the strided packer to write nothing (PACK_STRIDE_NO_WRITE, all rows masked) and issues one
+ * PACR_STRIDE to satisfy that ordering while leaving the output buffer untouched. On WH/BH there is no such
+ * ordering requirement and this compiles to a no-op. Each architecture supplies its own llk_pack_dummy();
+ * this helper dispatches to it through PACK(...). This call is only available on the compute engine.
+ *
+ * This is a temporary workaround, only needed because these kernels drive reserve/push loops directly over
+ * hand-written L1. It goes away once those loops are replaced by the real fix -- LocalTensorAccessors, which
+ * bypass the wait/pop and reserve/push loops entirely.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                              | Data type | Valid range | required |
+ * |----------|----------------------------------------------------------|-----------|-------------|----------|
+ * | cb_id    | The identifier of the CB whose WAIT/PUSH this orders      | uint32_t  | 0 to 31     | True     |
+ * */
+// clang-format on
+ALWI void dummy_pack(std::uint32_t cb_id) { PACK((llk_pack_dummy(cb_id))); }
+
+// clang-format off
+/**
+ * Helper function to reconfigure the packer L1 accumulation flag. This function would ideally be called
+ * after other initialization functions that initialize the packer for a specific operation.
+ * This function configures the packer to accumulate the values it takes from DEST with the ones that
+ * are already in L1 at a given CB ID and tile index.
+ *
+ * The `l1_acc_en` parameter must be set to either 0 (disable accumulation) or 1 (enable accumulation).
+ * Other values are not valid.
+ *
+ * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
+ * that they are called before the call to the packer function that uses the new configuration. It is
+ * recommended to call this function right after other op-specific initialization functions.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                        | Type     | Valid Range | Required |
+ * |------------|-----------|------------------------------------|----------|-------------|----------|
+ * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
+ */
+// clang-format on
+ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
+
+/**
+ * Configures packer ReLU activation at runtime.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                  | Type       | Valid Range | Required |
+ * |------------|--------|----------------------------------------------|------------|-------------|----------|
+ * | Function   | config | ReLU configuration (mode + optional threshold) | ReluConfig | Any         | True     |
+ */
+ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
+
+}  // namespace ckernel
+
+// Not in a kernel that includes the id-free (2.0) compute API (experimental/2_0/internal/no_call_site_macros.h).
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK) && !defined(CKERNEL_NO_CALL_SITE_MACROS)
+// Lets today's pack_block(dst, cb, n) calls with a constant count reach the block forms; other arities pass through.
+#define PACK_BLOCK_NARGS_(a1, a2, a3, a4, a5, a6, a7, a8, n, ...) n
+#define PACK_BLOCK_NARGS(...) PACK_BLOCK_NARGS_(__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define PACK_BLOCK_CAT_(a, b) a##b
+#define PACK_BLOCK_CAT(a, b) PACK_BLOCK_CAT_(a, b)
+#define PACK_BLOCK_CALL_1(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_2(...) pack_block(__VA_ARGS__)
+// The count's template argument also marks a pack_block for the pack (llk_pack_out_set<0xFE>); a qualified call still
+// expands.
+#define PACK_BLOCK_CALL_3(d, cb, n)                                                         \
+    pack_block(                                                                             \
+        d,                                                                                  \
+        cb,                                                                                 \
+        ::ckernel::pack_block_count<                                                        \
+            (__builtin_constant_p(::ckernel::pack_fe_n(n)) ? ::ckernel::pack_fe_n(n) : 0) + \
+            0 * sizeof(::ckernel::packer::llk_pack_out_set<0xFE>)>(n))
+#define PACK_BLOCK_CALL_4(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_5(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_6(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_7(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_8(...) pack_block(__VA_ARGS__)
+#define pack_block(...) PACK_BLOCK_CAT(PACK_BLOCK_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
+namespace ckernel {
+// pack_tile whose template argument marks the output CB for the pack (llk_pack_out_set); a qualified call still
+// expands.
+template <std::size_t mark>
+ALWI void pack_tile_marked(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
+    pack_tile(ifrom_dst, icb, output_tile_index);
+}
+}  // namespace ckernel
+// The mark: the CB id when a constant, 0xFF else.
+#define PACK_TILE_MARK(cb) \
+    (0 * sizeof(::ckernel::packer::llk_pack_out_set<(__builtin_constant_p(::ckernel::pack_fe_n(cb)) ? static_cast<int>(::ckernel::pack_fe_n(cb)) : 0xFF)>))
+#define PACK_TILE_CALL_2(d, cb) pack_tile_marked<PACK_TILE_MARK(cb)>(d, cb)
+#define PACK_TILE_CALL_3(d, cb, i) pack_tile_marked<PACK_TILE_MARK(cb)>(d, cb, i)
+#define pack_tile(...) PACK_BLOCK_CAT(PACK_TILE_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
+#endif

@@ -1,0 +1,3410 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "llk_defs.h"
+
+// Default matmul unpack and math forms for the keys a kernel fixes at compile time: k steps per DEST section (one call
+// per k step), math fidelity, DEST sync, 32-bit DEST and output format. Each entry is the form that, on the tt-llk
+// matmul sweep, runs fastest with no configuration slower than main beyond noise: '.' per-row unpack and tile MOP,
+// 'r' per-row unpack and row MOP, 'h' hoisted unpack and tile MOP, 'R' hoisted unpack and row MOP. One string per
+// (k class, fidelity, sync, DEST width), one character per output format (Float16_b, Float16, Float32, Bfp8_b, Bfp4_b).
+// An unknown k (0) or another output format takes '.', the forms main runs.
+namespace ckernel
+{
+inline constexpr const char* matmul_forms_table[48] = {
+    "....h", "r.r.R", "rrrrR", "..r.r", // k 1, LoFi
+    ".R..R", "rr..R", "rrRrR", "rrrrr", // k 1, HiFi2
+    "rr.rR", "rrrrR", "rrRrR", "rrrrr", // k 1, HiFi3
+    "rR.rR", "rrrrR", "rrrrr", "rrrrr", // k 1, HiFi4
+    "rh..R", "rrrrR", "RRrrR", "r.rrR", // k 2-4, LoFi
+    "RRRRR", "rRrrR", "RRRRR", "rRrRR", // k 2-4, HiFi2
+    "rRRrR", "rRrrR", "rRRRR", "rRRrR", // k 2-4, HiFi3
+    "RRRRR", "RRRRR", "rrrrr", "rrrrr", // k 2-4, HiFi4
+    "RRRRR", "RRRRR", "RRRRR", "RRrRR", // k 5+, LoFi
+    "RRRRR", "RRRRR", "RRRRR", "RRRRR", // k 5+, HiFi2
+    "RRRRR", "RRRRR", "RRRRR", "RRRRR", // k 5+, HiFi3
+    "RRRRR", "RRRRR", "RrrRr", "rrrrr", // k 5+, HiFi4
+};
+
+// Reuse direction of a block: reuse_dir 0 holds in0 in SrcB and streams in1 through SrcA when ct_dim >= rt_dim (main's rule), 1 forces that
+// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). 4 is the two-row scheme: two rows of in0 sit in the two banks
+// of SrcB and every streamed in1 tile is multiplied with both (in0 held whatever the block); 6 the same with two columns of in1 in the two
+// banks of SrcA. An odd held dimension ends on one held tile. A kernel fixes it at compile time with matmul_reuse_dir.
+template <std::uint32_t reuse_dir>
+constexpr bool matmul_two_row()
+{
+    return reuse_dir == 4 || reuse_dir == 6;
+}
+
+// reuse_dir 3 runs the default body with the held operand the matmul init chose at run time: true holds in0 (as ct_dim >= rt_dim does),
+// false in1; set before the unpack and math inits, read by them and by every call
+inline bool matmul_runtime_reuse_a = true;
+
+template <std::uint32_t reuse_dir>
+constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+{
+    if constexpr (reuse_dir == 3)
+    {
+        return matmul_runtime_reuse_a;
+    }
+    else
+    {
+        return reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
+    }
+}
+
+// The held operand of a matmul call: held_a 0 holds in1, 1 in0, matmul_held_a_init the one the reuse_dir 3 init kept (read only for
+// reuse_dir 3, so other directions fold it away)
+constexpr std::uint32_t matmul_held_a_init = 2;
+template <std::uint32_t reuse_dir>
+inline bool matmul_call_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t held_a)
+{
+    if constexpr (reuse_dir == 3)
+    {
+        return held_a == matmul_held_a_init ? matmul_runtime_reuse_a : held_a != 0;
+    }
+    else
+    {
+        return matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    }
+}
+
+// A 32-bit tile takes twice the unpacker cycles of a 16-bit or Bfp8_b / Bfp4_b one (32 against 64 datums per cycle), and the streamed operand
+// is unpacked once per output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits or Bfp8_b / Bfp4_b at LoFi
+// the block holds the 32-bit operand and streams the other, which halves the unpack stream of a block of 4 tiles or more where the held operand
+// is reused (>= 2 rows or columns). The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and
+// ct_dim < rt_dim.
+constexpr bool matmul_format_is_32bit(const DataFormat f)
+{
+    return f == DataFormat::Float32 || f == DataFormat::Tf32;
+}
+
+// A LoFi kernel with a 32-bit operand beside a 16-bit or block float one, read from CBs 0 and 1, the in0 and in1 CBs of the production
+// matmul kernels (other Float32 CBs of a kernel, as partials or flags, are not operands). Its plain calls at half sync take the run-time
+// direction (matmul_api_reuse_dir 3), which holds the wider operand.
+template <std::size_t N>
+constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
+{
+    static_assert(N >= 2);
+    const auto fast = [](const DataFormat d)
+    { return d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8_b || d == DataFormat::Bfp4_b; };
+    const DataFormat a = static_cast<DataFormat>(formats[0]);
+    const DataFormat b = static_cast<DataFormat>(formats[1]);
+    return (a == DataFormat::Float32 && fast(b)) || (b == DataFormat::Float32 && fast(a));
+}
+
+// A LoFi half sync custom matmul kernel (compute/experimental/matmul_custom.h) of Float16_b operands in CBs 0 and 1 whose other CBs are
+// Bfp8_b (formats: every CB format of the kernel) runs main's unpack: the keyed unpack read up to 1.4 % slower than main on its blocks.
+template <std::size_t N>
+constexpr bool matmul_custom_main_unpack_kernel(const MathFidelity fidelity, const bool half_sync, const std::uint8_t (&formats)[N])
+{
+    if (fidelity != MathFidelity::LoFi || !half_sync || N < 3 || static_cast<DataFormat>(formats[0]) != DataFormat::Float16_b ||
+        static_cast<DataFormat>(formats[1]) != DataFormat::Float16_b)
+    {
+        return false;
+    }
+    bool out = false;
+    for (std::size_t i = 2; i < N; i++)
+    {
+        const DataFormat f = static_cast<DataFormat>(formats[i]);
+        if (f != DataFormat::Invalid && f != DataFormat::Bfp8_b)
+        {
+            return false;
+        }
+        out = out || f == DataFormat::Bfp8_b;
+    }
+    return out;
+}
+
+// The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
+// classes where a production block measured slower under ttsync (G2 census, 660 keys): HiFi4 at full sync with a 32-bit DEST, half sync
+// without a 32-bit DEST in a kernel holding Bfp8_b, and with a 32-bit DEST and a 32-bit format HiFi2 at either sync and HiFi3 at full
+// sync holding Bfp8_b.
+template <std::size_t N>
+constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint8_t (&formats)[N])
+{
+    // LoFi: the cell rule (matmul_kernel_ttsync_block) picks the blocks the ttsync unpack serves; a kernel-wide rule enabled the hardware
+    // for polling blocks too (+0.1 to +0.25 cy/block on multi-tile LoFi half blocks)
+    if (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest))
+    {
+        return false;
+    }
+    bool bfp8 = false, wide = false;
+    for (const std::uint8_t f : formats)
+    {
+        bfp8 = bfp8 || f == static_cast<std::uint8_t>(DataFormat::Bfp8_b);
+        wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
+    }
+    if (!full_sync && !fp32_dest && bfp8)
+    {
+        return false;
+    }
+    if (fp32_dest && wide && (fidelity == MathFidelity::HiFi2 || (fidelity == MathFidelity::HiFi3 && full_sync && bfp8)))
+    {
+        return false;
+    }
+    return true;
+}
+constexpr bool matmul_format_is_16bit(const DataFormat f)
+{
+    return f == DataFormat::Float16 || f == DataFormat::Float16_b;
+}
+
+// Under a static throttle the math is the bound and a held 32-bit operand against Bfp8_b or Bfp4_b reads slower (up to 4 percent)
+constexpr bool matmul_format_streams_fast(const DataFormat f, const bool throttled = false)
+{
+    return matmul_format_is_16bit(f) || (!throttled && (f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b));
+}
+
+// Whether a LoFi block of these operands may hold either one (matmul_reuse_dir's directions 1 and 2); any other pair runs direction 0
+constexpr bool matmul_operands_reorder(const DataFormat in0, const DataFormat in1, const bool throttled = false)
+{
+    return (matmul_format_is_32bit(in1) && matmul_format_streams_fast(in0, throttled)) ||
+           (matmul_format_is_32bit(in0) && matmul_format_streams_fast(in1, throttled));
+}
+
+// A Float32 x Float32 LoFi block is bound by the unpack of its 32-bit tiles; with two rows of in0 in the two SrcB banks each in1 tile is
+// unpacked once for two rows (rt_dim + rt_dim * ct_dim / 2 tiles a block instead of the default direction's).
+// pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
+// two_row_off: the blocks the two-row scheme does not serve or reads slower on: a static throttle, tiles other than 32x32, half sync with
+// a Float32 output and one k step
+// throttled: a static throttle, which keeps the default direction against a block float operand
+constexpr std::uint32_t matmul_reuse_dir(
+    const MathFidelity fidelity,
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const bool pack_bound  = false,
+    const bool two_row_off = true,
+    const bool throttled   = false)
+{
+    if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && ct_dim >= 2 && rt_dim >= 2)
+    {
+        // two columns of in1 held where the block is narrower than tall, else two rows of in0 (even held dimension: the measured blocks)
+        if (ct_dim < rt_dim && (ct_dim % 2) == 0)
+        {
+            return 6;
+        }
+        if ((rt_dim % 2) == 0)
+        {
+            return 4;
+        }
+    }
+    if (fidelity != MathFidelity::LoFi || pack_bound || ct_dim * rt_dim < 4)
+    {
+        return 0;
+    }
+    if (matmul_format_is_32bit(in1) && matmul_format_streams_fast(in0, throttled) && ct_dim >= rt_dim && rt_dim >= 2)
+    {
+        return 2;
+    }
+    if (matmul_format_is_32bit(in0) && matmul_format_streams_fast(in1, throttled) && ct_dim < rt_dim && ct_dim >= 2)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
+constexpr char matmul_default_form()
+{
+    constexpr int fmt = out_format == DataFormat::Float16_b ? 0
+                        : out_format == DataFormat::Float16 ? 1
+                        : out_format == DataFormat::Float32 ? 2
+                        : out_format == DataFormat::Bfp8_b  ? 3
+                        : out_format == DataFormat::Bfp4_b  ? 4
+                                                            : -1;
+    if constexpr (kt_per_section == 0)
+    {
+        return '.'; // main's unpack and math form (opt-ins by their own rules), also for the output formats that key a forced form below
+    }
+    else if constexpr (out_format == DataFormat::Bfp2_b)
+    {
+        return 'h'; // forced forms (matmul_forced_form_cells): block float 2 bit formats are not matmul outputs
+    }
+    else if constexpr (out_format == DataFormat::Bfp2)
+    {
+        return 'R';
+    }
+    else if constexpr (out_format == DataFormat::Bfp4)
+    {
+        return 'r';
+    }
+    else if constexpr (kt_per_section == 0 || fmt < 0)
+    {
+        return '.';
+    }
+    else
+    {
+        constexpr std::uint32_t k_class = kt_per_section == 1 ? 0 : (kt_per_section <= 4 ? 1 : 2);
+        constexpr std::uint32_t fid     = math_fidelity == MathFidelity::LoFi    ? 0
+                                          : math_fidelity == MathFidelity::HiFi2 ? 1
+                                          : math_fidelity == MathFidelity::HiFi3 ? 2
+                                                                                 : 3;
+        return matmul_forms_table[((k_class * 4 + fid) * 2 + (dst_sync == DstSync::SyncFull ? 1 : 0)) * 2 + (fp32_dest ? 1 : 0)][fmt];
+    }
+}
+
+// The plain calls the kernel-wide row form keeps on the tile MOP at HiFi2 half sync with a 32-bit DEST, which the front end moves to
+// the row form from kt 2: a constant-block kernel without a constant kt-1 block, and a run-time-block one by its call's kt_dim (bmm
+// census 49 keys faster, 1x1x2 -2.7; a kt-1 block reads slower: recurrent_chunk_scan 1x1x1 +5.45, ccl F32 4x1x1 +1.05)
+constexpr bool matmul_hifi2_half_wide(const MathFidelity fidelity, const bool half_sync, const bool fp32_dest, const bool may_pack_32bit)
+{
+    return fidelity == MathFidelity::HiFi2 && half_sync && fp32_dest && may_pack_32bit;
+}
+
+// The math form of a call that keys no k steps per DEST section (a plain matmul_block), from constants of the whole kernel so its init
+// and calls agree: the row form above LoFi, whose plain calls may take another reuse direction, but at HiFi2 half sync with a 32-bit DEST
+// where a section may pack to Float32.
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest>
+constexpr bool matmul_plain_row_form(const bool may_pack_32bit)
+{
+    return math_fidelity != MathFidelity::LoFi && !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit);
+}
+
+// Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
+// Float16_b in1 into Float32, both when the operand formats and the k steps of a section are given (main's form, unknown k, takes no fold); HiFi2 with a 16-bit
+// DEST and one k step per section, Float16_b or Bfp8_b output. At LoFi, at HiFi3 with a 32-bit DEST and elsewhere at HiFi2 the earlier release of the held
+// source read slower.
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
+constexpr bool matmul_half_end_fold()
+{
+    constexpr bool known_operands = in0 != DataFormat::Invalid && in1 != DataFormat::Invalid;
+    return dst_sync == DstSync::SyncHalf && ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 &&
+                                              (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
+                                             (kt_per_section != 0 && known_operands && math_fidelity == MathFidelity::HiFi4) ||
+                                             (kt_per_section != 0 && known_operands && math_fidelity == MathFidelity::HiFi3 && !fp32_dest &&
+                                              !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
+}
+
+// Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
+// slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
+// ABBA against main, no fused post flip). Those cells keep main's unpack and math form; the harness runs them with none of its opt-ins (helpers/perf/core.py
+// _true_main_templates). A cell is the math fidelity, whether the contraction of a section is one tile, a 32-bit DEST, one input format (of in0 or in1), the
+// output format and the format the section is packed to. several_blocks_ok: the cell keeps the keyed form when the kernel runs several inner blocks. Bfp8_b
+// input to Float32 output from a 16-bit DEST with Float16_b partials (packer_l1_acc) at HiFi3 and HiFi4 with one tile per section: the last section reads
+// slower than main (up to +1.2 cy per tile) but the partial sections gain more, so two or more inner blocks are faster (ttnn, HiFi3, 4 inner blocks: 1.2 %
+// faster than main).
+struct matmul_main_form_cell
+{
+    MathFidelity fidelity;
+    bool k1;
+    bool fp32_dest;
+    DataFormat in;
+    DataFormat out;
+    DataFormat pack;
+    bool several_blocks_ok;
+    std::uint32_t min_row = 0;
+    std::uint32_t max_row = 0xFFFF;
+    int sync = -1; // 0 half, 1 full, -1 any
+    std::uint32_t min_k = 0;
+    std::uint32_t max_k = 0xFFFF;
+    std::uint32_t min_dim = 0; // the smaller side of the block, in tiles
+    DataFormat other = DataFormat::Invalid; // when set, the operand that is not `in` must have this format (a mixed pair)
+};
+
+inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
+    // the HiFi2 two tile blocks of half sync from Float16_b to Float16_b or Bfp4_b: the opt-in row MOP initialises 6 to 10 cycles slower per call than main's form and gains 1.8 to 4.7 per block
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, false, 2, 2, 0},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, false, 2, 2, 0},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, false},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, true},
+    {MathFidelity::HiFi3, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, false},
+    // Float16_b to Bfp4_b at HiFi3 from a 32-bit DEST, one k step: the keyed forms read 0.4 cycles behind main on a single tile
+    {MathFidelity::HiFi3, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, false},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, false},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, true},
+    {MathFidelity::LoFi, false, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, false},
+    {MathFidelity::LoFi, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 7},
+    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
+    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
+    // LoFi, half sync, 16-bit DEST, Float16_b output, a 2x2 block over four k steps with one Float32 and one Float16_b operand: the rows form reads 0.26 % slower than main's
+    // on the legacy single core (ttnn ABBA); the Float32 by Float32 block of the same shape gains 3.6 % from it and keeps it
+    {MathFidelity::LoFi, false, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, false, 2, 2, 0, 4, 4, 2, DataFormat::Float16_b},
+    // LoFi at full sync: the row MOP of a Float32 input to Bfp8_b with a 32-bit DEST reads 2.6 cycles slower than the tile form on four row blocks; so do the Float16_b and Float32 outputs of a Float32 input (+2.6 and +0.6) on 4x2 and 2x4 blocks (1x4 and 4x1 not measured)
+    {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 4, 4, 1, 2, 4},
+    {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, false, 4, 4, 1, 2, 4, 2},
+    {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false, 4, 4, 1, 2, 4, 2},
+};
+
+// Mixed operand pairs that keep main's form (perf_matmul_mix and perf_matmul_cov2, ABBA against main). Float32 in in1 (the streamed SrcA) against a
+// block float in0 at HiFi2 on blocks 4 tiles wide or more: the row MOP leaves the SrcA unpacker no bubble and reads up to 9 percent slower. Narrower
+// blocks take the keyed forms, which read up to 5 percent faster, except one tile over two to four k steps at full sync, a 1 by 3 block at
+// half sync over two to four k steps, a 4 by 4 block of one k step and a single tile of one k step at half sync (ct_dim 0, an unknown block, keeps main's form).
+// Float32 in in0 takes the keyed forms except at half sync over one k step, where they gain nothing. Bfp8_b in in1 against Float16_b in in0
+// at HiFi2, half sync, 16-bit DEST, one k step also keeps main's form.
+constexpr bool matmul_block_float_format(const DataFormat f)
+{
+    return f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b;
+}
+
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync, std::uint32_t ct_dim = 0, std::uint32_t rt_dim = 0>
+constexpr bool matmul_mixed_main_form()
+{
+    constexpr bool f32_in1 = in1 == DataFormat::Float32 && matmul_block_float_format(in0);
+    constexpr bool keyed =
+        ct_dim != 0 &&
+        (kt_per_section > 1 ? (ct_dim < 4 && !(sync == 1 && kt_per_section <= 4 && ct_dim == 1 && rt_dim == 1) && !(sync == 0 && kt_per_section <= 4 && ct_dim == 3 && rt_dim == 1))
+                            : (!(ct_dim >= 4 && rt_dim >= 4) && !(sync == 0 && ct_dim == 1 && rt_dim == 1)));
+    // LoFi, half sync, 16-bit DEST cells of a Float16_b or Float32 in1 against a block float in0 that read 0.2 to 11 cycles behind main with the keyed forms
+    constexpr bool lofi_cell =
+        math_fidelity == MathFidelity::LoFi && sync == 0 && !fp32_dest && matmul_block_float_format(in0) && ct_dim != 0 &&
+        ((in1 == DataFormat::Float16_b && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 5 && (kt_per_section == 4 || kt_per_section == 32)) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 6 && kt_per_section == 32) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Bfp4_b && rt_dim == 2 && ct_dim == 4 && kt_per_section == 1) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 2 && kt_per_section == 4) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Bfp4_b && rt_dim == 4 && ct_dim == 2 && kt_per_section == 1));
+    return lofi_cell || (math_fidelity == MathFidelity::HiFi2 &&
+           ((f32_in1 && !keyed) || (in0 == DataFormat::Float32 && matmul_block_float_format(in1) && sync == 0 && kt_per_section == 1) ||
+            (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
+}
+
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0, std::uint32_t min_side = 99, std::uint32_t ct_dim = 0, std::uint32_t rt_dim = 0>
+constexpr bool matmul_main_form_cell_selected()
+{
+    if (matmul_mixed_main_form<math_fidelity, kt_per_section, fp32_dest, in0, in1, out_format, sync, ct_dim, rt_dim>())
+    {
+        return true;
+    }
+    for (const matmul_main_form_cell& c : matmul_main_form_cells)
+    {
+        if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
+            (c.in == in0 || c.in == in1) && (c.other == DataFormat::Invalid || (c.in == in0 && in1 == c.other) || (c.in == in1 && in0 == c.other)) &&
+            !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row && (c.sync < 0 || c.sync == sync) &&
+            kt_per_section >= c.min_k && kt_per_section <= c.max_k && min_side >= c.min_dim)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Cells of the perf_matmul_grid sweep (every out_subblock h x w at k 1, 3 and 8 steps, one long k, the packer L1 accumulate block and static throttle) where
+// the keyed forms read slower than main's: they keep main's unpack and math form (the harness switches its opt-ins off for them). A cell is the fidelity, half
+// sync, 32-bit DEST accumulate, in1, in0 and output format, the block (rt x ct), the k steps of the section, the static throttle level and whether the packer
+// L1 accumulates.
+struct matmul_grid_main_cell
+{
+    MathFidelity fidelity;
+    bool half_sync;
+    bool fp32_acc;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t rt, ct, kt, throttle;
+    bool l1_acc;
+    std::uint8_t nb;
+};
+
+// The four large cell tables hold one 64-bit literal per cell, hex digits per field (layout above each table): every kernel parses this header,
+// and a literal parses much faster than an aggregate row. A key field that does not fit its digits is in no cell.
+constexpr bool matmul_cell_digits(const std::uint32_t v, const std::uint32_t digits)
+{
+    return v < (1u << (4 * digits));
+}
+
+// clang-format off
+// fidelity, l1_acc | half_sync, fp32_acc | in1 | in0 | out | rt, ct | kt | throttle, nb
+inline constexpr std::uint64_t matmul_grid_main_cells[] = {
+    0x20'00'06'00'00'11'03'01,
+    0x21'00'00'06'00'62'01'01,
+    0x20'01'06'00'00'11'03'01,
+    0x20'10'07'06'00'11'01'01,
+    0x21'10'07'06'00'11'01'01,
+    0x20'10'07'05'00'11'01'01,
+    0x20'10'07'00'06'31'03'01,
+    0x20'10'06'07'00'11'01'01,
+    0x20'10'00'06'07'23'01'01,
+    0x20'10'00'06'07'23'03'01,
+    0x20'10'00'06'07'24'01'01,
+    0x20'10'00'06'05'23'01'01,
+    0x20'10'00'06'05'23'03'01,
+    0x20'10'00'06'05'24'01'01,
+    0x20'10'00'06'00'13'08'01,
+    0x20'11'07'06'00'11'01'01,
+    0x20'11'07'05'00'11'01'01,
+    0x20'11'05'07'00'11'01'01,
+    0x21'11'05'07'00'11'01'01,
+    0x20'11'05'07'00'11'01'11,
+    0x20'11'00'07'06'22'03'01,
+    0x20'11'00'07'06'22'08'01,
+    0x20'11'00'06'00'13'08'01,
+    0x30'10'07'06'00'11'01'01,
+    0x30'10'07'05'00'11'01'01,
+    0x30'10'07'00'00'11'01'01,
+    0x30'10'05'00'00'11'01'01,
+    0x00'00'05'07'07'11'01'01,
+    0x00'00'05'06'07'17'08'01,
+    0x00'00'05'06'07'27'08'01,
+    0x00'00'05'06'06'17'08'01,
+    0x00'00'05'06'06'27'08'01,
+    0x00'10'07'00'07'18'01'01,
+    0x00'10'07'00'07'21'03'01,
+    0x00'10'07'00'07'61'03'01,
+    0x00'10'07'00'07'71'01'01,
+    0x00'10'07'00'07'81'01'01,
+    0x00'10'07'00'06'21'03'01,
+    0x00'10'06'07'00'11'01'01,
+    0x01'10'06'07'00'13'03'01,
+    0x00'10'06'05'05'13'03'01,
+    0x00'10'06'00'07'18'01'01,
+    0x00'10'05'07'06'14'03'01,
+    0x00'10'05'07'06'14'08'01,
+    0x00'10'05'07'06'18'03'01,
+    0x00'10'05'07'06'23'08'01,
+    0x00'10'05'07'06'24'03'01,
+    0x00'10'05'07'06'24'08'01,
+    0x00'10'05'06'07'15'03'01,
+    0x00'10'05'06'07'15'08'01,
+    0x00'10'05'06'07'16'03'01,
+    0x00'10'05'06'07'17'08'01,
+    0x00'10'05'06'06'14'03'01,
+    0x00'10'05'06'06'14'08'01,
+    0x01'10'05'06'06'17'08'01,
+    0x00'10'05'06'06'18'03'01,
+    0x00'10'05'06'06'18'08'01,
+    0x00'10'05'06'06'23'03'01,
+    0x00'10'05'06'06'23'08'01,
+    0x00'10'05'06'06'24'03'01,
+    0x00'10'05'06'06'24'08'01,
+    0x00'10'05'06'05'15'08'01,
+    0x00'10'05'06'05'17'08'01,
+    0x00'10'05'06'05'17'20'01,
+    0x00'10'05'06'00'15'08'01,
+    0x00'10'05'06'00'17'08'01,
+    0x00'10'05'05'06'14'03'01,
+    0x00'10'05'05'06'14'08'01,
+    0x00'10'05'05'06'15'03'01,
+    0x00'10'05'05'06'17'03'01,
+    0x00'10'05'05'06'17'08'01,
+    0x00'10'05'05'06'18'03'01,
+    0x00'10'05'05'06'18'08'01,
+    0x00'10'05'05'06'23'08'01,
+    0x00'10'05'05'06'24'03'01,
+    0x00'10'05'05'06'24'08'01,
+    0x00'10'05'00'07'21'03'01,
+    0x00'10'05'00'06'14'08'01,
+    0x00'10'05'00'06'15'03'41,
+    0x00'10'05'00'06'17'03'01,
+    0x00'10'05'00'06'17'08'01,
+    0x00'10'05'00'06'21'03'01,
+    0x00'10'05'00'06'23'03'01,
+    0x00'10'05'00'06'24'03'01,
+    0x00'10'05'00'00'11'01'01,
+    0x00'10'00'07'07'12'03'01,
+    0x00'10'00'07'07'13'01'01,
+    0x00'10'00'07'07'13'08'01,
+    0x00'10'00'07'07'14'03'01,
+    0x00'10'00'07'07'15'03'01,
+    0x00'10'00'07'07'16'08'01,
+    0x00'10'00'07'07'17'01'01,
+    0x00'10'00'07'07'17'03'01,
+    0x00'10'00'07'07'18'03'01,
+    0x00'10'00'07'07'22'01'01,
+    0x00'10'00'07'07'23'01'01,
+    0x00'10'00'07'07'24'08'11,
+    0x00'10'00'07'07'31'01'01,
+    0x00'10'00'07'07'51'01'01,
+    0x00'10'00'07'07'61'01'01,
+    0x00'10'00'07'06'12'08'01,
+    0x00'10'00'07'06'14'08'01,
+    0x00'10'00'07'06'15'08'01,
+    0x00'10'00'07'06'15'20'01,
+    0x00'10'00'07'06'16'08'01,
+    0x00'10'00'07'06'23'08'01,
+    0x00'10'00'07'05'13'08'01,
+    0x00'10'00'07'05'13'08'11,
+    0x00'10'00'07'05'22'03'01,
+    0x00'10'00'07'00'12'08'01,
+    0x00'10'00'07'00'22'08'01,
+    0x00'10'00'06'07'21'08'01,
+    0x00'10'00'06'07'32'01'01,
+    0x00'10'00'06'07'32'03'11,
+    0x00'10'00'06'07'41'01'01,
+    0x00'10'00'06'07'51'01'01,
+    0x00'10'00'06'07'61'01'01,
+    0x00'10'00'06'07'71'01'01,
+    0x00'10'00'06'06'21'08'01,
+    0x00'10'00'06'06'21'08'41,
+    0x00'10'00'06'05'21'08'01,
+    0x00'10'00'06'00'17'03'01,
+    0x00'10'00'06'00'21'08'01,
+    0x00'10'00'05'07'17'01'01,
+    0x00'10'00'05'07'42'01'01,
+    0x00'10'00'05'07'51'01'01,
+    0x00'10'00'05'07'71'01'01,
+    0x00'10'00'05'06'12'08'01,
+    0x00'10'00'05'06'17'01'01,
+    0x00'10'00'00'07'22'08'01,
+    0x00'10'00'00'07'23'03'01,
+    0x00'10'00'00'07'23'08'01,
+    0x00'10'00'00'07'31'03'01,
+    0x00'10'00'00'07'32'03'01,
+    0x00'10'00'00'07'41'01'01,
+    0x00'10'00'00'07'42'03'01,
+    0x00'11'07'06'06'22'03'41,
+    0x00'11'07'00'07'13'01'01,
+    0x00'11'07'00'07'21'03'01,
+    0x00'11'07'00'07'21'08'01,
+    0x00'11'07'00'06'21'03'01,
+    0x00'11'07'00'06'21'08'01,
+    0x00'11'07'00'05'21'08'01,
+    0x00'11'07'00'00'21'03'01,
+    0x00'11'06'07'00'11'01'01,
+    0x00'11'06'05'06'12'03'41,
+    0x00'11'06'00'07'13'01'01,
+    0x00'11'06'00'06'21'03'01,
+    0x00'11'06'00'06'21'08'01,
+    0x00'11'05'06'06'14'03'01,
+    0x01'11'05'06'06'14'08'01,
+    0x00'11'05'05'06'14'03'01,
+    0x00'11'05'00'07'21'08'01,
+    0x00'11'05'00'07'31'01'01,
+    0x00'11'05'00'07'31'03'01,
+    0x00'11'05'00'07'41'01'01,
+    0x00'11'05'00'07'41'03'01,
+    0x00'11'05'00'06'14'08'01,
+    0x00'11'05'00'00'11'01'51,
+    0x00'11'00'07'07'12'08'01,
+    0x00'11'00'07'07'22'01'01,
+    0x00'11'00'07'07'31'01'01,
+    0x00'11'00'07'06'13'08'01,
+    0x00'11'00'07'06'22'01'01,
+    0x00'11'00'07'05'13'08'01,
+    0x00'11'00'07'05'14'08'01,
+    0x00'11'00'07'05'31'01'01,
+    0x00'11'00'07'00'11'01'51,
+    0x00'11'00'07'00'13'08'01,
+    0x00'11'00'07'00'13'08'11,
+    0x00'11'00'06'07'21'08'01,
+    0x00'11'00'06'06'21'08'01,
+    0x00'11'00'06'05'21'08'01,
+    0x00'11'00'06'00'21'03'11,
+    0x00'11'00'06'00'21'08'01,
+    0x00'11'00'05'07'13'03'01,
+    0x00'11'00'05'07'14'08'01,
+    0x00'11'00'05'07'41'01'01,
+    0x00'11'00'05'06'14'08'01,
+    0x00'11'00'05'06'22'01'41,
+    0x00'11'00'05'06'41'03'01,
+    0x00'11'00'05'05'13'08'01,
+    0x00'11'00'05'05'14'08'01,
+    0x00'11'00'05'00'12'03'01,
+    0x00'11'00'05'00'14'20'01,
+    0x00'11'00'00'07'13'08'11,
+    0x00'11'00'00'07'14'08'01,
+    0x00'11'00'00'07'21'08'01,
+    0x00'11'00'00'07'22'01'01,
+    0x00'11'00'00'07'22'08'01,
+    0x00'11'00'00'06'21'08'01,
+    0x00'11'00'00'06'22'08'01,
+    0x00'11'00'00'06'31'03'01,
+    0x00'11'00'00'05'14'08'01,
+    0x00'11'00'00'00'12'03'01,
+    0x21'10'06'06'00'11'01'04,
+    0x21'10'00'06'00'14'03'01,
+    0x21'11'07'07'00'21'01'01,
+    0x21'11'07'06'00'11'01'02,
+    0x21'11'05'07'00'11'01'02,
+    0x21'11'05'00'07'21'01'02,
+    0x21'11'00'07'00'31'01'01,
+    0x21'11'00'00'07'21'01'02,
+    0x31'11'07'07'00'31'01'04,
+    0x00'00'05'06'07'17'20'01,
+    0x00'00'05'06'07'27'20'01,
+    0x00'00'05'06'06'17'20'01,
+    0x00'00'05'06'06'27'20'01,
+    0x00'00'05'06'05'17'20'01,
+    0x00'00'05'06'05'27'20'01,
+    0x00'01'07'00'00'21'20'01,
+    0x01'10'07'05'00'15'01'01,
+    0x00'10'07'00'07'31'08'01,
+    0x00'10'07'00'07'32'20'01,
+    0x00'10'07'00'07'41'08'01,
+    0x01'10'07'00'07'41'08'02,
+    0x00'10'07'00'07'51'08'01,
+    0x00'10'07'00'07'61'08'01,
+    0x00'10'07'00'07'71'03'01,
+    0x00'10'07'00'07'71'08'01,
+    0x00'10'07'00'07'71'20'01,
+    0x00'10'07'00'07'81'03'01,
+    0x00'10'07'00'07'81'08'01,
+    0x00'10'07'00'07'81'20'01,
+    0x00'10'07'00'06'31'08'01,
+    0x00'10'07'00'06'31'20'01,
+    0x00'10'07'00'06'32'20'01,
+    0x00'10'07'00'06'41'20'01,
+    0x00'10'07'00'06'51'08'01,
+    0x00'10'07'00'06'51'20'01,
+    0x00'10'07'00'06'71'08'01,
+    0x00'10'07'00'05'32'20'01,
+    0x00'10'07'00'05'41'08'01,
+    0x00'10'07'00'00'31'08'01,
+    0x00'10'07'00'00'31'20'01,
+    0x00'10'07'00'00'32'20'01,
+    0x00'10'06'05'06'41'20'01,
+    0x00'10'06'00'07'61'08'01,
+    0x00'10'06'00'07'61'20'01,
+    0x00'10'06'00'07'71'03'01,
+    0x00'10'06'00'06'31'20'01,
+    0x00'10'06'00'06'32'20'01,
+    0x00'10'06'00'06'61'08'01,
+    0x00'10'06'00'06'61'20'01,
+    0x00'10'06'00'06'71'08'01,
+    0x00'10'06'00'06'71'20'01,
+    0x00'10'06'00'06'81'08'01,
+    0x00'10'06'00'06'81'20'01,
+    0x00'10'06'00'05'61'08'01,
+    0x00'10'06'00'05'61'20'01,
+    0x00'10'06'00'05'81'08'01,
+    0x00'10'06'00'05'81'20'01,
+    0x00'10'06'00'00'61'08'01,
+    0x00'10'06'00'00'61'20'01,
+    0x00'10'06'00'00'81'08'01,
+    0x00'10'06'00'00'81'20'01,
+    0x01'10'05'07'06'17'03'04,
+    0x00'10'05'07'06'24'20'01,
+    0x00'10'05'06'07'15'20'01,
+    0x00'10'05'06'07'17'20'01,
+    0x00'10'05'06'07'31'08'01,
+    0x00'10'05'06'07'31'20'01,
+    0x00'10'05'06'06'24'20'01,
+    0x00'10'05'06'05'15'20'01,
+    0x00'10'05'06'05'31'08'01,
+    0x01'10'05'06'05'31'08'04,
+    0x00'10'05'06'05'31'20'01,
+    0x00'10'05'06'00'31'08'01,
+    0x00'10'05'06'00'31'20'01,
+    0x00'10'05'05'06'23'20'01,
+    0x00'10'05'00'06'23'20'01,
+    0x00'10'00'07'07'13'20'01,
+    0x01'10'00'07'07'15'01'01,
+    0x00'10'00'07'07'16'20'01,
+    0x00'10'00'07'07'17'20'01,
+    0x00'10'00'07'07'18'20'01,
+    0x00'10'00'07'06'13'20'01,
+    0x00'10'00'07'06'23'20'01,
+    0x00'10'00'07'05'13'20'01,
+    0x00'10'00'07'00'13'20'01,
+    0x00'10'00'06'07'16'20'01,
+    0x01'10'00'06'07'17'03'02,
+    0x00'10'00'06'07'21'20'01,
+    0x00'10'00'06'06'16'20'01,
+    0x00'10'00'06'06'21'20'01,
+    0x00'10'00'06'05'16'20'01,
+    0x00'10'00'06'05'21'20'01,
+    0x00'10'00'06'00'21'20'01,
+    0x00'10'00'05'06'16'20'01,
+    0x00'10'00'00'07'24'20'01,
+    0x00'10'00'00'07'32'08'01,
+    0x00'10'00'00'07'32'20'01,
+    0x00'10'00'00'07'42'08'01,
+    0x00'10'00'00'07'42'20'01,
+    0x00'10'00'00'06'31'08'01,
+    0x00'10'00'00'06'31'20'01,
+    0x00'10'00'00'06'32'08'01,
+    0x00'10'00'00'06'32'20'01,
+    0x01'11'07'06'00'21'01'01,
+    0x01'11'07'00'07'21'08'01,
+    0x00'11'07'00'07'21'20'01,
+    0x01'11'07'00'07'31'01'02,
+    0x00'11'07'00'07'31'08'01,
+    0x00'11'07'00'07'31'20'01,
+    0x00'11'07'00'07'41'08'01,
+    0x00'11'07'00'07'41'20'01,
+    0x00'11'07'00'06'21'20'01,
+    0x00'11'07'00'06'31'08'01,
+    0x00'11'07'00'06'41'08'01,
+    0x00'11'07'00'06'41'20'01,
+    0x00'11'07'00'05'21'20'01,
+    0x00'11'07'00'05'41'08'01,
+    0x00'11'07'00'05'41'20'01,
+    0x01'11'07'00'00'21'08'01,
+    0x00'11'07'00'00'21'20'01,
+    0x00'11'07'00'00'31'08'01,
+    0x01'11'07'00'00'31'08'04,
+    0x00'11'07'00'00'31'20'01,
+    0x00'11'07'00'00'41'08'01,
+    0x00'11'07'00'00'41'20'01,
+    0x00'11'06'00'07'41'20'01,
+    0x00'11'06'00'06'21'20'01,
+    0x00'11'06'00'06'31'08'01,
+    0x00'11'06'00'06'31'20'01,
+    0x01'11'05'07'00'21'01'04,
+    0x00'11'05'06'07'31'08'01,
+    0x00'11'05'06'07'31'20'01,
+    0x00'11'05'06'06'31'08'01,
+    0x00'11'05'06'06'31'20'01,
+    0x00'11'05'06'05'31'08'01,
+    0x00'11'05'06'05'31'20'01,
+    0x00'11'05'06'00'31'08'01,
+    0x00'11'05'06'00'31'20'01,
+    0x00'11'05'00'07'31'08'01,
+    0x01'11'05'00'07'31'08'02,
+    0x00'11'05'00'07'41'08'01,
+    0x00'11'05'00'07'41'20'01,
+    0x00'11'05'00'06'31'08'01,
+    0x00'11'05'00'06'41'08'01,
+    0x00'11'05'00'06'41'20'01,
+    0x00'11'05'00'05'31'08'01,
+    0x00'11'05'00'05'41'08'01,
+    0x00'11'05'00'05'41'20'01,
+    0x00'11'05'00'00'41'08'01,
+    0x00'11'05'00'00'41'20'01,
+    0x00'11'00'07'07'13'20'01,
+    0x00'11'00'07'06'13'20'01,
+    0x01'11'00'07'05'12'08'01,
+    0x00'11'00'07'05'13'20'01,
+    0x01'11'00'07'00'13'08'04,
+    0x00'11'00'07'00'13'20'01,
+    0x01'11'00'06'07'21'08'04,
+    0x00'11'00'06'07'21'20'01,
+    0x00'11'00'06'06'21'20'01,
+    0x00'11'00'06'05'21'20'01,
+    0x00'11'00'06'00'21'20'01,
+    0x00'11'00'05'07'14'20'01,
+    0x01'11'00'05'06'14'08'02,
+    0x00'11'00'05'06'14'20'01,
+    0x00'11'00'05'05'14'20'01,
+    0x00'11'00'00'07'41'08'01,
+    0x00'11'00'00'07'41'20'01,
+    0x00'11'00'00'06'22'20'01,
+    0x01'11'00'00'06'31'03'04,
+    0x00'11'00'00'06'31'08'01,
+    0x00'11'00'00'06'31'20'01,
+    0x00'11'00'00'00'41'08'01,
+    0x00'11'00'00'00'41'20'01,
+    // LLK-only space (formats and throttles the grid sweep does not reach) where the keyed forms read slower than main's
+    0x00'10'07'00'0f'42'03'01,
+    0x00'10'00'0f'07'14'01'01,
+    0x00'10'00'06'0f'21'08'01,
+    0x00'10'00'06'00'21'08'21,
+    0x00'10'00'00'07'41'01'21,
+    0x00'11'07'06'06'21'08'31,
+    0x00'11'07'00'0f'21'08'01,
+    0x00'11'00'06'0f'41'01'01,
+    0x00'11'00'05'06'12'08'21,
+    0x00'11'00'00'01'14'08'01,
+    // LoFi, 32-bit DEST accumulate, a 1x4 block of a Float16 in1 against a Bfp8 in0 to Bfp8 over 3 k steps: the keyed forms and the closed block pack read 3.8
+    // cycles behind main, main's form with the per-tile pack (matmul_pack_exact_per_tile_cells) reads level with it; LoFi, 16-bit DEST, a 2x4 block of a
+    // Float16_b in1 against a Bfp4_b in0 to Bfp8_b over 8 k steps at throttle 2: 0.6 behind, main's form and per-tile pack -0.03
+    0x00'11'01'02'02'14'03'01,
+    0x00'10'05'07'06'24'08'21,
+    // Full sync 1x1 blocks of Float16_b or Bfp8_b: re-initialised before every call, the keyed forms read up to 10 cycles per call behind main's
+    0x00'00'05'05'05'11'01'01,
+    0x00'00'06'06'06'11'01'01,
+    0x00'00'05'05'05'11'04'01,
+    0x00'00'06'06'06'11'04'01,
+    0x20'00'05'05'05'11'01'01,
+    0x20'00'06'06'06'11'01'01,
+    0x20'00'05'05'05'11'04'01,
+    0x20'00'06'06'06'11'04'01,
+    0x20'00'05'05'05'11'20'01,
+    0x20'00'06'06'06'11'20'01,
+    0x40'00'05'05'05'11'04'01,
+    0x40'00'06'06'06'11'04'01,
+    0x40'00'05'05'05'11'20'01,
+    0x40'00'06'06'06'11'20'01,
+    // Half sync 1x1 blocks the llkx sweep read slower than main on the keyed forms
+    0x20'10'02'01'00'11'01'01,
+    0x20'10'01'02'00'11'01'01,
+    0x20'10'01'01'00'11'01'01,
+    0x20'11'02'02'00'11'01'01,
+    0x20'11'02'01'00'11'01'01,
+    0x20'11'01'02'00'11'01'01,
+    0x20'11'01'01'00'11'01'01,
+    0x30'10'02'01'00'11'01'01,
+    0x30'10'01'02'02'11'01'01,
+    0x30'10'01'02'02'11'08'01,
+    0x30'10'01'02'01'11'01'01,
+    0x30'10'01'02'05'11'01'01,
+    0x30'10'01'01'00'11'01'01,
+    0x30'11'02'02'01'11'01'01,
+    0x30'11'02'01'01'11'01'01,
+    0x30'11'02'01'00'11'01'01,
+    0x30'11'01'02'05'11'01'01,
+    0x30'11'01'01'01'11'01'01,
+    0x30'11'01'01'00'11'01'01,
+    0x40'10'02'01'00'11'01'01,
+    0x00'10'02'02'00'11'01'01,
+    0x00'10'01'02'00'11'01'01,
+    0x00'10'01'01'00'11'01'01,
+    // LoFi, 32-bit DEST, half sync, a 2x1 block of one K tile to Bfp4_b: the rows form of the keyed unpack and math reads 0.5 to 3.4 cycles behind main's tile
+    // form
+    0x00'11'07'07'07'21'01'01,
+    0x00'11'07'06'07'21'01'01,
+    0x00'11'07'05'07'21'01'01,
+    0x00'11'07'00'07'21'01'01,
+    0x00'11'06'07'07'21'01'01,
+    0x00'11'06'06'07'21'01'01,
+    0x00'11'06'05'07'21'01'01,
+    0x00'11'05'0f'07'21'01'01,
+    0x00'11'05'07'07'21'01'01,
+    0x00'11'05'06'07'21'01'01,
+    0x00'11'05'05'07'21'01'01,
+    0x00'11'00'07'07'21'01'01,
+    0x00'11'00'06'07'21'01'01,
+    0x00'11'00'05'07'21'01'01,
+    // BEGIN generated by gen_matmul_closed_off_cells.py grid_main
+    0x20'11'0f'05'06'21'01'01,
+    0x20'10'0f'00'00'11'01'01,
+    0x20'10'07'05'05'11'01'31,
+    0x20'10'07'00'06'31'02'01,
+    0x20'11'07'00'01'12'01'01,
+    0x20'10'02'02'00'11'01'01,
+    0x21'10'06'07'07'21'01'02,
+    0x20'10'06'06'06'42'04'01,
+    0x20'11'06'05'00'31'01'11,
+    0x20'10'06'00'06'51'03'51,
+    0x20'11'06'00'01'12'01'01,
+    0x20'10'01'01'06'12'01'01,
+    0x20'11'01'01'06'12'01'01,
+    0x20'10'01'01'06'21'01'01,
+    0x20'11'01'01'06'21'01'01,
+    0x20'10'05'07'05'11'01'41,
+    0x20'10'05'07'05'21'01'01,
+    0x20'11'05'07'00'11'01'51,
+    0x20'10'05'05'06'21'01'01,
+    0x20'10'05'05'06'32'01'11,
+    0x20'10'05'05'05'12'01'04,
+    0x20'11'05'05'05'12'01'04,
+    0x21'11'05'05'05'12'01'04,
+    0x20'10'05'05'05'21'01'04,
+    0x20'11'05'05'05'21'01'04,
+    0x21'11'05'05'00'11'01'04,
+    0x20'11'05'05'00'13'01'11,
+    0x21'11'05'00'05'12'01'04,
+    0x20'10'00'07'0f'16'08'01,
+    0x20'10'00'07'07'16'03'01,
+    0x20'10'00'07'07'16'04'01,
+    0x20'10'00'07'07'16'05'01,
+    0x20'10'00'07'07'16'08'01,
+    0x20'10'00'07'07'16'20'01,
+    0x20'11'00'07'06'22'02'01,
+    0x21'10'00'07'05'16'08'02,
+    0x20'11'00'07'00'12'01'21,
+    0x20'10'00'07'00'13'03'01,
+    0x20'11'00'07'00'13'03'01,
+    0x20'10'00'07'00'13'04'01,
+    0x20'10'00'07'00'14'03'01,
+    0x20'10'00'07'00'14'08'01,
+    0x20'10'00'07'00'14'20'01,
+    0x20'10'00'07'00'15'03'01,
+    0x20'10'00'07'00'15'08'01,
+    0x20'10'00'07'00'15'08'31,
+    0x20'10'00'07'00'15'20'01,
+    0x20'10'00'07'00'16'03'01,
+    0x20'10'00'07'00'16'08'01,
+    0x20'10'00'07'00'16'20'01,
+    0x20'10'00'07'00'17'03'01,
+    0x20'10'00'07'00'17'08'01,
+    0x20'10'00'07'00'17'20'01,
+    0x20'10'00'07'00'23'01'21,
+    0x20'10'00'07'00'24'03'01,
+    0x20'10'00'07'00'24'08'01,
+    0x20'10'00'07'00'24'20'01,
+    0x20'00'00'06'07'11'05'01,
+    0x20'01'00'06'07'11'05'01,
+    0x20'10'00'06'07'16'03'01,
+    0x20'10'00'06'07'16'04'01,
+    0x20'10'00'06'07'16'05'01,
+    0x20'10'00'06'07'16'08'01,
+    0x20'10'00'06'07'16'20'01,
+    0x20'10'00'06'07'23'02'01,
+    0x20'00'00'06'06'11'05'01,
+    0x20'01'00'06'06'11'05'01,
+    0x20'10'00'06'06'14'04'01,
+    0x20'10'00'06'06'14'05'01,
+    0x20'01'00'06'01'11'05'01,
+    0x20'00'00'06'05'11'05'01,
+    0x20'01'00'06'05'11'05'01,
+    0x20'10'00'06'05'23'02'01,
+    0x20'10'00'06'05'23'04'01,
+    0x20'10'00'06'05'23'05'01,
+    0x20'00'00'06'00'11'05'01,
+    0x20'01'00'06'00'11'05'01,
+    0x20'10'00'06'00'15'01'11,
+    0x20'10'00'06'00'15'03'01,
+    0x20'10'00'06'00'15'04'01,
+    0x20'10'00'06'00'15'08'01,
+    0x20'10'00'06'00'15'20'01,
+    0x20'10'00'06'00'16'03'01,
+    0x20'10'00'06'00'16'04'01,
+    0x20'10'00'06'00'16'08'01,
+    0x20'10'00'06'00'16'20'01,
+    0x20'10'00'06'00'17'03'01,
+    0x20'10'00'06'00'17'04'01,
+    0x20'10'00'06'00'17'08'01,
+    0x20'10'00'06'00'17'20'01,
+    0x20'10'00'06'00'18'03'01,
+    0x20'10'00'06'00'18'08'21,
+    0x20'10'00'06'00'24'04'01,
+    0x20'10'00'06'00'24'20'01,
+    0x21'11'00'05'07'12'01'04,
+    0x21'11'00'05'00'12'01'01,
+    0x20'10'00'00'05'12'01'04,
+    0x20'11'00'00'05'12'01'04,
+    0x20'10'00'00'05'21'01'04,
+    0x20'11'00'00'05'21'01'04,
+    0x20'11'00'00'00'21'01'21,
+    0x30'10'06'07'00'12'01'31,
+    0x30'11'05'07'07'14'01'21,
+    0x30'11'05'06'07'14'01'21,
+    0x30'11'05'05'07'41'01'21,
+    0x30'10'00'07'00'16'01'21,
+    0x30'10'00'05'00'31'01'21,
+    0x30'11'00'00'00'11'01'01,
+    0x40'10'07'00'00'21'01'21,
+    0x00'10'0f'0f'00'16'03'01,
+    0x00'10'0f'07'00'32'03'01,
+    0x00'10'0f'00'0f'21'08'01,
+    0x00'11'07'0f'05'21'01'01,
+    0x00'10'07'07'06'32'04'01,
+    0x00'10'07'07'06'61'03'01,
+    0x00'11'07'07'05'21'01'01,
+    0x01'11'07'07'00'13'01'02,
+    0x00'11'07'07'00'13'02'01,
+    0x00'10'07'07'00'13'03'01,
+    0x00'10'07'07'00'13'04'01,
+    0x00'10'07'07'00'14'03'01,
+    0x00'10'07'07'00'14'04'01,
+    0x00'10'07'07'00'15'03'01,
+    0x00'10'07'07'00'15'04'01,
+    0x00'10'07'07'00'16'03'01,
+    0x00'10'07'07'00'16'04'01,
+    0x00'10'07'07'00'17'03'01,
+    0x00'10'07'07'00'17'04'01,
+    0x00'10'07'07'00'18'03'01,
+    0x00'10'07'07'00'18'04'01,
+    0x00'10'07'07'00'23'03'01,
+    0x00'10'07'07'00'23'04'01,
+    0x00'10'07'07'00'24'03'01,
+    0x00'10'07'07'00'24'04'01,
+    0x00'10'07'07'00'31'03'01,
+    0x00'10'07'07'00'32'03'01,
+    0x00'10'07'07'00'32'04'01,
+    0x00'11'07'07'00'41'02'01,
+    0x00'10'07'07'00'42'03'01,
+    0x00'10'07'07'00'51'03'01,
+    0x00'10'07'07'00'61'03'01,
+    0x00'10'07'07'00'71'03'01,
+    0x00'10'07'07'00'81'03'01,
+    0x01'11'07'06'05'12'01'02,
+    0x00'11'07'06'05'21'01'01,
+    0x00'11'07'06'00'13'02'01,
+    0x00'11'07'06'00'14'02'01,
+    0x00'10'07'06'00'71'03'01,
+    0x00'10'07'06'00'81'03'01,
+    0x00'11'07'05'05'12'01'01,
+    0x00'11'07'05'05'21'01'01,
+    0x01'11'07'05'00'11'01'02,
+    0x00'11'07'05'00'13'02'01,
+    0x00'10'07'05'00'13'03'01,
+    0x00'11'07'05'00'13'03'01,
+    0x00'11'07'05'00'14'02'01,
+    0x00'10'07'05'00'14'04'01,
+    0x00'10'07'05'00'15'03'01,
+    0x00'10'07'05'00'15'04'01,
+    0x00'10'07'05'00'16'03'01,
+    0x00'10'07'05'00'16'04'01,
+    0x00'10'07'05'00'17'03'01,
+    0x00'10'07'05'00'17'04'01,
+    0x00'10'07'05'00'18'03'01,
+    0x00'10'07'05'00'18'03'21,
+    0x00'10'07'05'00'18'04'01,
+    0x00'10'07'05'00'23'03'01,
+    0x00'10'07'05'00'23'04'01,
+    0x00'10'07'05'00'24'03'01,
+    0x00'10'07'05'00'24'04'01,
+    0x00'11'07'05'00'31'02'01,
+    0x00'10'07'05'00'32'03'01,
+    0x00'10'07'05'00'42'03'01,
+    0x00'10'07'05'00'42'04'01,
+    0x00'10'07'05'00'51'03'01,
+    0x00'10'07'05'00'71'03'01,
+    0x00'10'07'00'07'21'01'01,
+    0x01'11'07'00'07'21'01'04,
+    0x00'11'07'00'07'21'02'01,
+    0x00'10'07'00'07'21'04'01,
+    0x00'11'07'00'07'21'04'01,
+    0x00'11'07'00'07'21'0f'01,
+    0x00'11'07'00'07'31'02'01,
+    0x00'10'07'00'07'31'04'01,
+    0x00'11'07'00'07'31'05'01,
+    0x00'11'07'00'07'31'07'01,
+    0x00'10'07'00'07'41'05'01,
+    0x00'10'07'00'07'41'20'01,
+    0x00'10'07'00'07'71'02'01,
+    0x00'10'07'00'07'81'02'01,
+    0x00'10'07'00'06'21'02'01,
+    0x00'11'07'00'06'21'02'01,
+    0x00'11'07'00'06'21'04'01,
+    0x00'11'07'00'06'21'05'01,
+    0x00'11'07'00'06'21'0f'01,
+    0x00'11'07'00'01'21'0f'01,
+    0x00'11'07'00'05'12'01'01,
+    0x01'11'07'00'05'12'01'02,
+    0x00'10'07'00'05'13'04'01,
+    0x00'10'07'00'05'21'04'01,
+    0x00'11'07'00'05'21'04'01,
+    0x00'11'07'00'05'21'0f'01,
+    0x00'10'07'00'05'41'05'01,
+    0x00'11'07'00'05'41'05'01,
+    0x00'10'07'00'00'13'03'01,
+    0x00'10'07'00'00'13'04'01,
+    0x00'10'07'00'00'14'03'01,
+    0x00'10'07'00'00'14'04'01,
+    0x00'10'07'00'00'15'04'01,
+    0x00'10'07'00'00'16'03'01,
+    0x00'10'07'00'00'17'04'01,
+    0x00'10'07'00'00'18'03'01,
+    0x00'10'07'00'00'18'04'01,
+    0x00'10'07'00'00'21'04'01,
+    0x00'11'07'00'00'21'04'01,
+    0x00'11'07'00'00'21'05'01,
+    0x00'11'07'00'00'21'0f'01,
+    0x00'11'07'00'00'31'05'01,
+    0x00'11'07'00'00'31'07'01,
+    0x00'10'07'00'00'32'03'01,
+    0x00'10'07'00'00'41'03'01,
+    0x00'10'07'00'00'41'08'01,
+    0x00'10'07'00'00'41'20'01,
+    0x00'10'07'00'00'42'03'01,
+    0x00'10'07'00'00'42'05'01,
+    0x00'10'07'00'00'42'08'01,
+    0x00'10'07'00'00'42'20'01,
+    0x00'10'07'00'00'51'03'01,
+    0x00'10'07'00'00'51'08'01,
+    0x00'10'07'00'00'51'20'01,
+    0x00'10'07'00'00'61'03'01,
+    0x00'10'07'00'00'61'08'01,
+    0x00'10'07'00'00'61'20'01,
+    0x00'10'07'00'00'71'03'01,
+    0x00'10'07'00'00'71'08'01,
+    0x00'10'07'00'00'71'20'01,
+    0x00'10'07'00'00'81'03'01,
+    0x00'10'07'00'00'81'08'01,
+    0x00'10'07'00'00'81'20'01,
+    0x00'10'02'02'02'21'08'01,
+    0x00'10'02'02'00'61'03'01,
+    0x00'11'06'0f'05'21'01'01,
+    0x00'10'06'0f'00'61'03'01,
+    0x01'11'06'07'05'12'01'04,
+    0x00'11'06'07'05'21'01'01,
+    0x00'10'06'07'00'15'02'01,
+    0x00'10'06'07'00'16'02'01,
+    0x01'10'06'07'00'23'03'02,
+    0x00'10'06'07'00'32'03'01,
+    0x00'10'06'07'00'42'03'01,
+    0x00'10'06'07'00'51'03'01,
+    0x00'10'06'07'00'61'03'01,
+    0x00'10'06'07'00'71'03'01,
+    0x00'10'06'07'00'81'03'01,
+    0x00'11'06'06'05'13'01'01,
+    0x00'11'06'06'05'21'01'01,
+    0x01'11'06'06'00'11'01'04,
+    0x00'10'06'06'00'17'02'01,
+    0x00'10'06'06'00'41'03'01,
+    0x00'10'06'06'00'51'03'01,
+    0x00'10'06'06'00'71'03'01,
+    0x00'11'06'05'06'13'02'01,
+    0x00'11'06'05'05'21'01'01,
+    0x00'10'06'05'00'16'02'01,
+    0x00'10'06'05'00'17'02'01,
+    0x01'01'06'05'00'21'08'01,
+    0x00'10'06'05'00'31'03'01,
+    0x00'10'06'05'00'32'03'01,
+    0x00'10'06'05'00'41'03'01,
+    0x00'10'06'05'00'41'04'01,
+    0x00'10'06'05'00'42'03'01,
+    0x00'10'06'05'00'61'03'01,
+    0x01'11'06'00'07'31'08'02,
+    0x00'11'06'00'07'41'02'01,
+    0x00'11'06'00'07'41'04'01,
+    0x00'10'06'00'07'61'02'01,
+    0x00'10'06'00'07'71'02'01,
+    0x00'11'06'00'06'21'04'01,
+    0x00'11'06'00'06'21'05'01,
+    0x00'10'06'00'05'13'02'01,
+    0x00'10'06'00'05'31'08'01,
+    0x00'10'06'00'05'31'20'01,
+    0x00'10'06'00'00'12'03'41,
+    0x00'10'06'00'00'16'02'01,
+    0x00'10'06'00'00'21'08'01,
+    0x00'10'06'00'00'21'20'01,
+    0x00'10'06'00'00'31'03'01,
+    0x00'11'06'00'00'31'03'01,
+    0x00'10'06'00'00'31'05'01,
+    0x00'10'06'00'00'31'07'01,
+    0x00'10'06'00'00'31'08'01,
+    0x00'10'06'00'00'31'20'01,
+    0x00'10'06'00'00'32'03'01,
+    0x00'10'06'00'00'32'05'01,
+    0x00'10'06'00'00'32'07'01,
+    0x00'10'06'00'00'32'08'01,
+    0x00'10'06'00'00'32'20'01,
+    0x00'10'06'00'00'41'03'01,
+    0x00'10'06'00'00'41'04'01,
+    0x00'10'06'00'00'41'05'01,
+    0x00'10'06'00'00'41'08'01,
+    0x00'10'06'00'00'41'20'01,
+    0x00'10'06'00'00'42'03'01,
+    0x00'10'06'00'00'42'04'01,
+    0x00'10'06'00'00'42'05'01,
+    0x00'10'06'00'00'42'08'01,
+    0x00'10'06'00'00'42'20'01,
+    0x00'10'06'00'00'51'03'01,
+    0x00'10'06'00'00'51'08'01,
+    0x00'10'06'00'00'51'20'01,
+    0x00'10'06'00'00'61'03'01,
+    0x00'10'06'00'00'71'03'01,
+    0x00'11'01'01'07'21'01'01,
+    0x00'10'01'01'06'32'02'01,
+    0x00'11'01'01'05'21'01'01,
+    0x00'10'01'01'00'18'03'01,
+    0x00'10'01'01'00'24'04'01,
+    0x00'10'05'07'06'12'08'01,
+    0x00'10'05'07'06'12'20'01,
+    0x00'10'05'07'06'21'05'01,
+    0x00'10'05'07'06'21'0f'01,
+    0x00'10'05'07'06'32'04'01,
+    0x00'10'05'07'06'32'07'01,
+    0x00'10'05'07'06'61'03'01,
+    0x00'10'05'07'06'71'20'01,
+    0x01'11'05'07'05'12'01'02,
+    0x00'11'05'07'05'21'01'01,
+    0x00'11'05'07'05'31'02'01,
+    0x00'10'05'07'00'14'03'01,
+    0x00'10'05'07'00'15'03'01,
+    0x00'10'05'07'00'16'03'01,
+    0x00'10'05'07'00'17'03'01,
+    0x01'10'05'07'00'17'03'04,
+    0x00'10'05'07'00'18'03'01,
+    0x00'10'05'07'00'23'03'01,
+    0x00'10'05'07'00'24'03'01,
+    0x00'10'05'07'00'24'04'01,
+    0x00'10'05'07'00'31'03'01,
+    0x00'10'05'07'00'32'03'01,
+    0x00'10'05'07'00'32'04'01,
+    0x00'11'05'07'00'41'02'01,
+    0x00'10'05'07'00'42'03'01,
+    0x00'10'05'07'00'51'03'01,
+    0x00'10'05'07'00'61'03'01,
+    0x00'10'05'07'00'71'03'01,
+    0x00'10'05'07'00'81'03'01,
+    0x00'10'05'06'07'15'02'01,
+    0x00'10'05'06'07'15'04'01,
+    0x00'10'05'06'07'15'05'01,
+    0x00'11'05'06'07'21'01'21,
+    0x00'00'05'06'07'27'0f'01,
+    0x00'10'05'06'07'31'07'01,
+    0x00'11'05'06'07'31'07'01,
+    0x00'11'05'06'06'13'03'01,
+    0x00'10'05'06'06'13'05'01,
+    0x00'11'05'06'06'13'05'01,
+    0x00'00'05'06'06'27'0f'01,
+    0x00'11'05'06'06'31'05'01,
+    0x00'11'05'06'06'31'07'01,
+    0x00'11'05'06'01'31'07'01,
+    0x01'11'05'06'05'12'01'02,
+    0x00'10'05'06'05'15'02'01,
+    0x00'10'05'06'05'15'03'01,
+    0x00'10'05'06'05'15'04'01,
+    0x00'10'05'06'05'17'04'01,
+    0x00'10'05'06'05'17'05'01,
+    0x00'11'05'06'05'21'01'01,
+    0x00'00'05'06'05'27'0f'01,
+    0x00'11'05'06'05'31'02'01,
+    0x00'10'05'06'05'31'07'01,
+    0x00'11'05'06'05'31'07'01,
+    0x00'10'05'06'00'11'01'01,
+    0x00'10'05'06'00'14'02'01,
+    0x00'10'05'06'00'15'02'01,
+    0x00'10'05'06'00'16'02'01,
+    0x00'10'05'06'00'17'02'01,
+    0x00'10'05'06'00'18'02'01,
+    0x01'10'05'06'00'23'08'01,
+    0x00'10'05'06'00'24'02'01,
+    0x00'10'05'06'00'31'03'01,
+    0x00'10'05'06'00'31'07'01,
+    0x00'11'05'06'00'31'07'01,
+    0x00'10'05'06'00'32'03'01,
+    0x00'11'05'06'00'41'02'01,
+    0x00'10'05'05'06'12'08'01,
+    0x00'10'05'05'06'12'20'01,
+    0x00'10'05'05'06'17'02'01,
+    0x00'10'05'05'06'18'02'01,
+    0x00'10'05'05'06'24'02'01,
+    0x00'10'05'05'06'32'05'01,
+    0x00'10'05'05'06'32'07'01,
+    0x00'10'05'05'06'42'04'01,
+    0x00'11'05'05'05'21'01'01,
+    0x00'10'05'05'00'13'03'01,
+    0x00'10'05'05'00'13'04'01,
+    0x00'10'05'05'00'14'03'01,
+    0x00'10'05'05'00'14'04'01,
+    0x00'10'05'05'00'15'02'01,
+    0x00'10'05'05'00'15'03'01,
+    0x00'10'05'05'00'15'03'41,
+    0x00'10'05'05'00'15'04'01,
+    0x00'10'05'05'00'16'02'01,
+    0x00'10'05'05'00'17'02'01,
+    0x00'10'05'05'00'18'03'01,
+    0x00'10'05'05'00'18'04'01,
+    0x00'11'05'05'00'22'01'01,
+    0x00'10'05'05'00'24'03'01,
+    0x00'10'05'05'00'24'04'01,
+    0x00'11'05'05'00'31'02'01,
+    0x00'10'05'05'00'41'03'01,
+    0x00'10'05'05'00'41'04'01,
+    0x00'10'05'05'00'42'03'01,
+    0x00'10'05'05'00'42'04'01,
+    0x00'10'05'05'00'61'03'01,
+    0x00'10'05'05'00'81'03'01,
+    0x00'10'05'00'07'16'01'01,
+    0x00'11'05'00'07'21'05'01,
+    0x00'11'05'00'07'21'0f'01,
+    0x00'10'05'00'07'24'01'01,
+    0x00'11'05'00'07'41'02'01,
+    0x00'10'05'00'06'12'05'01,
+    0x00'10'05'00'06'12'08'01,
+    0x00'10'05'00'06'12'20'01,
+    0x00'11'05'00'06'14'02'01,
+    0x00'10'05'00'06'14'03'01,
+    0x00'11'05'00'06'21'20'01,
+    0x00'10'05'00'06'23'05'01,
+    0x00'10'05'00'00'13'03'01,
+    0x00'10'05'00'00'13'04'01,
+    0x00'10'05'00'00'15'03'01,
+    0x00'10'05'00'00'18'03'01,
+    0x01'11'05'00'00'21'01'04,
+    0x00'11'05'00'00'21'02'01,
+    0x00'10'05'00'00'23'03'01,
+    0x00'10'05'00'00'32'03'01,
+    0x00'10'05'00'00'32'05'01,
+    0x00'10'05'00'00'32'08'01,
+    0x00'10'05'00'00'32'20'01,
+    0x00'11'05'00'00'41'05'01,
+    0x00'10'05'00'00'42'03'01,
+    0x00'10'05'00'00'42'08'01,
+    0x00'10'05'00'00'42'20'01,
+    0x00'10'05'00'00'51'03'01,
+    0x00'10'05'00'00'51'08'01,
+    0x00'10'05'00'00'51'20'01,
+    0x00'10'05'00'00'61'03'01,
+    0x00'10'05'00'00'61'08'01,
+    0x00'10'05'00'00'61'20'01,
+    0x00'10'05'00'00'71'03'01,
+    0x00'10'05'00'00'71'08'01,
+    0x00'10'05'00'00'71'20'01,
+    0x00'10'05'00'00'81'03'01,
+    0x00'10'05'00'00'81'08'01,
+    0x00'10'05'00'00'81'20'01,
+    0x00'11'00'0f'00'22'08'01,
+    0x00'10'00'07'07'12'02'01,
+    0x00'11'00'07'07'13'01'01,
+    0x00'11'00'07'07'13'03'01,
+    0x00'10'00'07'07'13'04'01,
+    0x00'11'00'07'07'13'04'01,
+    0x00'10'00'07'07'14'02'01,
+    0x00'11'00'07'07'14'02'01,
+    0x00'10'00'07'07'15'01'01,
+    0x00'10'00'07'07'15'02'01,
+    0x00'10'00'07'07'15'04'01,
+    0x00'10'00'07'07'16'05'01,
+    0x00'10'00'07'07'17'04'01,
+    0x00'10'00'07'07'17'05'01,
+    0x01'10'00'07'07'17'08'02,
+    0x00'10'00'07'07'18'02'01,
+    0x00'10'00'07'07'18'08'01,
+    0x01'11'00'07'07'21'01'01,
+    0x00'11'00'07'07'22'02'01,
+    0x00'10'00'07'07'23'03'01,
+    0x00'10'00'07'07'24'05'01,
+    0x00'10'00'07'07'24'0f'01,
+    0x00'11'00'07'07'32'01'01,
+    0x00'10'00'07'07'41'01'01,
+    0x00'11'00'07'07'51'01'01,
+    0x00'10'00'07'07'71'01'01,
+    0x00'11'00'07'06'12'01'01,
+    0x00'11'00'07'06'31'02'01,
+    0x00'10'00'07'06'61'03'01,
+    0x00'10'00'07'06'71'20'01,
+    0x00'11'00'07'01'12'05'01,
+    0x00'11'00'07'01'13'20'01,
+    0x00'11'00'07'01'14'02'01,
+    0x00'11'00'07'05'12'01'01,
+    0x00'11'00'07'05'12'05'01,
+    0x00'11'00'07'05'13'03'01,
+    0x00'10'00'07'05'13'05'01,
+    0x00'11'00'07'05'14'02'01,
+    0x00'11'00'07'05'14'03'01,
+    0x00'11'00'07'05'21'01'01,
+    0x00'11'00'07'05'22'08'01,
+    0x00'11'00'07'05'22'20'01,
+    0x00'10'00'07'05'23'20'01,
+    0x00'11'00'07'05'32'01'01,
+    0x00'10'00'07'00'12'05'01,
+    0x00'11'00'07'00'13'05'01,
+    0x00'10'00'07'00'15'03'01,
+    0x00'10'00'07'00'15'03'31,
+    0x00'10'00'07'00'15'08'01,
+    0x00'10'00'07'00'15'20'01,
+    0x00'10'00'07'00'16'03'01,
+    0x00'10'00'07'00'16'08'01,
+    0x00'10'00'07'00'16'20'01,
+    0x00'10'00'07'00'17'03'01,
+    0x00'10'00'07'00'18'03'01,
+    0x00'10'00'07'00'18'08'01,
+    0x00'10'00'07'00'18'20'01,
+    0x00'10'00'07'00'21'03'01,
+    0x00'11'00'07'00'22'04'01,
+    0x00'10'00'07'00'22'05'01,
+    0x00'10'00'07'00'23'20'01,
+    0x00'10'00'07'00'32'03'01,
+    0x00'10'00'07'00'32'04'01,
+    0x00'10'00'07'00'41'04'01,
+    0x00'10'00'07'00'51'03'01,
+    0x00'10'00'07'00'61'03'01,
+    0x00'10'00'07'00'71'03'01,
+    0x00'10'00'07'00'81'03'01,
+    0x00'11'00'06'07'12'02'01,
+    0x00'11'00'06'07'12'03'01,
+    0x00'10'00'06'07'12'04'01,
+    0x00'11'00'06'07'12'04'01,
+    0x00'10'00'06'07'12'05'01,
+    0x00'11'00'06'07'12'05'01,
+    0x00'10'00'06'07'21'0f'01,
+    0x00'11'00'06'07'21'0f'01,
+    0x00'11'00'06'06'12'04'01,
+    0x00'11'00'06'06'12'05'01,
+    0x00'11'00'06'06'13'03'01,
+    0x00'10'00'06'06'13'05'01,
+    0x00'11'00'06'06'13'05'01,
+    0x00'10'00'06'06'21'0f'01,
+    0x00'11'00'06'06'21'0f'01,
+    0x00'11'00'06'01'12'02'01,
+    0x00'11'00'06'01'12'04'01,
+    0x00'11'00'06'01'12'05'01,
+    0x00'11'00'06'01'12'20'01,
+    0x00'11'00'06'01'21'0f'01,
+    0x00'11'00'06'05'12'01'01,
+    0x00'11'00'06'05'12'03'01,
+    0x00'11'00'06'05'12'04'01,
+    0x00'10'00'06'05'12'05'01,
+    0x00'11'00'06'05'12'05'01,
+    0x01'11'00'06'05'14'01'04,
+    0x00'11'00'06'05'21'01'01,
+    0x00'10'00'06'05'21'0f'01,
+    0x00'11'00'06'05'21'0f'01,
+    0x00'10'00'06'00'12'03'01,
+    0x00'11'00'06'00'12'03'01,
+    0x00'10'00'06'00'12'04'01,
+    0x00'11'00'06'00'12'04'01,
+    0x01'11'00'06'00'13'03'01,
+    0x00'10'00'06'00'15'03'01,
+    0x00'10'00'06'00'15'04'01,
+    0x00'10'00'06'00'16'03'01,
+    0x00'10'00'06'00'16'05'01,
+    0x00'10'00'06'00'17'02'01,
+    0x00'10'00'06'00'17'04'01,
+    0x00'10'00'06'00'17'05'01,
+    0x00'10'00'06'00'21'0f'01,
+    0x00'11'00'06'00'21'0f'01,
+    0x00'10'00'06'00'22'03'01,
+    0x00'10'00'06'00'24'03'01,
+    0x00'10'00'06'00'24'04'01,
+    0x00'10'00'06'00'32'03'01,
+    0x00'10'00'06'00'42'03'01,
+    0x00'10'00'06'00'51'03'01,
+    0x00'10'00'06'00'61'03'01,
+    0x01'11'00'05'07'12'01'04,
+    0x00'11'00'05'07'12'02'01,
+    0x00'10'00'05'07'12'04'01,
+    0x00'11'00'05'07'13'04'01,
+    0x00'11'00'05'07'14'02'01,
+    0x00'10'00'05'07'15'04'01,
+    0x00'10'00'05'07'16'04'01,
+    0x00'10'00'05'07'16'05'01,
+    0x00'10'00'05'07'17'04'01,
+    0x00'10'00'05'07'17'05'01,
+    0x00'10'00'05'07'18'05'01,
+    0x00'10'00'05'07'41'01'01,
+    0x00'10'00'05'07'61'01'01,
+    0x00'10'00'05'07'81'01'01,
+    0x00'10'00'05'06'12'02'01,
+    0x00'11'00'05'06'14'05'01,
+    0x00'11'00'05'01'14'20'01,
+    0x00'11'00'05'05'12'01'01,
+    0x00'10'00'05'05'12'04'01,
+    0x00'11'00'05'05'21'01'01,
+    0x00'10'00'05'05'23'03'41,
+    0x00'11'00'05'05'41'01'01,
+    0x00'11'00'05'00'12'02'01,
+    0x00'11'00'05'00'13'05'01,
+    0x00'10'00'05'00'15'03'01,
+    0x00'10'00'05'00'15'04'01,
+    0x00'10'00'05'00'16'03'01,
+    0x00'10'00'05'00'16'04'01,
+    0x00'10'00'05'00'17'03'01,
+    0x00'10'00'05'00'18'03'01,
+    0x00'10'00'05'00'18'04'01,
+    0x00'10'00'05'00'22'03'01,
+    0x00'10'00'05'00'23'03'01,
+    0x00'10'00'05'00'24'03'01,
+    0x00'11'00'05'00'31'02'01,
+    0x00'10'00'05'00'61'03'01,
+    0x00'10'00'05'00'81'03'01,
+    0x00'10'00'00'0f'71'01'01,
+    0x00'11'00'00'07'12'02'01,
+    0x00'10'00'00'07'12'05'01,
+    0x01'11'00'00'07'13'03'01,
+    0x00'11'00'00'07'14'02'01,
+    0x00'10'00'00'07'15'04'01,
+    0x00'10'00'00'07'16'04'01,
+    0x00'10'00'00'07'16'05'01,
+    0x00'10'00'00'07'17'04'01,
+    0x00'10'00'00'07'17'05'01,
+    0x00'10'00'00'07'21'03'01,
+    0x00'11'00'00'07'21'05'01,
+    0x00'11'00'00'07'21'0f'01,
+    0x00'11'00'00'07'22'01'21,
+    0x00'10'00'00'07'22'03'01,
+    0x00'11'00'00'07'22'20'01,
+    0x00'10'00'00'07'23'04'01,
+    0x00'10'00'00'07'24'02'01,
+    0x00'10'00'00'07'24'04'01,
+    0x00'10'00'00'07'24'05'01,
+    0x00'10'00'00'07'24'0f'01,
+    0x00'10'00'00'07'31'01'01,
+    0x00'11'00'00'07'31'01'01,
+    0x00'11'00'00'07'31'02'01,
+    0x00'10'00'00'07'32'02'01,
+    0x00'11'00'00'07'41'02'01,
+    0x00'10'00'00'07'42'02'01,
+    0x00'10'00'00'07'71'02'01,
+    0x00'11'00'00'06'12'02'01,
+    0x00'10'00'00'06'21'05'01,
+    0x00'11'00'00'06'21'05'01,
+    0x00'11'00'00'06'21'0f'01,
+    0x00'11'00'00'06'21'20'01,
+    0x00'11'00'00'06'22'08'21,
+    0x00'10'00'00'06'22'20'01,
+    0x00'11'00'00'06'31'02'01,
+    0x00'11'00'00'06'31'04'01,
+    0x00'10'00'00'06'31'05'01,
+    0x00'11'00'00'06'31'05'01,
+    0x00'10'00'00'06'31'07'01,
+    0x00'11'00'00'06'31'07'01,
+    0x01'11'00'00'06'31'08'02,
+    0x00'11'00'00'01'12'02'01,
+    0x00'11'00'00'05'12'01'01,
+    0x00'10'00'00'05'12'04'01,
+    0x01'10'00'00'05'12'08'04,
+    0x00'11'00'00'05'22'01'01,
+    0x00'11'00'00'05'22'05'01,
+    0x00'11'00'00'05'22'0f'01,
+    0x00'11'00'00'05'22'20'01,
+    0x00'11'00'00'00'12'02'01,
+    0x00'10'00'00'00'12'04'01,
+    0x00'11'00'00'00'12'04'01,
+    0x00'11'00'00'00'12'08'01,
+    0x00'11'00'00'00'12'08'21,
+    0x00'11'00'00'00'13'08'01,
+    0x00'11'00'00'00'14'05'01,
+    0x01'11'00'00'00'14'08'02,
+    0x00'10'00'00'00'15'03'01,
+    0x00'10'00'00'00'15'04'01,
+    0x00'10'00'00'00'16'03'01,
+    0x00'10'00'00'00'16'04'01,
+    0x00'10'00'00'00'17'03'01,
+    0x00'10'00'00'00'17'04'01,
+    0x00'10'00'00'00'18'03'01,
+    0x00'10'00'00'00'18'04'01,
+    0x00'11'00'00'00'21'02'01,
+    0x00'10'00'00'00'21'03'01,
+    0x00'10'00'00'00'21'04'01,
+    0x00'10'00'00'00'21'05'01,
+    0x00'10'00'00'00'21'08'01,
+    0x00'10'00'00'00'21'20'01,
+    0x00'10'00'00'00'22'03'01,
+    0x00'10'00'00'00'22'04'01,
+    0x00'10'00'00'00'23'03'01,
+    0x00'10'00'00'00'23'04'01,
+    0x00'10'00'00'00'24'03'01,
+    0x00'10'00'00'00'24'04'01,
+    0x00'10'00'00'00'32'03'01,
+    0x00'10'00'00'00'32'04'01,
+    0x00'10'00'00'00'32'08'01,
+    0x00'10'00'00'00'32'20'01,
+    0x00'10'00'00'00'41'03'01,
+    0x00'10'00'00'00'41'04'01,
+    0x00'10'00'00'00'41'08'01,
+    0x00'10'00'00'00'41'20'01,
+    0x00'10'00'00'00'42'03'01,
+    0x00'10'00'00'00'42'04'01,
+    0x00'10'00'00'00'42'08'01,
+    0x00'10'00'00'00'42'20'01,
+    0x00'10'00'00'00'51'03'01,
+    0x00'10'00'00'00'51'04'01,
+    0x00'10'00'00'00'51'08'01,
+    0x00'10'00'00'00'51'20'01,
+    0x00'10'00'00'00'61'03'01,
+    0x00'10'00'00'00'61'08'01,
+    0x00'10'00'00'00'61'20'01,
+    0x00'10'00'00'00'71'03'01,
+    0x00'10'00'00'00'71'04'01,
+    0x00'10'00'00'00'71'08'01,
+    0x00'10'00'00'00'71'20'01,
+    0x01'10'00'00'00'81'03'04,
+    // END generated
+    // 8-bit integer operands to Int32 at half sync, 1x1x1
+    0x20'11'0e'0e'08'11'01'01,
+    0x20'11'1e'1e'08'11'01'01,
+};
+// clang-format on
+
+constexpr bool matmul_reinit_main_block(const MathFidelity fidelity, const bool half_sync, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle,
+                                        const bool l1_acc, const std::uint32_t nb)
+{
+    return !half_sync && throttle == 0 && !l1_acc && nb == 1 && kt == 1 && rt * ct == 2 && (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi2 && rt == 2));
+}
+
+// HiFi2 half sync blocks of two tiles and one K tile into Float16_b from Float16_b or Float32 operands: the keyed row form reads 7.4 cycles per call behind main's tile
+// form, for every accumulate mode, transpose and block count (the full tile cells of the perf_math_matmul sweep); the tiles of fewer than 32 rows read 28.4 behind
+constexpr bool matmul_half_two_tile_main_block(const MathFidelity fidelity, const bool half_sync, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                               const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle)
+{
+    const auto wide = [](const DataFormat f) { return f == DataFormat::Float16_b || f == DataFormat::Float32; };
+    return fidelity == MathFidelity::HiFi2 && half_sync && throttle == 0 && kt == 1 && rt * ct == 2 && out == DataFormat::Float16_b && wide(in1) && wide(in0);
+}
+
+constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                     const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    // Blocks of two tiles at full sync the keyed row form re-initialises slower than main's tile form (up to 25 cycles per init
+    // before every call) without reading faster: LoFi is bound by the unpack and the pack, which the row form does not relieve
+    if (matmul_reinit_main_block(fidelity, half_sync, rt, ct, kt, throttle, l1_acc, nb))
+    {
+        return true;
+    }
+    if (matmul_half_two_tile_main_block(fidelity, half_sync, in1, in0, out, rt, ct, kt, throttle))
+    {
+        return true;
+    }
+    if (!matmul_cell_digits(static_cast<std::uint32_t>(fidelity), 1) || !matmul_cell_digits(rt, 1) || !matmul_cell_digits(ct, 1) ||
+        !matmul_cell_digits(kt, 2) || !matmul_cell_digits(throttle, 1) || !matmul_cell_digits(nb, 1))
+    {
+        return false;
+    }
+    const std::uint64_t key = std::uint64_t(fidelity) << 60 | std::uint64_t(l1_acc) << 56 | std::uint64_t(half_sync) << 52 | std::uint64_t(fp32_acc) << 48 |
+                              std::uint64_t(in1) << 40 | std::uint64_t(in0) << 32 | std::uint64_t(out) << 24 | std::uint64_t(rt) << 20 |
+                              std::uint64_t(ct) << 16 | std::uint64_t(kt) << 8 | std::uint64_t(throttle) << 4 | nb;
+    for (const std::uint64_t c : matmul_grid_main_cells)
+    {
+        if (c == key)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+// Half sync cells with packer L1 accumulate where the fused section post (the post and the DEST flip in one stall) holds the packer longer than main's separate post.
+inline constexpr matmul_grid_main_cell matmul_unfused_post_cells[] = {
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 2, 1, 1, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 8, 0, true, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 6, 8, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 8, 0, true, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 3, 1, 1, 0, true, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 4, 3, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 8, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 8, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 1, 0, true, 2},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1, 0, false, 1},
+};
+
+// The 1x2 block of one K tile at LoFi from a Float32 in1 (the A key) and a Bfp8_b in0 (the B key) to Float16_b of full tiles: the per-tile pack reads 0.7 cycles ahead of the block run.
+constexpr bool matmul_pack_per_tile_cell(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                         const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32)
+{
+    return fidelity == MathFidelity::LoFi && half_sync && throttle == 0 && in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out == DataFormat::Float16_b && rt == 1 && ct == 2 &&
+           kt == 1 && r0 == 32 && c1 == 32;
+}
+
+// Blocks where the table's pack reads behind main's per-tile pack at one exact k (the cells of matmul_grid_main_cells that keep main's form): the per-tile pack
+struct matmul_pack_exact_cell
+{
+    MathFidelity fidelity;
+    std::uint8_t throttle;
+    DataFormat in_a;
+    DataFormat in_b;
+    DataFormat out;
+    std::uint8_t rt, ct, kt;
+};
+inline constexpr matmul_pack_exact_cell matmul_pack_exact_per_tile_cells[] = {
+    {MathFidelity::LoFi, 0, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Bfp8, 1, 4, 3},
+    {MathFidelity::LoFi, 2, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 4, 8},
+};
+
+constexpr bool matmul_pack_exact_per_tile(const MathFidelity fidelity, const std::uint32_t throttle, const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t rt,
+                                          const std::uint32_t ct, const std::uint32_t kt)
+{
+    for (const matmul_pack_exact_cell& c : matmul_pack_exact_per_tile_cells)
+    {
+        if (c.fidelity == fidelity && c.throttle == throttle && c.in_a == in_a && c.in_b == in_b && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Full sync blocks of 12 Float32 tiles with the packer L1 accumulate where the plain block through llk_pack_block reads behind main's per-tile pack (a 2x6 block of one K tile at
+// HiFi2 from Float32 and Bfp8_b: +148 cycles; a 6x2 block of 8 K tiles at LoFi from Float32: +62); the other 12 tile blocks of the family read 33 to 219 cycles ahead.
+constexpr bool matmul_pack_full_l1_per_tile(const MathFidelity fidelity, const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct,
+                                            const std::uint32_t kt)
+{
+    return out == DataFormat::Float32 && ((fidelity == MathFidelity::HiFi2 && in_a == DataFormat::Float32 && in_b == DataFormat::Bfp8_b && rt == 6 && ct == 2 && kt == 1) ||
+                                          (fidelity == MathFidelity::LoFi && in_a == DataFormat::Float32 && in_b == DataFormat::Float32 && rt == 2 && ct == 6 && kt == 8));
+}
+
+constexpr bool matmul_format_block_float(const DataFormat f)
+{
+    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4 || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2 || f == DataFormat::Bfp2_b;
+}
+
+// Two and three tile blocks of one K tile at LoFi and HiFi2 (cells below): the closed block through llk_pack_block (first block closed, then the W form) reads 4 to 10 cycles behind
+// main's per-tile pack on the sweep's production sequence; HiFi3 and HiFi4 keep it.
+constexpr bool matmul_pack_two_tile_per_tile(const MathFidelity fidelity, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
+{
+    return kt == 1 &&
+           // the block float outputs measured: not Bfp4 or Bfp2 (5 bit exponent)
+           ((rt * ct == 2 && (out == DataFormat::Bfp8 || out == DataFormat::Bfp8_b || out == DataFormat::Bfp4_b || out == DataFormat::Bfp2_b) &&
+             (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2)) ||
+            // LoFi blocks of two tiles to Float16 or Float16_b read 5 cycles behind main with the plain block (48 of 52 rows), to Float32 6 ahead; a three tile Bfp8_b block 12 behind
+            (rt * ct == 2 && fidelity == MathFidelity::LoFi && (out == DataFormat::Float16 || out == DataFormat::Float16_b)) ||
+            (rt * ct == 3 && fidelity == MathFidelity::LoFi && out == DataFormat::Bfp8_b));
+}
+
+// Blocks of three or more K tiles at LoFi and HiFi2 where the closed block pack read slower than the per-tile pack in the tt-llk sweep (any K, accumulate and
+// packer L1 accumulate).
+// clang-format off
+// fidelity | out | in_a | in_b | rt, ct
+inline constexpr std::uint64_t matmul_pack_per_tile_cells[] = {
+    0x0'07'05'06'17,
+    0x2'07'07'00'13,
+    0x2'07'07'00'21,
+    0x2'07'07'00'31,
+    0x2'07'07'00'51,
+    0x2'07'07'00'81,
+    0x2'07'06'00'13,
+    0x2'07'06'00'21,
+    0x2'07'06'00'41,
+    0x2'07'06'00'42,
+    0x2'07'06'00'51,
+    0x2'07'06'00'71,
+    0x2'07'05'00'71,
+    0x2'07'00'07'31,
+    0x2'07'00'06'12,
+    0x2'07'00'06'21,
+    0x2'07'00'06'31,
+    0x2'07'00'05'17,
+    0x2'07'00'05'18,
+    0x2'07'00'05'23,
+    0x2'07'00'05'24,
+    0x2'07'00'05'31,
+    0x2'07'00'00'17,
+    0x2'07'00'00'18,
+    0x2'07'00'00'23,
+    0x2'07'00'00'71,
+    0x2'06'07'07'13,
+    0x2'06'07'07'31,
+    0x2'06'07'07'41,
+    0x2'06'07'06'13,
+    0x2'06'07'06'21,
+    0x2'06'07'05'13,
+    0x2'06'07'00'13,
+    0x2'06'07'00'21,
+    0x2'06'06'07'21,
+    0x2'06'06'06'21,
+    0x2'06'06'05'41,
+    0x2'06'06'00'21,
+    0x2'06'06'00'31,
+    0x2'06'05'06'21,
+    0x2'06'05'06'31,
+    0x2'06'00'07'12,
+    0x2'06'00'06'21,
+    0x2'06'00'06'22,
+    0x2'06'00'06'31,
+    0x2'06'00'00'22,
+    0x2'06'00'00'41,
+    0x2'05'07'06'21,
+    0x2'05'07'05'13,
+    0x2'05'07'05'21,
+    0x2'05'07'00'21,
+    0x2'05'07'00'32,
+    0x2'05'07'00'41,
+    0x2'05'06'07'12,
+    0x2'05'06'07'21,
+    0x2'05'06'07'31,
+    0x2'05'06'06'12,
+    0x2'05'06'06'21,
+    0x2'05'06'05'21,
+    0x2'05'06'05'31,
+    0x2'05'06'00'12,
+    0x2'05'06'00'21,
+    0x2'05'05'07'12,
+    0x2'05'05'06'12,
+    0x2'05'05'06'21,
+    0x2'05'05'05'12,
+    0x2'05'05'05'21,
+    0x2'05'05'00'12,
+    0x2'05'05'00'21,
+    0x2'05'00'07'12,
+    0x2'05'00'07'14,
+    0x2'05'00'07'22,
+    0x2'05'00'07'23,
+    0x2'05'00'06'12,
+    0x2'05'00'06'21,
+    0x2'05'00'05'12,
+    0x2'05'00'05'13,
+    0x2'05'00'05'21,
+    0x2'05'00'00'12,
+    0x2'05'00'00'18,
+    0x2'05'00'00'21,
+    0x2'00'07'07'14,
+    0x2'00'07'07'31,
+    0x2'00'07'07'41,
+    0x2'00'07'00'32,
+    0x2'00'00'06'13,
+    0x0'07'07'07'13,
+    0x0'07'07'06'13,
+    0x0'07'07'06'31,
+    0x0'07'07'06'32,
+    0x0'07'07'06'41,
+    0x0'07'07'06'71,
+    0x0'07'07'05'13,
+    0x0'07'07'05'31,
+    0x0'07'07'05'41,
+    0x0'07'07'05'51,
+    0x0'07'07'00'13,
+    0x0'07'07'00'21,
+    0x0'07'07'00'31,
+    0x0'07'07'00'41,
+    0x0'07'07'00'81,
+    0x0'07'06'07'13,
+    0x0'07'06'07'21,
+    0x0'07'06'07'31,
+    0x0'07'06'07'32,
+    0x0'07'06'07'41,
+    0x0'07'06'06'13,
+    0x0'07'06'06'21,
+    0x0'07'06'06'31,
+    0x0'07'06'06'32,
+    0x0'07'06'06'41,
+    0x0'07'06'05'13,
+    0x0'07'06'05'21,
+    0x0'07'06'05'32,
+    0x0'07'06'05'41,
+    0x0'07'06'05'42,
+    0x0'07'06'05'61,
+    0x0'07'06'00'23,
+    0x0'07'06'00'31,
+    0x0'07'06'00'41,
+    0x0'07'06'00'42,
+    0x0'07'05'07'15,
+    0x0'07'05'07'16,
+    0x0'07'05'07'21,
+    0x0'07'05'07'22,
+    0x0'07'05'06'18,
+    0x0'07'05'06'23,
+    0x0'07'05'06'32,
+    0x0'07'05'06'42,
+    0x0'07'05'06'71,
+    0x0'07'05'06'81,
+    0x0'07'05'05'15,
+    0x0'07'05'05'16,
+    0x0'07'05'05'71,
+    0x0'07'05'00'15,
+    0x0'07'05'00'16,
+    0x0'07'05'00'21,
+    0x0'07'05'00'42,
+    0x0'07'05'00'71,
+    0x0'07'05'00'81,
+    0x0'07'00'07'12,
+    0x0'07'00'07'14,
+    0x0'07'00'07'16,
+    0x0'07'00'07'17,
+    0x0'07'00'07'18,
+    0x0'07'00'07'21,
+    0x0'07'00'07'22,
+    0x0'07'00'07'23,
+    0x0'07'00'07'31,
+    0x0'07'00'06'13,
+    0x0'07'00'06'16,
+    0x0'07'00'06'17,
+    0x0'07'00'06'18,
+    0x0'07'00'06'24,
+    0x0'07'00'06'71,
+    0x0'07'00'05'18,
+    0x0'07'00'05'21,
+    0x0'07'00'05'24,
+    0x0'07'00'05'31,
+    0x0'07'00'05'42,
+    0x0'07'00'00'14,
+    0x0'07'00'00'18,
+    0x0'07'00'00'21,
+    0x0'07'00'00'22,
+    0x0'07'00'00'41,
+    0x0'07'00'00'71,
+    0x0'07'00'00'81,
+    0x0'06'07'07'42,
+    0x0'06'07'06'32,
+    0x0'06'07'06'41,
+    0x0'06'07'05'22,
+    0x0'06'07'00'12,
+    0x0'06'07'00'22,
+    0x0'06'06'07'32,
+    0x0'06'06'07'41,
+    0x0'06'06'06'32,
+    0x0'06'06'06'41,
+    0x0'06'06'05'13,
+    0x0'06'06'05'21,
+    0x0'06'06'05'22,
+    0x0'06'06'05'31,
+    0x0'06'06'00'21,
+    0x0'06'06'00'23,
+    0x0'06'05'06'12,
+    0x0'06'05'06'14,
+    0x0'06'05'06'17,
+    0x0'06'05'06'22,
+    0x0'06'05'06'32,
+    0x0'06'05'06'41,
+    0x0'06'05'06'42,
+    0x0'06'05'06'71,
+    0x0'06'05'06'81,
+    0x0'06'05'00'13,
+    0x0'06'05'00'14,
+    0x0'06'05'00'15,
+    0x0'06'05'00'21,
+    0x0'06'05'00'24,
+    0x0'06'05'00'41,
+    0x0'06'05'00'42,
+    0x0'06'00'07'21,
+    0x0'06'00'07'32,
+    0x0'06'00'07'42,
+    0x0'06'00'05'14,
+    0x0'06'00'05'18,
+    0x0'06'00'05'22,
+    0x0'06'00'05'23,
+    0x0'06'00'05'24,
+    0x0'06'00'05'31,
+    0x0'06'00'05'41,
+    0x0'06'00'05'42,
+    0x0'06'00'00'12,
+    0x0'06'00'00'21,
+    0x0'06'00'00'22,
+    0x0'06'00'00'31,
+    0x0'06'00'00'81,
+    0x0'05'07'07'13,
+    0x0'05'07'07'41,
+    0x0'05'07'06'31,
+    0x0'05'07'06'32,
+    0x0'05'07'05'13,
+    0x0'05'07'05'14,
+    0x0'05'07'05'21,
+    0x0'05'07'05'22,
+    0x0'05'07'05'31,
+    0x0'05'07'05'41,
+    0x0'05'07'05'42,
+    0x0'05'07'00'21,
+    0x0'05'07'00'22,
+    0x0'05'07'00'41,
+    0x0'05'06'07'13,
+    0x0'05'06'07'21,
+    0x0'05'06'07'31,
+    0x0'05'06'07'41,
+    0x0'05'06'06'31,
+    0x0'05'06'06'32,
+    0x0'05'06'05'21,
+    0x0'05'06'05'23,
+    0x0'05'06'05'32,
+    0x0'05'06'05'41,
+    0x0'05'06'05'42,
+    0x0'05'06'00'23,
+    0x0'05'06'00'32,
+    0x0'05'05'07'12,
+    0x0'05'05'07'41,
+    0x0'05'05'06'15,
+    0x0'05'05'06'17,
+    0x0'05'05'06'18,
+    0x0'05'05'06'23,
+    0x0'05'05'06'32,
+    0x0'05'05'06'42,
+    0x0'05'05'06'81,
+    0x0'05'05'05'12,
+    0x0'05'05'05'22,
+    0x0'05'05'05'23,
+    0x0'05'05'05'31,
+    0x0'05'05'05'71,
+    0x0'05'05'00'14,
+    0x0'05'05'00'16,
+    0x0'05'05'00'18,
+    0x0'05'05'00'42,
+    0x0'05'00'07'12,
+    0x0'05'00'07'14,
+    0x0'05'00'07'16,
+    0x0'05'00'07'21,
+    0x0'05'00'07'22,
+    0x0'05'00'07'41,
+    0x0'05'00'06'32,
+    0x0'05'00'06'71,
+    0x0'05'00'06'81,
+    0x0'05'00'05'24,
+    0x0'05'00'05'51,
+    0x0'05'00'00'22,
+    0x0'05'00'00'41,
+    0x0'00'07'07'21,
+    0x0'00'07'07'41,
+    0x0'00'07'06'14,
+    0x0'00'07'06'22,
+    0x0'00'07'06'31,
+    0x0'00'07'06'32,
+    0x0'00'07'06'41,
+    0x0'00'07'05'31,
+    0x0'00'07'05'61,
+    0x0'00'07'00'21,
+    0x0'00'07'00'22,
+    0x0'00'07'00'31,
+    0x0'00'06'07'13,
+    0x0'00'06'07'31,
+    0x0'00'06'06'31,
+    0x0'00'06'06'32,
+    0x0'00'06'06'81,
+    0x0'00'06'05'12,
+    0x0'00'06'00'81,
+    0x0'00'05'07'41,
+    0x0'00'05'06'13,
+    0x0'00'05'06'17,
+    0x0'00'05'06'71,
+    0x0'00'05'06'81,
+    0x0'00'05'05'31,
+    0x0'00'05'00'31,
+    0x0'00'05'00'41,
+    0x0'00'00'07'12,
+    0x0'00'00'07'13,
+    0x0'00'00'07'14,
+    0x0'00'00'07'22,
+    0x0'00'00'07'23,
+    0x0'00'00'07'24,
+    0x0'00'00'07'31,
+    0x0'00'00'07'42,
+    0x0'00'00'06'21,
+    0x0'00'00'06'31,
+    0x0'00'00'06'41,
+    0x0'00'00'05'12,
+    0x0'00'00'05'13,
+    0x0'00'00'05'14,
+    0x0'00'00'05'31,
+    0x0'00'00'00'12,
+    0x0'00'00'00'13,
+    0x0'00'00'00'14,
+    0x0'00'00'00'31,
+    0x0'00'00'00'81,
+};
+// clang-format on
+
+constexpr bool matmul_pack_grid_format(const DataFormat f)
+{
+    return f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Float32;
+}
+
+constexpr bool matmul_pack_per_tile_block(const MathFidelity fidelity, const DataFormat out, const DataFormat in_a, const DataFormat in_b, const std::uint32_t rt, const std::uint32_t ct)
+{
+    if (!matmul_cell_digits(static_cast<std::uint32_t>(fidelity), 1) || !matmul_cell_digits(rt, 1) || !matmul_cell_digits(ct, 1))
+    {
+        return false;
+    }
+    const std::uint64_t key = std::uint64_t(fidelity) << 32 | std::uint64_t(out) << 24 | std::uint64_t(in_a) << 16 | std::uint64_t(in_b) << 8 | rt << 4 | ct;
+    for (const std::uint64_t c : matmul_pack_per_tile_cells)
+    {
+        if (c == key)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Cells of the LLK-only space (Float16, Bfp8 and Bfp2_b operands, throttle 2 and 3) where the block pack read slower than the per-tile pack
+// (any K and accumulate): the other blocks of the sweep take the block pack, which read faster on 3400 of 4100 of them.
+// clang-format off
+// fidelity | out | in_a | in_b | rt, ct, throttle
+inline constexpr std::uint64_t matmul_pack_llkx_per_tile_cells[] = {
+    0x2'0f'0f'0f'130,
+    0x2'0f'0f'07'130,
+    0x2'0f'0f'06'130,
+    0x2'0f'07'0f'310,
+    0x2'0f'07'05'130,
+    0x2'0f'06'05'130,
+    0x2'0f'05'0f'310,
+    0x2'0f'05'07'130,
+    0x2'0f'05'06'130,
+    0x2'0f'00'0f'180,
+    0x2'0f'00'06'120,
+    0x2'0f'00'05'310,
+    0x2'07'06'00'142,
+    0x2'07'00'07'222,
+    0x2'07'00'05'152,
+    0x2'07'00'00'222,
+    0x2'02'01'01'130,
+    0x2'02'01'01'310,
+    0x2'06'07'0f'130,
+    0x2'06'07'07'182,
+    0x2'06'07'06'212,
+    0x2'06'07'05'242,
+    0x2'06'06'0f'210,
+    0x2'06'06'06'222,
+    0x2'06'06'00'222,
+    0x2'06'05'05'222,
+    0x2'06'00'05'152,
+    0x2'01'02'02'210,
+    0x2'01'02'01'210,
+    0x2'01'06'06'210,
+    0x2'01'01'02'210,
+    0x2'01'01'01'210,
+    0x2'01'05'05'210,
+    0x2'01'00'00'210,
+    0x2'05'0f'06'210,
+    0x2'05'07'07'232,
+    0x2'05'07'06'213,
+    0x2'05'07'00'213,
+    0x2'05'02'02'130,
+    0x2'05'02'02'210,
+    0x2'05'02'01'210,
+    0x2'05'01'02'210,
+    0x2'05'01'01'210,
+    0x2'05'00'06'213,
+    0x2'05'00'05'123,
+    0x2'00'07'06'162,
+    0x2'00'07'05'142,
+    0x2'00'06'05'322,
+    0x2'00'06'00'182,
+    0x2'00'00'0f'160,
+    0x2'00'00'00'512,
+    0x2'00'00'00'513,
+    0x3'0f'07'07'130,
+    0x3'07'07'00'222,
+    0x3'07'06'00'122,
+    0x3'07'05'00'222,
+    0x3'07'00'06'242,
+    0x3'06'07'06'172,
+    0x3'06'07'05'122,
+    0x3'06'07'05'172,
+    0x3'06'07'00'182,
+    0x3'06'06'07'412,
+    0x3'06'06'05'212,
+    0x3'06'06'00'122,
+    0x3'06'05'07'212,
+    0x3'06'05'06'212,
+    0x3'06'05'05'122,
+    0x3'06'05'05'712,
+    0x3'06'05'00'142,
+    0x3'06'00'07'222,
+    0x3'06'00'05'212,
+    0x3'06'00'00'122,
+    0x3'05'06'07'152,
+    0x3'05'06'06'122,
+    0x3'05'05'06'412,
+    0x3'05'00'00'122,
+    0x3'00'07'0f'120,
+    0x3'00'07'00'213,
+    0x3'00'02'02'210,
+    0x3'00'02'01'210,
+    0x3'00'06'07'222,
+    0x3'00'06'00'232,
+    0x3'00'01'02'210,
+    0x3'00'01'01'210,
+    0x3'00'05'0f'120,
+    0x3'00'05'05'123,
+    0x3'00'00'06'232,
+    0x4'07'06'00'122,
+    0x4'07'06'00'222,
+    0x4'07'05'00'222,
+    0x4'07'00'05'712,
+    0x4'07'00'00'312,
+    0x4'06'07'07'142,
+    0x4'06'07'06'212,
+    0x4'06'07'00'412,
+    0x4'06'06'05'232,
+    0x4'06'05'07'122,
+    0x4'06'05'07'152,
+    0x4'06'05'06'122,
+    0x4'06'05'06'152,
+    0x4'06'05'00'142,
+    0x4'06'00'07'142,
+    0x4'06'00'06'142,
+    0x4'06'00'00'212,
+    0x4'05'07'07'152,
+    0x4'05'06'06'152,
+    0x4'05'05'06'212,
+    0x4'05'05'00'232,
+    0x4'05'00'06'212,
+    0x4'00'07'05'122,
+    0x4'00'06'06'162,
+    0x4'00'06'00'122,
+    0x4'00'06'00'212,
+    0x4'00'05'07'142,
+    0x4'00'05'07'612,
+    0x4'00'05'06'142,
+    0x4'00'05'05'122,
+    0x4'00'05'00'222,
+    0x4'00'00'06'212,
+    0x4'00'00'00'232,
+    0x0'0f'0f'07'180,
+    0x0'0f'0f'07'240,
+    0x0'0f'0f'06'160,
+    0x0'0f'0f'05'240,
+    0x0'0f'0f'00'240,
+    0x0'0f'05'0f'160,
+    0x0'0f'05'07'130,
+    0x0'0f'05'07'160,
+    0x0'0f'05'00'160,
+    0x0'0f'00'07'140,
+    0x0'0f'00'05'210,
+    0x0'0f'00'00'120,
+    0x0'0f'00'00'220,
+    0x0'07'0f'00'230,
+    0x0'07'07'0f'420,
+    0x0'07'07'07'212,
+    0x0'07'06'0f'130,
+    0x0'07'06'07'122,
+    0x0'07'06'05'313,
+    0x0'07'06'00'122,
+    0x0'07'05'00'212,
+    0x0'07'00'06'182,
+    0x0'02'02'01'410,
+    0x0'02'01'02'170,
+    0x0'02'01'02'410,
+    0x0'02'01'02'610,
+    0x0'06'06'07'122,
+    0x0'06'05'07'132,
+    0x0'06'05'06'132,
+    0x0'06'05'06'242,
+    0x0'06'00'00'222,
+    0x0'06'00'00'223,
+    0x0'01'02'01'210,
+    0x0'01'02'01'310,
+    0x0'01'02'01'610,
+    0x0'01'01'02'170,
+    0x0'01'01'02'180,
+    0x0'01'00'00'410,
+    0x0'05'06'0f'420,
+    0x0'05'06'05'222,
+    0x0'05'06'00'122,
+    0x0'05'01'02'180,
+    0x0'06'07'06'213,
+    0x0'05'05'0f'210,
+    0x0'05'00'06'122,
+    0x0'05'00'06'123,
+    0x0'05'00'06'233,
+    0x0'05'00'05'212,
+    0x0'00'0f'07'230,
+    0x0'00'0f'06'140,
+    0x0'00'0f'05'160,
+    0x0'00'07'06'122,
+    0x0'00'02'01'610,
+    0x0'00'06'0f'410,
+    0x0'00'06'07'182,
+    0x0'00'06'05'212,
+    0x0'00'01'02'130,
+    0x0'00'01'02'180,
+    0x0'00'01'01'180,
+    0x0'00'05'07'212,
+    0x0'00'05'06'212,
+    0x0'00'00'00'153,
+};
+// clang-format on
+
+constexpr bool matmul_pack_llkx_format(const DataFormat f)
+{
+    return f == DataFormat::Float16 || f == DataFormat::Float16_b || f == DataFormat::Float32 || f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
+}
+
+// The LLK-only space: a Float16, Bfp8 or Bfp2_b operand or output, or throttle 2 or 3 (the grid sweep covers the other blocks, which keep matmul_pack_form_base_k).
+constexpr bool matmul_pack_llkx_space(const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t throttle)
+{
+    const auto grid = [](const DataFormat f) { return f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Float32; };
+    return throttle == 2 || throttle == 3 || !grid(in_a) || !grid(in_b) || !grid(out);
+}
+
+constexpr bool matmul_pack_llkx_per_tile(const MathFidelity fidelity, const DataFormat out, const DataFormat in_a, const DataFormat in_b, const std::uint32_t rt, const std::uint32_t ct,
+                                         const std::uint32_t throttle)
+{
+    if (!matmul_cell_digits(static_cast<std::uint32_t>(fidelity), 1) || !matmul_cell_digits(rt, 1) || !matmul_cell_digits(ct, 1) ||
+        !matmul_cell_digits(throttle, 1))
+    {
+        return false;
+    }
+    const std::uint64_t key =
+        std::uint64_t(fidelity) << 36 | std::uint64_t(out) << 28 | std::uint64_t(in_a) << 20 | std::uint64_t(in_b) << 12 | rt << 8 | ct << 4 | throttle;
+    for (const std::uint64_t c : matmul_pack_llkx_per_tile_cells)
+    {
+        if (c == key)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages and small tiles). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
+// harness (matmul_pack_form of matmul_sweep.py mirrors it).
+constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, [[maybe_unused]] const bool dense_pages = false,
+                                 const bool l1_acc = false)
+{
+    const bool small = r0 < 32 || c1 < 32;
+    const bool block_float_out = matmul_format_block_float(out);
+    // the packer's L1 accumulate of a Float32 output reads and writes 64 byte rows: at half sync the block run reads slower than the per-tile pack
+    if (l1_acc && half_sync && out == DataFormat::Float32)
+    {
+        return 0;
+    }
+    if (rt * ct < 2)
+    {
+        return 0;
+    }
+    // small tiles too: the 2 tile closed block of the math only sweep reads 26 cycles behind main's per-tile pack at LoFi and HiFi2
+    if (half_sync && matmul_pack_two_tile_per_tile(fidelity, out, rt, ct, kt))
+    {
+        return 0;
+    }
+    // LoFi and HiFi2 blocks of three or more K tiles take the closed block, which reads faster than the per-tile pack, except in the cells of matmul_pack_per_tile_cells
+    if ((fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2) && half_sync && throttle == 0 && kt >= 3 && !small && matmul_pack_grid_format(in_a) && matmul_pack_grid_format(in_b) &&
+        matmul_pack_grid_format(out) && !matmul_pack_per_tile_block(fidelity, out, in_a, in_b, rt, ct))
+    {
+        return 2;
+    }
+    if (fidelity == MathFidelity::LoFi && kt > 1 && half_sync)
+    {
+        return 0;
+    }
+    if (matmul_pack_per_tile_cell(fidelity, half_sync, throttle, in_a, in_b, out, rt, ct, kt, r0, c1))
+    {
+        return 0;
+    }
+    // HiFi2 two-tile blocks of one K tile (not to a block float output), and one-row Bfp8_b blocks of five or more tiles from Float32 operands: the per-tile pack is on the critical path
+    if (half_sync && throttle == 0 && !small && out != DataFormat::Float32 && (in_a == DataFormat::Float16_b || in_a == DataFormat::Float32) && fidelity == MathFidelity::HiFi2 &&
+        ((kt == 1 && rt * ct == 2 && !block_float_out) || (in_a == DataFormat::Float32 && out == DataFormat::Bfp8_b && rt == 1 && ct >= 5)))
+    {
+        return block_float_out ? 2 : 1;
+    }
+    // small tiles packed to Float32 behind Float16_b operands: the closed block beats the per-tile pack at LoFi
+    if (half_sync && throttle == 0 && fidelity == MathFidelity::LoFi && kt == 1 && small && out == DataFormat::Float32 && in_a == DataFormat::Float16_b && ct >= 4)
+    {
+        return 2;
+    }
+    // small tiles packed to Float32 behind Bfp8_b operands: the closed block beats the per-tile pack at LoFi and HiFi2 half sync
+    if (half_sync && throttle == 0 && kt == 1 && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2) && small && in_a == DataFormat::Bfp8_b && out == DataFormat::Float32 &&
+        rt * ct >= 4)
+    {
+        return 2;
+    }
+    // a Bfp4_b output of two or more full tiles takes the closed block pack at half sync too, except against a Float32 operand
+    if (out == DataFormat::Bfp4_b && !small && in_a != DataFormat::Float32 && in_b != DataFormat::Float32)
+    {
+        return 2;
+    }
+    // half sync at HiFi2: one K tile of small tiles, or with a Float32 output, leaves the per-tile pack on the critical path
+    const bool half_block = kt == 1 && fidelity == MathFidelity::HiFi2 && (small || out == DataFormat::Float32);
+    if (half_sync && ((fidelity != MathFidelity::LoFi && !half_block) || throttle >= 4 || (small && out == DataFormat::Float32) ||
+                      ((in_a == DataFormat::Float32 || (in_b == DataFormat::Float32 && out == DataFormat::Bfp4_b)) && out != DataFormat::Float32 && rt * ct >= 3)))
+    {
+        return 0;
+    }
+    return (small || block_float_out) ? 2 : 1;
+}
+
+// Blocks of the math only sweep (dense_pages: the perf sweep of math without unpack) where the pack form of the table reads behind main's per-tile pack: the form of the cell instead
+// (0 per tile; the block run of a block float output writes wrong data), keyed on the operand and output formats, the block and the k steps (any accumulate).
+struct matmul_pack_dense_cell
+{
+    MathFidelity fidelity;
+    DataFormat out;
+    DataFormat in_a;
+    DataFormat in_b;
+    std::uint8_t rt, ct, kt;
+    std::uint8_t form;
+};
+inline constexpr matmul_pack_dense_cell matmul_pack_dense_cells[] = {
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 2, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 4, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 4, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 4, 0},
+};
+
+// -1 where the table's form stays
+constexpr int matmul_pack_dense_form(const MathFidelity fidelity, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct, const DataFormat in_a, const DataFormat in_b,
+                                     const DataFormat out)
+{
+    for (const matmul_pack_dense_cell& c : matmul_pack_dense_cells)
+    {
+        if (c.fidelity == fidelity && c.out == out && c.in_a == in_a && c.in_b == in_b && c.rt == rt && c.ct == ct && c.kt == kt)
+        {
+            return c.form;
+        }
+    }
+    return -1;
+}
+
+// Half sync cells where the closed block reads slower than main: its back to back tile writes win the L1 bank over the unpacker reads, so they take the
+// per-tile pack (generated from the measured rows)
+// clang-format off
+// fidelity, throttle | in_a | in_b | out | rt, ct | kt | l1_acc
+inline constexpr std::uint64_t matmul_pack_closed_off_cells[] = {
+    // BEGIN generated by gen_matmul_closed_off_cells.py closed_off
+    0x20'07'07'07'13'01'0,
+    0x22'06'07'06'16'01'0,
+    0x22'06'06'06'32'03'0,
+    0x22'06'05'06'12'08'0,
+    0x22'06'00'06'12'03'0,
+    0x22'05'07'06'12'08'0,
+    0x22'05'06'06'12'08'0,
+    0x22'05'00'06'12'03'0,
+    0x20'00'0f'06'22'01'0,
+    0x20'00'06'06'14'03'0,
+    0x20'00'06'06'14'08'0,
+    0x20'00'06'06'14'20'0,
+    0x30'07'07'07'21'01'0,
+    0x30'05'05'07'12'01'0,
+    0x30'05'05'07'21'01'0,
+    0x00'07'00'07'51'08'0,
+    0x00'07'00'07'71'03'0,
+    0x00'06'06'07'13'01'1,
+    0x00'06'06'06'17'04'0,
+    0x00'06'06'06'71'04'0,
+    0x00'06'05'00'42'04'0,
+    0x00'06'00'05'41'03'1,
+    0x00'05'06'06'13'03'0,
+    0x02'05'05'06'22'08'0,
+    0x00'05'05'06'32'03'0,
+    0x00'05'05'06'32'08'0,
+    0x00'05'05'06'32'20'0,
+    0x00'05'00'07'31'08'1,
+    0x00'05'00'06'23'03'0,
+    0x00'05'00'06'23'20'0,
+    0x00'00'0f'07'15'08'0,
+    0x00'00'07'0f'22'03'0,
+    0x00'00'07'07'13'08'0,
+    0x00'00'07'07'13'20'0,
+    0x00'00'07'07'15'08'0,
+    0x00'00'07'07'15'20'0,
+    0x00'00'06'07'12'03'0,
+    0x00'00'06'07'12'08'0,
+    0x00'00'06'07'12'20'0,
+    0x00'00'06'06'12'03'0,
+    0x00'00'06'06'12'08'0,
+    0x00'00'06'06'12'20'0,
+    0x00'00'06'06'81'03'0,
+    0x00'00'06'05'12'03'0,
+    0x00'00'06'05'12'08'0,
+    0x00'00'06'05'12'08'1,
+    0x00'00'06'05'12'20'0,
+    0x00'00'06'00'16'20'0,
+    0x00'00'06'00'17'03'0,
+    0x00'00'06'00'22'04'0,
+    0x00'00'06'00'71'03'0,
+    0x00'00'05'07'15'08'0,
+    0x00'00'05'07'15'20'0,
+    0x00'00'05'07'16'03'0,
+    0x00'00'05'07'16'08'0,
+    0x00'00'05'07'16'20'0,
+    0x00'00'05'07'17'03'0,
+    0x00'00'05'07'17'08'0,
+    0x00'00'05'07'17'20'0,
+    0x00'00'05'06'12'08'0,
+    0x02'00'05'06'12'08'0,
+    0x03'00'05'06'14'03'0,
+    0x00'00'05'05'13'03'1,
+    0x00'00'00'07'12'03'0,
+    0x00'00'00'07'12'04'0,
+    0x00'00'00'07'12'08'0,
+    0x00'00'00'07'12'20'0,
+    0x00'00'00'07'15'08'0,
+    0x00'00'00'07'15'20'0,
+    0x00'00'00'07'16'03'0,
+    0x00'00'00'07'16'08'0,
+    0x00'00'00'07'16'20'0,
+    0x00'00'00'07'17'03'0,
+    0x00'00'00'07'17'08'0,
+    0x00'00'00'07'17'20'0,
+    0x00'00'00'07'23'03'0,
+    0x00'00'00'07'23'08'0,
+    0x00'00'00'07'24'03'0,
+    0x00'00'00'07'24'08'0,
+    0x00'00'00'07'24'20'0,
+    0x02'00'00'06'21'08'0,
+    0x00'00'00'06'23'04'0,
+    0x00'00'00'06'41'03'0,
+    0x00'00'00'05'13'03'1,
+    0x00'00'00'05'16'08'1,
+    // END generated
+};
+// clang-format on
+
+constexpr bool matmul_pack_closed_off(const MathFidelity fidelity, const std::uint32_t throttle, const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t rt,
+                                      const std::uint32_t ct, const std::uint32_t kt, const bool l1_acc)
+{
+    if (!matmul_cell_digits(static_cast<std::uint32_t>(fidelity), 1) || !matmul_cell_digits(throttle, 1) || !matmul_cell_digits(rt, 1) ||
+        !matmul_cell_digits(ct, 1) || !matmul_cell_digits(kt, 2))
+    {
+        return false;
+    }
+    const std::uint64_t key = std::uint64_t(fidelity) << 48 | std::uint64_t(throttle) << 44 | std::uint64_t(in_a) << 36 | std::uint64_t(in_b) << 28 |
+                              std::uint64_t(out) << 20 | std::uint64_t(rt) << 16 | std::uint64_t(ct) << 12 | std::uint64_t(kt) << 4 | std::uint64_t(l1_acc);
+    for (const std::uint64_t c : matmul_pack_closed_off_cells)
+    {
+        if (c == key)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The output pack form of a matmul block: matmul_pack_form_base_k, and for the blocks it leaves on the per-tile pack at half sync (two or more full tiles, throttle 0, 2 or 3, no packer L1 accumulate,
+// Float and block float formats) the block pack of the LLK-only sweep: the plain block run, the closed block for a block float output, except the cells of matmul_pack_llkx_per_tile_cells.
+constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
+                                 const bool l1_acc = false)
+{
+    if (!half_sync && l1_acc && r0 == 32 && c1 == 32 && matmul_pack_full_l1_per_tile(fidelity, in_a, in_b, out, rt, ct, kt))
+    {
+        return 0;
+    }
+    if (half_sync && r0 == 32 && c1 == 32 && !l1_acc &&
+        (matmul_pack_exact_per_tile(fidelity, throttle, in_a, in_b, out, rt, ct, kt) || matmul_pack_two_tile_per_tile(fidelity, out, rt, ct, kt)))
+    {
+        return 0;
+    }
+    if (dense_pages && half_sync && r0 == 32 && c1 == 32 && !l1_acc && throttle == 0)
+    {
+        const int dense = matmul_pack_dense_form(fidelity, kt, rt, ct, in_a, in_b, out);
+        if (dense >= 0)
+        {
+            return dense;
+        }
+    }
+    int form = matmul_pack_form_base_k(fidelity, half_sync, throttle, kt, rt, ct, in_a, in_b, out, r0, c1, dense_pages, l1_acc);
+    if (form == 0 && half_sync && rt * ct >= 2 && r0 == 32 && c1 == 32 && !l1_acc && (throttle == 0 || throttle == 2 || throttle == 3) && matmul_pack_llkx_format(in_a) && matmul_pack_llkx_format(in_b) &&
+        matmul_pack_llkx_format(out) && matmul_pack_llkx_space(in_a, in_b, out, throttle) && !matmul_pack_llkx_per_tile(fidelity, out, in_a, in_b, rt, ct, throttle))
+    {
+        form = matmul_format_block_float(out) ? 2 : 1;
+    }
+    if (form == 2 && half_sync && matmul_pack_closed_off(fidelity, throttle, in_a, in_b, out, rt, ct, kt, l1_acc))
+    {
+        return 0;
+    }
+    return form;
+}
+
+
+// Half sync single K tile blocks of Float32 output from Bfp8 operands (5-bit exponent) where the half sync end fold of the HiFi phase end reads slower than main's separate phase end.
+inline constexpr matmul_grid_main_cell matmul_end_fold_off_cells[] = {
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 3, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 8, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 8, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+};
+
+constexpr bool matmul_end_fold_off(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                   const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_end_fold_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Cells where the half sync DEST flip drops its base write (the next op sets it) instead of keeping it, which the keep rule below applies to every Bfp8_b output at LoFi and HiFi2: the
+// 2x4 block of a Float16_b in1 against a Bfp4_b in0 at throttle 2 reads 0.5 cycles faster without the write.
+inline constexpr matmul_grid_main_cell matmul_keep_flip_off_cells[] = {
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 4, 8, 2, false, 1},
+};
+
+constexpr bool matmul_keep_flip_off(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                    const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_keep_flip_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether the half sync DEST flip of a block keeps its base write (tile_regs_commit keep_flip_write): a Bfp8_b output below HiFi3 reads slower without it, except the cells above.
+constexpr bool matmul_keep_flip_write(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                      const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    return out == DataFormat::Bfp8_b && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2) &&
+           !matmul_keep_flip_off(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kt, throttle, l1_acc, nb);
+}
+
+// matmul_half_end_fold for a block whose shape is known: the cells of matmul_end_fold_off_cells skip the fold.
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0, DataFormat in1, std::uint32_t rt_dim, std::uint32_t ct_dim,
+          std::uint32_t kt_dim>
+constexpr bool matmul_half_end_fold_block()
+{
+    return matmul_half_end_fold<math_fidelity, dst_sync, fp32_dest, kt_per_section, out_format, in0, in1>() &&
+           !matmul_end_fold_off(math_fidelity, dst_sync == DstSync::SyncHalf, fp32_dest, in1, in0, out_format, rt_dim, ct_dim, kt_dim);
+}
+
+// Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write (the fused post and the skipped base write read slower).
+inline constexpr matmul_grid_main_cell matmul_main_flip_cells[] = {
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 7, 3, 0, false, 1},
+};
+
+constexpr bool matmul_main_flip(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false,
+                                const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_main_flip_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// LoFi fp32 DEST half sync blocks of a plain call that keep main's section end in a matmul kernel: the base write ahead of the drain stall
+// read 0.2-1.5 cy/block slower on them
+struct matmul_section_end_cell
+{
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t rt, ct, kt;
+};
+
+inline constexpr matmul_section_end_cell matmul_main_section_end_cells[] = {
+    {DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 2},
+    {DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, 4, 1, 2},
+    {DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 2},
+    {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 3, 1, 2},
+    {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 1, 2, 2},
+};
+
+// Blocks that unpack per row (no hoisted row invariants) where a kernel names the block (matmul_block's block keys): there the
+// shorter unpack call only moved the hand-off and lost against main (LoFi half sync, abl9/abl10).
+inline constexpr matmul_grid_main_cell matmul_unhoist_cells[] = {
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 3, 1, 0, false, 1},
+};
+
+constexpr bool matmul_unhoist_cell(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_acc,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt)
+{
+    for (const matmul_grid_main_cell& c : matmul_unhoist_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt &&
+            c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// HiFi2 half sync blocks with a Float32 operand and a Bfp8_b output keep main's section end at any block: there the RISC-pushed
+// base write holds the post (4-16 cy per section)
+constexpr bool matmul_main_section_end_class(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t throttle = 0,
+    const bool l1_acc            = false)
+{
+    return fidelity == MathFidelity::HiFi2 && half_sync && out == DataFormat::Bfp8_b && (in0 == DataFormat::Float32 || in1 == DataFormat::Float32) &&
+           throttle == 0 && !l1_acc;
+}
+
+constexpr bool matmul_main_section_end(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_acc,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle = 0,
+    const bool l1_acc            = false)
+{
+    if (matmul_main_section_end_class(fidelity, half_sync, in1, in0, out, throttle, l1_acc))
+    {
+        return true;
+    }
+    if (fidelity != MathFidelity::LoFi || !half_sync || !fp32_acc || throttle != 0 || l1_acc)
+    {
+        return false;
+    }
+    for (const matmul_section_end_cell& c : matmul_main_section_end_cells)
+    {
+        if (c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+constexpr bool matmul_unfused_post(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                   const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false,
+                                   const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_unfused_post_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Tiny tile cells (in0 height under 32) where the keyed forms and the tiny module's extra keys read slower than main's: they keep main's unpack and math form.
+struct matmul_tiny_main_cell
+{
+    MathFidelity fidelity;
+    bool half_sync;
+    bool fp32_acc;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t r0, c1, rt, ct, kt;
+};
+
+inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 8, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 8, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 4, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 8, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 4, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 8, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 16, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 32, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 8, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 32, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 8, 16, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 16, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 8, 32, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 32, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 8, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 8, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 16, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 16, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 16, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 16, 1, 4, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 16, 1, 4, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 4, 4},
+};
+
+constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                     const std::uint32_t r0, const std::uint32_t c1, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
+{
+    if (fidelity == MathFidelity::HiFi2 && half_sync && r0 < 32 && c1 == 32 && kt == 1 && rt * ct == 2 && out == DataFormat::Float16_b)
+    {
+        return true;
+    }
+    for (const matmul_tiny_main_cell& c : matmul_tiny_main_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.r0 == r0 && c.c1 == c1 && c.rt == rt &&
+            c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The k key a block runs its forms by: 0, main's unpack and math form (the opt-ins keep their own rules), where the block is one of the grid cells above; the
+// caller's k steps per section otherwise.
+template <MathFidelity math_fidelity, int sync, bool dest_acc, std::uint32_t kt_per_section, std::uint32_t kt_dim, DataFormat in0, DataFormat in1, DataFormat out_format,
+          std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false, std::uint32_t nb = 1, std::uint32_t in0_r_dim = 32, std::uint32_t in1_c_dim = 32>
+constexpr std::uint32_t matmul_form_k()
+{
+    return (matmul_grid_main_form(math_fidelity, sync == 0, dest_acc, in1, in0, out_format, rt_dim, ct_dim, kt_dim, throttle, l1_acc, nb) ||
+            matmul_tiny_main_form(math_fidelity, sync == 0, dest_acc, in1, in0, out_format, in0_r_dim, in1_c_dim, rt_dim, ct_dim, kt_dim))
+               ? 0
+               : kt_per_section;
+}
+
+// Cells that take a form of their own whatever the table says, keyed on the input format and the block shape (the table keys the output
+// format, which cells of different input formats share): form 'R' is the hoisted rows form, 'h' the tile MOP with the hoisted unpack. The
+// kernels key a forced cell as Bfp2 ('R'), Bfp2_b ('h') or Bfp4 ('r'), which matmul_default_form reads as that form (none is a ttnn type).
+struct matmul_forced_form_cell
+{
+    MathFidelity fidelity;
+    int sync; // 0 half, 1 full
+    std::uint32_t min_k;
+    std::uint32_t max_k;
+    bool fp32_dest;
+    DataFormat in;
+    DataFormat out;
+    DataFormat pack;
+    std::uint32_t min_w; // block width (ct) in tiles
+    std::uint32_t max_w;
+    std::uint32_t min_h; // block height (rt) in tiles
+    bool wide;           // width at least the height: the in1 side is reused
+    char form;
+    bool several = false; // only with several inner blocks (the sweeps run one)
+    int sections = 0;     // 0 any, 1 only a kernel of one DEST section (what the sweeps run), 2 only several sections
+    std::uint32_t max_h = 0xFFFF; // block height (rt) in tiles, at most
+    bool in0_only = false;        // the input format must be that of in0, not in1
+};
+
+inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
+    // LoFi, 16-bit DEST, one DEST section, a 1x8 block of a Float16_b in1 against a Float32 in0 over 8 k steps to Bfp8_b (static throttle 3): the table's form
+    // reads 0.28 cycles behind main, the hoisted tile form 0.38 ahead
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 8, 8, 1, true, 'h', false, 1, 1, true},
+    // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles
+    // behind main at half sync
+    // and 10 at full sync (the 1x6 and 1x8 blocks gain from it); the hoisted rows form reads 4.9 cycles ahead of main at half sync and 37 at full sync
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
+    {MathFidelity::LoFi, 1, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
+    // Float32 to Bfp8_b at LoFi, one k step, 32-bit DEST: the 2x2 block reads 1.5 cycles behind main on the per row unpack; the four tile row and
+    // column blocks lose with the hoisted form
+    // (one DEST section only: with 4 sections the hoisted form reads 0.7 cycles behind main on the math sweep)
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 0xFFFF, 2, false, 'R', false, 1},
+    // Bfp8_b to Float32 at LoFi, two to four k steps, 16-bit DEST: the rows form reads up to 5 cycles under main from a 4 tile width (the
+    // tile form leaves 0.14 to 0.19 over); the 3 tile width takes the hoisted tile form; the tall blocks keep the tile form
+    {MathFidelity::LoFi, 0, 2, 4, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 0xFFFF, 1, true, 'R'},
+    {MathFidelity::LoFi, 0, 2, 4, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 3, 1, true, 'h'},
+    // Bfp8_b to Float32 at HiFi4, one k step, 16-bit DEST: the hoisted tile form on the wide blocks (the tall blocks lose with it)
+    // (one DEST section: the blocks the sweeps run; several sections: only from 6 tiles wide, where ttnn gains 24 percent, the narrower ones read 0.3 cycles
+    // behind with 4 sections)
+    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 0xFFFF, 1, true, 'h', false, 1},
+    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 6, 0xFFFF, 1, true, 'h', false, 2},
+    // Float16_b and Bfp8_b to Float32 at HiFi2 and HiFi4, one k step per inner block, 16-bit DEST: the 2x4 block (the row MOP leaves Float32 from a 16-bit
+    // DEST on the tile form) reads 0.7 to 1.4 percent faster in ttnn with the hoisted rows form, 8 and 32 inner blocks
+    {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
+    {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
+    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
+    // The rows form without the hoisted unpack ('r'; the kernels' own row MOP stays) where the hoisted unpack of the table's form reads 0.1 to 2 cycles slower
+    // than
+    // main on the tt-llk dyn harness (equal in0 and in1 format, ABBA over its four throttle modes) and the unhoisted one does not; the single core ttnn cells
+    // among
+    // them (Bfp8_b HiFi2 4x2, Float16_b HiFi2 8x1 at half sync) read the same either way
+    // Bfp8_b HiFi2, a 4 by 2 block over 2 to 32 k steps, at half and full sync
+    {MathFidelity::HiFi2, 0, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
+    {MathFidelity::HiFi2, 1, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
+    // Bfp8_b to Float32 at HiFi2, half sync, one k step, 16-bit DEST, a single tile: the table's form reads 0.6 cycles behind main
+    {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 1, 1, false, 'r', false, 0, 1, true},
+    // Float16_b HiFi4 at full sync over 32 k steps, 1x1, 1x8 and 2x4 blocks; at half sync over 2 to 4 k steps, a single tile
+    {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 1, false, 'r', false, 0, 1},
+    {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
+    {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 4, false, 'r', false, 0, 4},
+    {MathFidelity::HiFi4, 0, 2, 4, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 1, false, 'r', false, 0, 1},
+    // Float16_b HiFi2 at half sync over 2 to 4 k steps, an 8 tile column; LoFi over 32 k steps, 8x1 and 4x2 blocks
+    {MathFidelity::HiFi2, 0, 2, 4, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
+    {MathFidelity::LoFi, 0, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
+    {MathFidelity::LoFi, 0, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 4, false, 'r', false, 0, 4},
+    // LoFi, 16-bit DEST, one DEST section, a 2x2 block of 8 k steps with a Float16_b input to Bfp8_b: the hoisted tile form reads 16 to 185 cycles ahead of the
+    // per-row unpack on the twins, and takes the static throttle 2 cell from 0.91 to 0.28 behind main
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 2, true, 'h', false, 1, 2},
+    // LoFi, 32-bit DEST, a 2x2 block of one k step of a Float32 input to Float16_b (static throttle 2): the per-row unpack reads 0.30 cycles behind main, the
+    // hoisted tile form 0.08 ahead
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 2, true, 'h', false, 1, 2},
+    // LoFi, 32-bit DEST, a 2x1 block of one k step against a Bfp8_b in0 to Bfp4_b: the table's hoisted rows form reads 0.4 cycles behind main at every code
+    // position, the hoisted tile form 0.4 ahead
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 1, 2, false, 'h', false, 1, 2, true},
+};
+
+// Cells where the ttsync unpack init stall (about 11 cycles per kernel) costs more than its loop gain (in1 = A, in0 = B, as the main rows); matmul_prod_keys.py
+// _TTSYNC_OFF is the twin
+struct matmul_ttsync_off_cell
+{
+    MathFidelity fidelity;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint32_t ct, rt, kt;
+};
+
+inline constexpr matmul_ttsync_off_cell matmul_ttsync_off_cells[] = {
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 3},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4},
+    {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
+    // LoFi half sync Bfp8_b 1x2 block of 2 k steps: 0.45 slower than the polling production block at 10 of 10 points (G2 census)
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 2},
+    // LoFi half sync 32-bit DEST Tf32 output 1x2 blocks of 2 k steps: slower at 10 of 10 points (G2 census)
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Tf32, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Tf32, 2, 1, 2},
+};
+
+// Whether the ttsync unpack (unpack_auto_ttsync) is kept for a block: the cells where it measured 0 slower than the context poll (matmul_prod_keys.py
+// matmul_unpack_ttsync_cell is the twin); an opt-in on any other block runs the default unpack.
+constexpr bool matmul_unpack_ttsync_cell(
+    const MathFidelity fid,
+    const bool half,
+    const bool f32_acc,
+    const DataFormat in_f,
+    const DataFormat in_b,
+    const DataFormat out_f,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt)
+{
+    for (const matmul_ttsync_off_cell& c : matmul_ttsync_off_cells)
+    {
+        if (c.fidelity == fid && c.in1 == in_f && c.in0 == in_b && c.out == out_f && c.ct == ct && c.rt == rt && c.kt == kt)
+        {
+            return false;
+        }
+    }
+    const bool one   = rt == 1 && ct == 1;
+    const bool hi_lo = fid == MathFidelity::HiFi2 || fid == MathFidelity::LoFi;
+    bool take        = false;
+    if (kt >= 5)
+    {
+        take = one && hi_lo;
+    }
+    else if (kt >= 2)
+    {
+        take = (one && (hi_lo || (fid == MathFidelity::HiFi3 && half)) &&
+                !(fid == MathFidelity::HiFi3 && in_f == DataFormat::Float16_b && out_f == DataFormat::Float32 && !f32_acc)) ||
+               (fid == MathFidelity::LoFi && half && rt <= 2 && ct <= 2);
+        if (fid == MathFidelity::LoFi && rt == 1 && ct == 2 && in_f == DataFormat::Float32 && out_f == DataFormat::Float16_b)
+        {
+            take = false;
+        }
+        if (rt == 2 && ct == 2 && in_f == DataFormat::Float32)
+        {
+            take = false;
+        }
+        if (fid == MathFidelity::LoFi && rt == 2 && ct == 1 && in_f == DataFormat::Float32 && out_f == DataFormat::Float32 && !f32_acc)
+        {
+            take = false;
+        }
+    }
+    else
+    {
+        take = one && half && hi_lo && !(in_f == DataFormat::Float32 && out_f == DataFormat::Float32 && !f32_acc) &&
+               !(fid == MathFidelity::HiFi2 && in_f == DataFormat::Bfp8_b && out_f == DataFormat::Float32 && f32_acc) &&
+               !(fid == MathFidelity::HiFi2 && in_f == DataFormat::Float16_b && out_f == DataFormat::Float32 && !f32_acc);
+    }
+    return take;
+}
+
+// A block of compile-time (rt, ct, kt) that runs the ttsync unpack in a kernel whose class rule (matmul_kernel_ttsync) polls: two or more k
+// steps, its cell kept the ttsync unpack (matmul_unpack_ttsync_cell) for every format the kernel holds as the output, and it is not a main
+// form cell. A
+// LoFi kernel that mixes a 32-bit operand with a fast one stays on the class rule: its polling calls pick the held operand at run time.
+// formats: every CB format of the kernel (255 = no CB)
+template <std::size_t N>
+constexpr bool matmul_kernel_ttsync_block(
+    const MathFidelity fidelity,
+    const bool full_sync,
+    const bool fp32_dest,
+    const std::uint8_t (&formats)[N],
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle = 0,
+    const bool l1_acc            = false)
+{
+    // a LoFi block of two rows and two columns polls: its ttsync unpack read 6 to 7 cy/block slower than main (census 65c1c, six keys)
+    if (fidelity == MathFidelity::LoFi && rt >= 2 && ct >= 2)
+    {
+        return false;
+    }
+    // one k step, and the Bfp8_b 3x1 block of two, measured slower than the polling production block (G2 census, 10 of 10 points)
+    // the LoFi class rule serves one-tile blocks only (llk_matmul_unpack_ttsync), so a larger LoFi block keeps its cell pick
+    const bool class_serves = matmul_kernel_ttsync(fidelity, full_sync, fp32_dest, formats) && !(fidelity == MathFidelity::LoFi && !(rt == 1 && ct == 1));
+    if (class_serves || rt == 0 || ct == 0 || kt < 2 || (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && rt == 3 && ct == 1 && kt == 2))
+    {
+        return false;
+    }
+    // a LoFi call that pairs a 32-bit operand with a fast one polls at half sync: it holds its operand by run time (matmul_api_reuse_dir
+    // 3), and where that resolves to direction 0 its ttsync unpack read slower than main (F32 x F16b -> Tf32 1x1x2 +0.28, census 65c1c)
+    if (fidelity == MathFidelity::LoFi && !full_sync && matmul_kernel_lofi_mix(formats))
+    {
+        return false;
+    }
+    if (fidelity == MathFidelity::LoFi && full_sync)
+    {
+        bool wide = false, fast = false;
+        for (const std::uint8_t f : formats)
+        {
+            wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
+            fast = fast || matmul_format_streams_fast(static_cast<DataFormat>(f), throttle != 0);
+        }
+        if (wide && fast)
+        {
+            return false;
+        }
+    }
+    for (const std::uint8_t f : formats)
+    {
+        if (f == 0xff)
+        {
+            continue;
+        }
+        const DataFormat out = static_cast<DataFormat>(f);
+        if (!matmul_unpack_ttsync_cell(fidelity, !full_sync, fp32_dest, in1, in0, out, rt, ct, kt) ||
+            matmul_grid_main_form(fidelity, !full_sync, fp32_dest, in1, in0, out, rt, ct, kt, throttle, l1_acc))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w, bool several_blocks = false, std::uint32_t dest_sections = 1>
+constexpr char matmul_forced_form()
+{
+    for (const matmul_forced_form_cell& c : matmul_forced_form_cells)
+    {
+        if (c.fidelity == math_fidelity && c.sync == sync && kt_per_section >= c.min_k && kt_per_section <= c.max_k && c.fp32_dest == fp32_dest &&
+            c.out == out_format && c.pack == pack_format && (c.in == in0 || c.in == in1) && (!c.in0_only || c.in == in0) && w >= c.min_w && w <= c.max_w && h >= c.min_h && h <= c.max_h && (!c.wide || w >= h) && (!c.several || several_blocks) &&
+            (c.sections == 0 || (c.sections == 1 ? dest_sections == 1 : dest_sections > 1)))
+        {
+            return c.form;
+        }
+    }
+    return 0;
+}
+
+// The key a kernel hands the table for a forced form
+constexpr DataFormat matmul_forced_form_key(const char form)
+{
+    return form == 'R' ? DataFormat::Bfp2 : (form == 'h' ? DataFormat::Bfp2_b : (form == 'r' ? DataFormat::Bfp4 : DataFormat::Invalid));
+}
+
+// matmul_default_form of run-time arguments
+constexpr char matmul_default_form_of(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint32_t kt_per_section, const DataFormat out)
+{
+    const int fmt = out == DataFormat::Float16_b ? 0
+                    : out == DataFormat::Float16 ? 1
+                    : out == DataFormat::Float32 ? 2
+                    : out == DataFormat::Bfp8_b  ? 3
+                    : out == DataFormat::Bfp4_b  ? 4
+                                                 : -1;
+    if (kt_per_section == 0 || fmt < 0)
+    {
+        return '.';
+    }
+    const std::uint32_t k_class = kt_per_section == 1 ? 0 : (kt_per_section <= 4 ? 1 : 2);
+    const std::uint32_t fid     = fidelity == MathFidelity::LoFi ? 0 : fidelity == MathFidelity::HiFi2 ? 1 : fidelity == MathFidelity::HiFi3 ? 2 : 3;
+    return matmul_forms_table[((k_class * 4 + fid) * 2 + (full_sync ? 1 : 0)) * 2 + (fp32_dest ? 1 : 0)][fmt];
+}
+
+// The output key of a plain call whose ct and rt are run-time and kt (the k steps per DEST section) constant, which names no output CB.
+// Every CB format of the kernel (formats: unpack_src_format) must key the same table form, so the form is the real output's; a Float32 CB
+// under a 32-bit DEST packs as Tf32, which the table keeps on main's form. The output candidates are the formats other than in0's and
+// in1's, or those two where no other is declared. Invalid (main's form) where the forms differ, where the shared form is main's, and on
+// the classes where a block the kernel may run is, for a candidate output, a main-form cell (matmul_grid_main_form, matmul_tiny_main_form)
+// or a forced-form cell (matmul_forced_form_cells), which the plain call cannot tell apart at compile time.
+template <std::size_t N>
+constexpr DataFormat matmul_fe_form_out(
+    const MathFidelity fidelity,
+    const bool full_sync,
+    const bool fp32_dest,
+    const std::uint32_t kt,
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint8_t (&formats)[N],
+    const std::uint32_t throttle = 0)
+{
+    // measured on production minimal_matmul (ttnn device-only): LoFi blocks of 5 k steps or more into Float16_b gain; HiFi2 to HiFi4 keep
+    // main's math form after the phase elision and the other classes did not gain
+    if (fidelity != MathFidelity::LoFi || kt < 5 || throttle != 0)
+    {
+        return DataFormat::Invalid;
+    }
+    bool other = false;
+    for (const std::uint8_t b : formats)
+    {
+        other = other || (b != 0xff && static_cast<DataFormat>(b) != in0 && static_cast<DataFormat>(b) != in1);
+    }
+    const std::uint32_t max_tiles = full_sync ? (fp32_dest ? 8 : 16) : (fp32_dest ? 4 : 8);
+    char form                     = 0;
+    DataFormat out                = DataFormat::Invalid;
+    for (const std::uint8_t b : formats)
+    {
+        const DataFormat f = static_cast<DataFormat>(b);
+        if (b == 0xff)
+        {
+            continue;
+        }
+        const char g = (fp32_dest && f == DataFormat::Float32) ? '.' : matmul_default_form_of(fidelity, full_sync, fp32_dest, kt, f);
+        if (g == '.' || (form != 0 && g != form))
+        {
+            return DataFormat::Invalid;
+        }
+        form = g;
+        if (other && (f == in0 || f == in1))
+        {
+            continue;
+        }
+        out = f;
+        for (std::uint32_t rt = 1; rt <= max_tiles; rt++)
+        {
+            for (std::uint32_t ct = 1; rt * ct <= max_tiles; ct++)
+            {
+                for (const bool l1_acc : {false, true})
+                {
+                    if (matmul_grid_main_form(fidelity, !full_sync, fp32_dest, in1, in0, f, rt, ct, kt, 0, l1_acc) ||
+                        matmul_tiny_main_form(fidelity, !full_sync, fp32_dest, in1, in0, f, 32, 32, rt, ct, kt))
+                    {
+                        return DataFormat::Invalid;
+                    }
+                }
+            }
+        }
+        for (const matmul_forced_form_cell& c : matmul_forced_form_cells)
+        {
+            if (c.fidelity == fidelity && c.sync == (full_sync ? 1 : 0) && kt >= c.min_k && kt <= c.max_k && c.fp32_dest == fp32_dest && c.out == f && c.pack == f &&
+                (c.in == in0 || (!c.in0_only && c.in == in1)) && c.min_w * c.min_h <= max_tiles)
+            {
+                return DataFormat::Invalid;
+            }
+        }
+    }
+    return out == DataFormat::Float16_b ? out : DataFormat::Invalid;
+}
+
+// LoFi half sync rows of 8 tiles, one K tile, a narrow in1 into Bfp8 or Float16_b: the row MOP stretches the SrcA unpack, 1.7 to 2.7 cycles per block
+constexpr bool matmul_lofi_row8_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    const bool narrow_in1 = in1 == DataFormat::Bfp8 || in1 == DataFormat::Bfp8_b || in1 == DataFormat::Bfp4_b;
+    const bool out_8_16   = out == DataFormat::Bfp8 || out == DataFormat::Bfp8_b || out == DataFormat::Float16_b;
+    return fidelity == MathFidelity::LoFi && half_sync && !fp32_dest && throttle == 0 && kt == 1 && rt == 1 && ct == 8 && narrow_in1 && out_8_16;
+}
+
+// HiFi4 half sync 32-bit DEST single tiles over 4 K tiles of Float16_b or Bfp8_b into Float32: the row MOP's ADDR_MOD_6 write and restore
+// around each call read 3.7 cycles per block behind the tile MOP
+constexpr bool matmul_hifi4_tile_k4_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    return fidelity == MathFidelity::HiFi4 && half_sync && fp32_dest && throttle == 0 && kt == 4 && rt == 1 && ct == 1 && out == DataFormat::Float32 &&
+           in0 == in1 && (in1 == DataFormat::Float16_b || in1 == DataFormat::Bfp8_b);
+}
+
+// HiFi2 half sync 32-bit DEST blocks of one K tile into Float32 where the row MOP reads 0.6 to 2.3 cycles per block behind the tile MOP
+struct matmul_row_mop_off_cell
+{
+    MathFidelity fidelity;
+    bool half_sync;
+    bool fp32_dest;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t rt, ct;
+};
+
+inline constexpr matmul_row_mop_off_cell matmul_row_mop_off_cells[] = {
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float32, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float32, 1, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 1, 4},
+};
+
+// The blocks that keep the tile MOP of their keyed form though the caller opts into the row MOP
+constexpr bool matmul_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle) ||
+        matmul_hifi4_tile_k4_row_mop_off(fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kt, throttle))
+    {
+        return true;
+    }
+    if (throttle != 0 || kt != 1)
+    {
+        return false;
+    }
+    for (const matmul_row_mop_off_cell& c : matmul_row_mop_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_dest == fp32_dest && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt &&
+            c.ct == ct)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The forced form that replaces the row MOP a caller opts into (the row_mop argument of the math calls), as the harness runs it: 0 where the row MOP stays. At half sync every
+// forced cell takes the place of the row MOP, at full sync the hoisted forms ('R', 'h'). h, w and kt_dim are the caller's block keys (rt, ct and k steps of the block).
+template <MathFidelity math_fidelity, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync, std::uint32_t h, std::uint32_t w, std::uint32_t kt_dim, std::uint32_t kt_per_section = 0>
+constexpr char matmul_row_mop_form()
+{
+    constexpr std::uint32_t sections = (kt_per_section == 0 || kt_per_section >= kt_dim) ? 1 : 2;
+    constexpr char form              = matmul_forced_form<math_fidelity, kt_dim, fp32_dest, in0, in1, out_format, out_format, sync, h, w, false, sections>();
+    return (form != 0 && (sync == 0 || form == 'R' || form == 'h')) ? form : 0;
+}
+
+
+/**
+ * @brief The math fidelity whose phases cover every nonzero mantissa slice of the two matmul operands.
+ *
+ * A phase multiplies one slice of each operand: SrcA hi {1, m[9:6]} or lo m[5:1], SrcB hi {1, m[9:4]} or lo {m[3:0], 000}
+ * (tt_fpu_tile.sv). An in1 (SrcA) of Bfp4_b has 2 fraction bits, so its lo slice is zero and phase 1 adds exactly 0;
+ * an in0 (SrcB) of Bfp8_b or Bfp4_b has at most 6 fraction bits, so its lo slice is zero and phase 2 adds exactly 0;
+ * phase 3 needs both lo slices. Only a dropped suffix maps to an existing fidelity, so HiFi3 and HiFi4 with a narrow
+ * in1 and a wide in0 keep their phases.
+ *
+ * Only equal operand formats are keyed; Invalid (unknown, the default of the compute API) keeps the requested fidelity.
+ * check_out is set by the compute API, which knows the output format and DEST width; the harness keys that cell in python.
+ *
+ * @tparam math_fidelity: Requested math fidelity.
+ * @tparam in0_format: L1 data format of in0 (unpacked to SrcB).
+ * @tparam in1_format: L1 data format of in1 (unpacked to SrcA).
+ */
+template <
+    MathFidelity math_fidelity,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format = DataFormat::Invalid,
+    bool fp32_dest        = false,
+    int throttle_level    = 0,
+    bool check_out        = false>
+constexpr MathFidelity matmul_phase_fidelity()
+{
+    constexpr bool lo_a_zero = in1_format == DataFormat::Bfp4_b;
+    constexpr bool lo_b_zero = in0_format == DataFormat::Bfp8_b || in0_format == DataFormat::Bfp4_b;
+    // Bfp8_b x Bfp8_b at HiFi3 and HiFi4 with a 32-bit DEST or a Float32 output (or an unknown output when check_out) is pack bound and
+    // measured slower with the phases dropped, so it keeps the requested fidelity
+    constexpr bool keep = check_out && in0_format == DataFormat::Bfp8_b && in1_format == DataFormat::Bfp8_b && throttle_level == 0 &&
+                          (math_fidelity == MathFidelity::HiFi3 || math_fidelity == MathFidelity::HiFi4) &&
+                          (fp32_dest || out_format == DataFormat::Float32 || out_format == DataFormat::Invalid);
+    if constexpr (in0_format != in1_format || in0_format == DataFormat::Invalid || keep)
+    {
+        return math_fidelity; // mixed or unknown operand formats (bits not proven on hardware), or a cell that keeps main's fidelity
+    }
+    else if constexpr (lo_a_zero && lo_b_zero)
+    {
+        return MathFidelity::LoFi;
+    }
+    else if constexpr (lo_b_zero)
+    {
+        return math_fidelity == MathFidelity::LoFi ? MathFidelity::LoFi : MathFidelity::HiFi2;
+    }
+    else if constexpr (lo_a_zero)
+    {
+        return math_fidelity == MathFidelity::HiFi2 ? MathFidelity::LoFi : math_fidelity;
+    }
+    else
+    {
+        return math_fidelity;
+    }
+}
+// The Z counter step of the streamed in1 tile (the harness key MATMUL_STREAM_Z, test_variant_parameters.py): at LoFi where in1 streams
+// (ct_dim >= rt_dim, 4 or more output tiles) and both operands are the same dense 16-bit or Float32 format in 32x32 tiles, the unpacker steps
+// the Z counter one tile per UNPACR instead of a config read and write. 4 where it gained on the tt-llk sweep (ABBA, 0 slower than the config
+// step), else 0. The cells that read slower, the Float32 operands at half sync and a few half sync shapes are left out.
+constexpr bool matmul_stream_z_loses(
+    const bool full_sync,
+    const std::uint32_t rt_dim,
+    const std::uint32_t ct_dim,
+    const std::uint32_t kt_dim,
+    const int throttle,
+    const DataFormat in_format,
+    const DataFormat out_format)
+{
+    // (sync full, rt, ct, kt, throttle, input format, output format)
+    struct Cell
+    {
+        bool full;
+        std::uint8_t rt, ct, kt, throttle;
+        DataFormat in, out;
+    };
+
+    constexpr Cell cells[] = {
+        {true, 1, 6, 1, 0, DataFormat::Float32, DataFormat::Float16_b},     {true, 1, 7, 1, 0, DataFormat::Float32, DataFormat::Bfp8_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},      {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float32},     {true, 1, 7, 4, 0, DataFormat::Float32, DataFormat::Float32},
+        {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},    {false, 1, 5, 1, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 6, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float16_b}, {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},    {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Float32},    {false, 2, 3, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 2, 4, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 1, 1, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 4, 3, 0, DataFormat::Float16_b, DataFormat::Float16_b},  {false, 1, 4, 8, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 8, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 4, 8, 3, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 32, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 5, 1, 0, DataFormat::Float16, DataFormat::Bfp8},         {false, 1, 6, 8, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 7, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 1, 7, 3, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 7, 3, 0, DataFormat::Float16_b, DataFormat::Float32},    {false, 1, 7, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},
+        {false, 1, 7, 8, 0, DataFormat::Float16_b, DataFormat::Float16_b},  {false, 1, 7, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 1, 8, 3, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 8, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 1, 8, 8, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 8, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 1, 8, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 2, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 2, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 2, 8, 2, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 2, 2, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},
+        {false, 2, 2, 32, 0, DataFormat::Float16_b, DataFormat::Float32},   {false, 2, 4, 3, 0, DataFormat::Float16_b, DataFormat::Bfp2_b},
+        {false, 2, 4, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp2_b},
+        {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 2, 4, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 2, 8, 0, DataFormat::Float16_b, DataFormat::Tf32},
+    };
+    for (const Cell& c : cells)
+    {
+        if (c.full == full_sync && c.rt == rt_dim && c.ct == ct_dim && c.kt == kt_dim && c.throttle == throttle && c.in == in_format && c.out == out_format)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+constexpr std::uint32_t matmul_stream_z(
+    const MathFidelity fidelity,
+    const bool full_sync,
+    const DataFormat in0,
+    const DataFormat in1,
+    const DataFormat out_format,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const int throttle,
+    const std::uint32_t reuse_dir,
+    const bool dense_tiles)
+{
+    if (fidelity != MathFidelity::LoFi || !dense_tiles || reuse_dir != 0 || ct_dim < rt_dim || ct_dim * rt_dim < 4 || in0 != in1)
+    {
+        return 0;
+    }
+    if (in1 != DataFormat::Float16 && in1 != DataFormat::Float16_b && in1 != DataFormat::Float32)
+    {
+        return 0;
+    }
+    // 32-bit input at half sync loses 1 percent on 1x4 with 4 blocks
+    if (in1 == DataFormat::Float32 && !full_sync)
+    {
+        return 0;
+    }
+    // at half sync the Z step loses where the unpack is not the bound: k 4 on a single row, a 2 wide block at k 1, and k 1 under a static throttle
+    if (!full_sync && ((kt_dim == 4 && rt_dim == 1) || (kt_dim == 1 && ct_dim == 2) || (kt_dim == 1 && throttle == 5)))
+    {
+        return 0;
+    }
+    return matmul_stream_z_loses(full_sync, rt_dim, ct_dim, kt_dim, throttle, in1, out_format) ? 0 : 4;
+}
+} // namespace ckernel

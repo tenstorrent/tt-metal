@@ -1,0 +1,55 @@
+#U 604
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_verify_batched_matches_fla_naive[blackhole-b3h32t4-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_verify_matches_fla_naive[blackhole-0-3-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_verify_matches_fla_naive[blackhole-1-3-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_verify_matches_sequential_decode[blackhole-3-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_verify_perf[blackhole-3-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_verify_ring_requires_initial_state[blackhole-mesh_device0]
+#U 358
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-glm_53-t251-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-glm_53-t3001-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-glm_53-t768-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-kimi_k2_7-t251-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-kimi_k2_7-t3001-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-kimi_k2_7-t768-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-glm_53-t0-w_interleaved-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-glm_53-t0-w_ndshard-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-glm_53-t128-w_interleaved-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-glm_53-t128-w_ndshard-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-glm_53-t256-w_interleaved-x_rm-single-chip]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-glm_53-t256-w_ndshard-x_rm-single-chip]
+#U 349
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_text[seq256-bf16dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_text[seq256-fp32dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_vision[seq200_padded-bf16dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_vision[seq200_padded-fp32dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_vision[seq256-bf16dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_vision[seq256-fp32dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_vision[seq512-bf16dest]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_qwen3_vl.py::test_sdpa_qwen3_vl_vision[seq512-fp32dest]
+#U 249
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_composition_bit_exact
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_outputs_vs_torch[16-8]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_outputs_vs_torch[4-4]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_outputs_vs_torch[chunk64]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_rejects_gates_of_different_length
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_rejects_zero_chunk_size[flat]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_rejects_zero_chunk_size[head_major]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_tinv_methods[regime=adversarial]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_tinv_methods[regime=hard]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_tinv_methods[regime=typical]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_scan_requires_initial_state
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_scan_vs_torch
+#U 187
+models/demos/deepseek_v3_d_p/tests/pcc/test_deepseek_v3_matmul_pcc.py::test_deepseek_v3_matmul_pcc[blackhole-1chips-q_wq_b]
+models/demos/deepseek_v3_d_p/tests/pcc/test_deepseek_v3_matmul_pcc.py::test_deepseek_v3_matmul_pcc[blackhole-1chips-x_wkv_a]
+models/demos/deepseek_v3_d_p/tests/pcc/test_deepseek_v3_matmul_pcc.py::test_deepseek_v3_matmul_pcc[blackhole-1chips-x_wq_a]
+#U 155
+tests/ttnn/nightly/unit_tests/operations/experimental/test_dit_minimal_matmul_addcmul_fused.py::test_dit_minimal_matmul_addcmul_fused_fp32_gate[no_bias]
+tests/ttnn/nightly/unit_tests/operations/experimental/test_dit_minimal_matmul_addcmul_fused.py::test_dit_minimal_matmul_addcmul_fused_fp32_gate[with_bias]
+#U 126
+models/experimental/ops/quasar/tests/vad_variant_ops/test_equivalents.py::test_multi_scale_deformable_attn[sca-b1-q3072-12x20-p8-ttnn_mesh_device0]
+models/experimental/ops/quasar/tests/vad_variant_ops/test_equivalents.py::test_multi_scale_deformable_attn[sca-b1-q3680-12x20-p8-ttnn_mesh_device0]
+models/experimental/ops/quasar/tests/vad_variant_ops/test_equivalents.py::test_multi_scale_deformable_attn[sca-b2-q1376-12x20-p8-ttnn_mesh_device0]
+models/experimental/ops/quasar/tests/vad_variant_ops/test_equivalents.py::test_multi_scale_deformable_attn[sca-b2-q992-12x20-p8-ttnn_mesh_device0]
+models/experimental/ops/quasar/tests/vad_variant_ops/test_equivalents.py::test_multi_scale_deformable_attn[tsa-b2-q10000-100x100-p4-ttnn_mesh_device0]

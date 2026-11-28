@@ -1,0 +1,79 @@
+#U 608
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_alternating_dst_sync_mode_matmul[N=128-K=128-M=128]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_linear_with_optional_output_tensor[shape=(32, 32)]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_multiple_output_blocks_per_core[uneven_width=2-mcast_in0=False-num_out_block_w=1-num_out_block_h=2-out_sharded=False-in_sharded=False-grid_size=(8, 2)-has_bias=False-n=2048-k=1024-m=256]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core[silicon_arch_name=blackhole-mesh_device=(1, 1)-transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=True-n=1024-k=512-m=512-b=1]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core[silicon_arch_name=blackhole-mesh_device=(1, 1)-transpose_mcast=False-num_out_block_w=2-num_out_block_h=1-out_sharded=True-in0_sharded=False-grid_size=(8, 4)-has_bias=True-n=1024-k=512-m=512-b=1]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core[silicon_arch_name=blackhole-mesh_device=(1, 1)-transpose_mcast=True-num_out_block_w=1-num_out_block_h=2-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=True-n=1024-k=512-m=512-b=1]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core[silicon_arch_name=blackhole-mesh_device=(1, 1)-transpose_mcast=True-num_out_block_w=2-num_out_block_h=2-out_sharded=True-in0_sharded=False-grid_size=(8, 4)-has_bias=True-n=1024-k=512-m=512-b=1]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_bcast_in0_reuse_outer_blocks[in1_B=3-inner1-per_core_M=4-out_block_h=2-per_core_N=4-out_block_w=4]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_by_passing_in_1D_systolic_array_program_config[n_size=2047-k_size=1024-m_size=63-batch_size=8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_fp32_crossblock_reload_precision[has_bias=True-packer_l1_acc=True-factory=mcast_1d]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-2,3-5,7]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_reuse_config_partial_batch_blocks[transpose_a=True-batch_shape=(5,)-m=256-k=256-n=64-per_core_M=1]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_split_by_batch[a_shape=(32, 64, 96)-b_shape=(32, 96, 32)-memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-expect_split=True-transpose_b=True]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_matched_width_height_from_1D[k_size=4-n_size=4]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_transpose_and_configs[b=1-s=2-m=4096-k=32-n=256-program_config=MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=4-8,in0_block_w=1,out_subblock_h=1,out_subblock_w=8,per_core_M=8,per_core_N=8,allowed_worker_cores=std::nullopt)-transpose_b=True-transpose_a=True]
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_tall_matmul_with_argument_for_core_grid_set_to_device_grid[n_size=32-k_size=2048-m_size=2048-batch_size=1]
+#U 357
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_config_fits_default_ring
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_functional[dsv3-isl-768-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_functional[dsv4_flash-isl-3001-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_functional[dsv4_pro-isl-3001-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_functional[glm_53-isl-251-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_functional[gptoss_120b-isl-251-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_functional[minimax_m27-isl-251-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_isl_sweep[glm_53-isl-1024-w_ndshard-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_isl_sweep[kimi_k2_7-isl-128-w_ndshard-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_k3_sweep[t1024-x_rm]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_k3_sweep[t2048-x_tile]
+tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_hybrid_routed_expert.py::test_hybrid_routed_expert_k3_sweep[t5120-x_tile]
+#U 317
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_chunked_replay_matches_reference[full_3chunks-device_params0]
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_chunked_replay_matches_reference[nopad_past_64k-device_params0]
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_chunked_replay_matches_reference[partial_last_chunk-device_params0]
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_eager_prefill_after_trace_prepare[multi_chunk-device_params0]
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_traced_chunked_tail_matches_reference[chunk1_tail1500_b2048-device_params0]
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_traced_chunked_tail_matches_reference[chunk1_tail50_b128-device_params0]
+models/demos/blackhole/qwen36/tests/test_prefill.py::test_traced_chunked_tail_matches_reference[chunk1_tail700_b1024-device_params0]
+#U 270
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_kv_format_api_is_explicit
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_block_cyclic_chunk_local_rejected
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_indexed_addr_change_on_hit
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_indexed_nd_sharded_kv
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_nd_sharded_kv_len_change
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_output_dtype[q_fp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_pcc_multi_chunk[-all_valid]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_pcc_single_chunk[-all_valid]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_rejects_kv_format_storage_mismatch[kv_dtype=DataType.BFLOAT16-kv_format=SparseKVFormat.FP8_E4M3-message=requires fp8_e4m3 storage]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_rejects_v_dim_larger_than_k_dim
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_scaled_fp8_indexed_nd_sharded_kv
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_scaled_fp8_kv[gather_ring_wrap]
+#U 216
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_golden_all_blocks_causal_equals_dense_causal[gqa]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_golden_all_blocks_selected_equals_dense[gqa]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_golden_sentinel_tail_is_truncation
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_gqa_kv_len_no_recompile
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_block_cyclic_sp1_bit_exact[kv_cache]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_block_cyclic_sp1_identity
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_causal_multiband_pcc
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_causal_vs_noncausal_differs
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_gqa_pcc_random_selection
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_kv_cache_byte_identical[evicting-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_kv_cache_byte_identical[resident-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_kv_cache_gqa_group_boundary
+#U 142
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-1280x5120-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-2048x2048-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-2048x8192-bfp4]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-3072x3072-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-3584x11904-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-3584x9728-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-4096x14336-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-4096x4096-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-4096x7168-bfp4]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-5120x1912-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-5120x4008-bfp8]
+tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py::test_served_shapes_blackhole[fp32_dest-6400x5120-bfp8]
+#U 122
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_sdpa_decode_head_dim.py::test_sdpa_decode_head_dim_not_divisible_by_dst_size[d384]

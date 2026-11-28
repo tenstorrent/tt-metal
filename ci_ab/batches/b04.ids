@@ -1,0 +1,61 @@
+#U 601
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-dense12b_tp4]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-dense12b_tp8_l1]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-dense31b_tp4]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-dense31b_tp4_b1]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-dense31b_tp8]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-experts_b1_l1]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-experts_b32]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-lanes_mlp_2x4]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-lanes_mlp_8x4]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-shared_mlp_b32]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_matches_composite[blackhole-single-chip-two_row_tiles]
+models/demos/gemma4/tests/unit/custom_ops/test_geglu_decode.py::test_geglu_decode_perf_vs_composite[blackhole-single-chip]
+#U 479
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=1-in_h=10-in_w=14-channels=320-c_out=64-has_bias=False-relu=True-offset_scale=2.0-kernel_size=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=1-in_h=12-in_w=20-channels=512-c_out=64-has_bias=True-relu=True-offset_scale=4.0-kernel_size=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=1-in_h=16-in_w=20-channels=64-c_out=320-has_bias=True-relu=True-offset_scale=2.0-kernel_size=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=1-in_h=19-in_w=21-channels=64-c_out=64-has_bias=True-relu=False-offset_scale=1.0-kernel_size=(3, 3)-stride=(2, 2)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=1-in_h=24-in_w=24-channels=32-c_out=64-has_bias=True-relu=True-offset_scale=20.0-kernel_size=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=1-in_h=8-in_w=8-channels=32-c_out=32-has_bias=False-relu=False-offset_scale=2.0-kernel_size=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d[batch=6-in_h=29-in_w=50-channels=512-c_out=512-has_bias=True-relu=True-offset_scale=4.0-kernel_size=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d_cache_hit_fresh_buffers[sharded=False]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d_kernel_too_large
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d_less_l1_misses_cache
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d_sharded_input[batch=1-in_h=16-in_w=20-channels=64-c_out=64-shard_rows=32]
+tests/ttnn/unit_tests/operations/experimental/test_modulated_deform_conv2d.py::test_modulated_deform_conv2d_sharded_input[batch=6-in_h=58-in_w=100-channels=256-c_out=256-shard_rows=None]
+#U 311
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head[C256-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head[C7168-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded[blackhole-C4096-T32-fabric2d-mesh-4x2]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded[blackhole-C7168-T32-fabric2d-mesh-4x2]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_post[C256-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_post[C7168-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_pre[C256-s1.0-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_pre[C7168-s0.01-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_mhc_expand[T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_mhc_wrap[identity-C256-s1.0-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_mhc_wrap[identity-C7168-s0.01-T1]
+models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_project[C256-T1]
+#U 220
+tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py::test_conv3d_core_placement_with_idle_partitions[blackhole_chain_to_mcast]
+tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py::test_conv3d_fp32_exact_tail
+tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py::test_conv3d_fp32_exact_tail_streaming
+tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py::test_conv3d_sweep_shapes[padding_mode=zeros-padding_011-groups_1-stride_111-kernel_333-W=5-H=6-T=3-C_out=32-C_in=64-B=3]
+#U 185
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_activation_follows_a_bias_added_separately[fp32_dest_acc]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_auto_C_slice_from_core_grid[grid_2x2]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_auto_C_slice_from_output_shard
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_auto_K_chunk_with_prime_K_tiles
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_bias_with_fp32_dest_acc_is_added_separately
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_edges_and_blocking[M=128-K=96-N=288-C_slice_M_tiles=4-C_slice_N_tiles=3-K_chunk_tiles=None-subblock=(2, 2)]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_edges_and_blocking[M=224-K=64-N=160-C_slice_M_tiles=7-C_slice_N_tiles=5-K_chunk_tiles=None-subblock=(2, 4)]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_edges_and_blocking[M=64-K=100-N=96-C_slice_M_tiles=2-C_slice_N_tiles=3-K_chunk_tiles=None-subblock=(1, 3)]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_edges_and_blocking[M=96-K=128-N=96-C_slice_M_tiles=3-C_slice_N_tiles=3-K_chunk_tiles=4-subblock=(3, 1)]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_fp32_dest_acc_and_fp32_out[padded_subblock]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_placements[fewer_blocks_than_cores]
+tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py::test_placements[grid_2d_col_major]
+#U 141
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py::test_compute_kernel_config_contract[mono]
+#U 98
+tests/ttnn/unit_tests/operations/data_movement/test_reshape_codegen.py::test_reshape_codegen_lcm_edge_shapes[chunk_spans_batches-float32]

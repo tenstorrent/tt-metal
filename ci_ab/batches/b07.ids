@@ -1,0 +1,141 @@
+#U 289
+models/common/tests/test_tt_sampling.py::test_grammar_shard_coverage_tokens_span_4x8_vocabulary
+models/common/tests/test_tt_sampling.py::TestPrefillWithDifferentParams::test_prefill_temperature_varied_between_batches[blackhole-1]
+models/common/tests/test_tt_sampling.py::TestPrefillWithDifferentParams::test_run_ttsampling_once_respects_logits_batch_size[blackhole-1]
+models/common/tests/test_tt_sampling.py::TestPrefillWithDifferentParams::test_top_p_restricts_candidate_set[blackhole-1]
+models/common/tests/test_tt_sampling.py::TestPresencePenaltyPerRequest::test_presence_penalty_mixed_batch[blackhole-device_params0-1]
+models/common/tests/test_tt_sampling.py::TestPenaltiesOnBlockFloatLogits::test_bfloat8_b_logits_leave_other_tokens_unchanged[blackhole-1]
+#U 284
+tests/ttnn/unit_tests/operations/moreh/test_moreh_mean_backward.py::test_moreh_mean_backward_corner_cases[fp32_dest_acc]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_mean_backward.py::test_moreh_mean_backward[w]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_mean_backward.py::test_moreh_mean_backward[hw]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_mean_backward.py::test_moreh_mean_backward[all_dims]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_mean_backward.py::test_moreh_mean_backward_corner_cases[keepdim_false]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_mean_backward.py::test_moreh_mean_backward_corner_cases[allocated_input_grad]
+#U 284
+tests/ttnn/unit_tests/operations/moreh/test_moreh_adamw.py::test_moreh_adamw[amsgrad-fp32_dest_acc]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_adamw.py::test_moreh_adamw[no_amsgrad-fp32_dest_acc]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_adamw.py::test_moreh_adamw[no_amsgrad-bf16_acc]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_adamw.py::test_moreh_adamw_corner_cases[core_group_2]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_adamw.py::test_moreh_adamw_corner_cases[step_1]
+tests/ttnn/unit_tests/operations/moreh/test_moreh_adamw.py::test_moreh_adamw_corner_cases[allocated_outputs]
+#U 220
+models/tt_dit/tests/unit/test_dit_rmsnorm_local.py::test_local_rmsnorm_rope[blackhole-heads32-single_device]
+models/tt_dit/tests/unit/test_dit_rmsnorm_local.py::test_local_rmsnorm_rope[blackhole-heads32-mesh4x8]
+models/tt_dit/tests/unit/test_dit_rmsnorm_local.py::test_local_rmsnorm_rope[blackhole-heads64_two_tiles_folded-single_device]
+models/tt_dit/tests/unit/test_dit_rmsnorm_local.py::test_local_rmsnorm_rope[blackhole-heads64_two_tiles_folded-mesh4x8]
+#U 207
+models/demos/gemma4/tests/unit/custom_ops/test_moe_combine.py::test_moe_combine_matches_composite[blackhole-single-chip-one_expert]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_combine.py::test_moe_combine_matches_composite[blackhole-single-chip-two_experts]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_combine.py::test_moe_combine_matches_composite[blackhole-single-chip-four]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_combine.py::test_moe_combine_matches_composite[blackhole-single-chip-eight_two_active]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_combine.py::test_moe_combine_matches_composite[blackhole-single-chip-b32_top8]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_combine.py::test_moe_combine_matches_composite[blackhole-single-chip-b32_all_experts]
+#U 199
+tests/ttnn/docs_examples/test_reduction_examples.py::test_cumprod
+tests/ttnn/docs_examples/test_reduction_examples.py::test_mean
+tests/ttnn/docs_examples/test_reduction_examples.py::test_sum
+tests/ttnn/docs_examples/test_reduction_examples.py::test_argmax
+tests/ttnn/docs_examples/test_reduction_examples.py::test_topk
+tests/ttnn/docs_examples/test_reduction_examples.py::test_ema
+#U 193
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_fp32_rope[num_simulated_devices8-has_rope-has_weight-num_heads1-hidden_dim2048-seqlen2048-FLOAT32_rope-FLOAT32_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_fusions[num_simulated_devices8-has_rope-has_weight-num_heads2-hidden_dim2048-seqlen2048-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_fusions[num_simulated_devices8-has_rope-no_weight-num_heads1-hidden_dim2048-seqlen2080-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_fusions[num_simulated_devices8-has_rope-no_weight-num_heads2-hidden_dim5120-seqlen2048-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_fusions[num_simulated_devices8-no_rope-has_weight-num_heads1-hidden_dim5120-seqlen2080-BFLOAT16_stats-BFLOAT16_in]
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py::test_distributed_fused_rmsnorm_sweep_fusions[num_simulated_devices8-no_rope-no_weight-num_heads1-hidden_dim2048-seqlen2048-BFLOAT16_stats-BFLOAT16_in]
+#U 180
+tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_float32.py::test_mac
+tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_float32.py::test_addcmul[value=-0.5]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_float32.py::test_addcdiv[value=1.0]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_float32.py::test_addcdiv[value=-2.0]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_float32.py::test_full_mantissa[op_name=addcmul-value=1.0]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_float32.py::test_full_mantissa[op_name=addcdiv-value=-0.5]
+#U 171
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_tiled_interleaved_concat_int[shapes=[[1, 1, 4, 4], [1, 1, 4, 4]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_tiled_interleaved_concat_int[shapes=[[1, 1, 8, 4], [1, 1, 8, 4]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_tiled_interleaved_concat_int[shapes=[[2, 3, 4, 4], [2, 3, 4, 4]]-dim=-1-dtype=DataType.UINT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_rm_interleaved_concat_unaligned_int[shapes=[[1, 1, 32, 4], [1, 1, 32, 4]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_rm_interleaved_concat_unaligned_int[shapes=[[1, 1, 32, 7], [1, 1, 32, 7]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_rm_interleaved_concat_unaligned_int[shapes=[[2, 3, 32, 4], [2, 3, 32, 4]]-dim=-1-dtype=DataType.UINT32]
+#U 156
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm[dtype=torch.float32-use_welford=True-w=42-h=24]
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm[dtype=torch.float32-use_welford=True-w=42-h=2080]
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm[dtype=torch.float32-use_welford=True-w=3200-h=1024]
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm[dtype=torch.float32-use_welford=True-w=4128-h=24]
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm[dtype=torch.float32-use_welford=True-w=4128-h=2080]
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_large_layer_norm_with_weight_bias_and_residual_input[dtype=torch.float32-use_welford=True-h=32-w=3232]
+#U 152
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_standard[torch_dtype=torch.float32-ttnn_dtype=DataType.FLOAT32-shape=[64, 64]-dim=-1-descending=False]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_standard[torch_dtype=torch.float32-ttnn_dtype=DataType.FLOAT32-shape=[1, 2048, 1, 64]-dim=-1-descending=False]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_unstable_tall_tie_heavy[h320_tile-descending=True]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_standard[torch_dtype=torch.float32-ttnn_dtype=DataType.FLOAT32-shape=[1, 64, 64]-dim=0-descending=False]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_fp32_wide_index_correctness[n=151936-descending=False-fill=-inf]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_pad_value_ties_index_range_every_factory[n=100-fp32-asc_pos_inf]
+#U 146
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py::test_exact_piecewise_ops[ttnn_op=ttnn.relu]
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py::test_exact_piecewise_ops[ttnn_op=ttnn.relu6]
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py::test_hardmish_special_values
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py::test_hardswish
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py::test_silu_swish_ops[ttnn_op=ttnn.swish]
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py::test_log_sigmoid
+#U 140
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum_integer[int32-dim-w-TILE_HEIGHT, TILE_WIDTH]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum_integer[int32-dim-h-2, 2, 3, TILE_HEIGHT * 8, TILE_WIDTH * 8]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum[bfloat16-keepdim-true-fp32_dest_acc_en=False-[]-3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum_integer[int32-dim-b0-2, 2, 3, TILE_HEIGHT * 8, TILE_WIDTH * 8]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum[bfloat16-keepdim-true-fp32_dest_acc_en=True-None-3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py::test_moreh_sum[bfloat16-keepdim-true-fp32_dest_acc_en=True-0,1,2-3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]
+#U 138
+tests/ttnn/nightly/unit_tests/operations/eltwise/test_ternary_bcast.py::test_ttnn_where_row_col_mixed_bcast[c_shape=(8, 4, 1)-t_shape=(8, 4, 768)-f_shape=(1, 1, 1)]
+tests/ttnn/nightly/unit_tests/operations/eltwise/test_ternary_bcast.py::test_ttnn_where_row_col_mixed_bcast[c_shape=(1, 1, 1)-t_shape=(8, 1, 768)-f_shape=(8, 4, 1)]
+tests/ttnn/nightly/unit_tests/operations/eltwise/test_ternary_bcast.py::test_ttnn_lerp_tts_scalar_weight[weight=0.5-c_shape=(8, 4, 1)-t_shape=(8, 1, 768)]
+tests/ttnn/nightly/unit_tests/operations/eltwise/test_ternary_bcast.py::test_ttnn_addc_ops_row_col_mixed_bcast[ttnn_op=ttnn.addcmul-value=1.5-a_shape=(8, 4, 1)-b_shape=(8, 1, 768)-c_shape=(8, 4, 768)]
+tests/ttnn/nightly/unit_tests/operations/eltwise/test_ternary_bcast.py::test_ttnn_lerp_tts_scalar_weight[weight=0.75-c_shape=(8, 4, 1)-t_shape=(8, 1, 768)]
+tests/ttnn/nightly/unit_tests/operations/eltwise/test_ternary_bcast.py::test_where_program_cache_same_volume_different_leading_dims[pred_shape_1=(2, 2, 1, 32, 32)-pred_shape_2=(2, 1, 2, 32, 32)-variant=TST]
+#U 134
+tests/ttnn/unit_tests/operations/eltwise/test_ternary.py::test_addcmul_with_int32_inputs[in_data1_shape=(1, 1, 32, 32)-in_data2_shape=(1, 1, 32, 32)-in_data3_shape=(1, 1, 32, 32)]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary.py::test_addcmul_with_int32_inputs[in_data1_shape=(1, 1, 1024, 1)-in_data2_shape=(1, 1, 1024, 1024)-in_data3_shape=(1, 1, 1024, 1)]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary.py::test_addcmul_with_uint32_inputs[value=6-in_data1_shape=(1, 1, 32, 32)-in_data2_shape=(1, 1, 32, 32)-in_data3_shape=(1, 1, 32, 32)]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary.py::test_addcmul_with_uint32_inputs[value=-6.0-in_data1_shape=(1, 1, 32, 32)-in_data2_shape=(1, 1, 32, 32)-in_data3_shape=(1, 1, 32, 32)]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary.py::test_addcmul_with_uint32_inputs[value=2147483655.0-in_data1_shape=(1, 1, 32, 32)-in_data2_shape=(1, 1, 32, 32)-in_data3_shape=(1, 1, 32, 32)]
+tests/ttnn/unit_tests/operations/eltwise/test_ternary.py::test_addcmul_with_uint32_inputs[value=4294967295-in_data1_shape=(1, 1, 32, 32)-in_data2_shape=(1, 1, 32, 32)-in_data3_shape=(1, 1, 32, 32)]
+#U 133
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_repeat_and_interleave_eltwise_mul.py::test_ssm_eltwise_mul[batch=32-in0_W=32-in1_W=5120-dtype=DataType.BFLOAT16-in0_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-in1_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_repeat_and_interleave_eltwise_mul.py::test_ssm_eltwise_mul[batch=32-in0_W=32-in1_W=5120-dtype=DataType.BFLOAT16-in0_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-in1_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_repeat_and_interleave_eltwise_mul.py::test_ssm_eltwise_mul[batch=32-in0_W=32-in1_W=5120-dtype=DataType.BFLOAT8_B-in0_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-in1_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_repeat_and_interleave_eltwise_mul.py::test_ssm_eltwise_mul[batch=32-in0_W=32-in1_W=5120-dtype=DataType.BFLOAT8_B-in0_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-in1_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_repeat_and_interleave_eltwise_mul.py::test_ssm_eltwise_mul[batch=32-in0_W=163840-in1_W=5120-dtype=DataType.BFLOAT16-in0_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-in1_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_repeat_and_interleave_eltwise_mul.py::test_ssm_eltwise_mul[batch=32-in0_W=163840-in1_W=5120-dtype=DataType.BFLOAT8_B-in0_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-in1_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+#U 123
+tests/ttnn/unit_tests/operations/eltwise/test_binary_backward_device_op.py::test_mul_bw_correctness[dram-dtype=DataType.FLOAT32-ulp=4-expected_pcc=None-shape=(1, 1, 32, 32)]
+tests/ttnn/unit_tests/operations/eltwise/test_binary_backward_device_op.py::test_mul_bw_correctness[l1-dtype=DataType.FLOAT32-ulp=4-expected_pcc=None-shape=(1, 3, 320, 384)]
+tests/ttnn/unit_tests/operations/eltwise/test_binary_backward_device_op.py::test_bw_fp32_dest_acc_still_enabled_on_grad_only_kernel[op_name=sub-op_fn=ttnn.sub_bw]
+tests/ttnn/unit_tests/operations/eltwise/test_binary_backward_device_op.py::test_mul_bw_correctness[dram-dtype=DataType.BFLOAT8_B-ulp=None-expected_pcc=0.99-shape=(1, 1, 32, 32)]
+tests/ttnn/unit_tests/operations/eltwise/test_binary_backward_device_op.py::test_mul_bw_correctness[l1-dtype=DataType.BFLOAT16-ulp=4-expected_pcc=None-shape=(1, 3, 320, 384)]
+tests/ttnn/unit_tests/operations/eltwise/test_binary_backward_device_op.py::test_mul_bw_broadcast_auto_alloc_preserves_operand_dtype
+#U 122
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=32-W=1024-latent_size=32-dtype=DataType.BFLOAT16-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=32-W=1024-latent_size=32-dtype=DataType.BFLOAT8_B-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=32-W=163840-latent_size=32-dtype=DataType.BFLOAT16-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=32-W=163840-latent_size=32-dtype=DataType.BFLOAT8_B-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=128-W=1024-latent_size=32-dtype=DataType.BFLOAT8_B-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_1d_sum_reduce.py::test_ssm_reduce[H=64-W=163840-latent_size=32-dtype=DataType.BFLOAT16-in_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-out_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)]
+#U 120
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_single_device[blackhole-1x1-rem0-pos0]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_single_device[blackhole-1x1-rem1-pos0]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_single_device[blackhole-1x1-rem2-pos0]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_mesh_empty_tail[blackhole-fabric1d-2x2-rem3-pos0]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_mesh[blackhole-fabric1d-2x2-rem1-pos4]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_single_device[blackhole-1x1-rem3-pos4]
+#U 116
+tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dopout
+tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dropout_output_tensor
+tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dropout_seed_distinguishes_cache_entries[use_per_device_seed=False-in_place=False]
+tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dropout_seed_distinguishes_cache_entries[use_per_device_seed=True-in_place=False]
+tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dropout_seed_distinguishes_cache_entries[use_per_device_seed=True-in_place=True]
+tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dropout_mask_differs_across_cores[use_per_device_seed=False]
+#U 93
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_local.py::test_dispatch_combine_local[blackhole-local-1x1]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_local.py::test_dispatch_combine_local[blackhole-local-1x4]

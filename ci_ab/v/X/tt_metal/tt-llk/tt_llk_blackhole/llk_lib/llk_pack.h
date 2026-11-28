@@ -1,0 +1,1042 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "ckernel_globals.h"
+#include "ckernel_ops.h"
+#include "ckernel_template.h"
+#include "llk_assert.h"
+#include "llk_defs.h"
+#include "llk_pack_common.h"
+
+using namespace ckernel;
+using namespace ckernel::packer;
+
+/**
+ * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
+ *
+ * Programs ADDR_MOD_0/1/2 with the src Y and Z increment/clear patterns the pack MOP relies
+ * on to traverse the destination register and step through faces for the given layout.
+ * The dest (channel-1) counters are left alone: output placement comes from L1_Dest_addr and
+ * the packer's own write pointer, and channel-1 strides are zero outside fast-untilize.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ */
+template <PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_configure_addrmod_()
+{
+    if constexpr (pack_mode == PackMode::Untilize)
+    {
+        /*  Y src inc by 1 to give strided increments:
+            Rows: 0, 16, 1, 17, 2, 18, ........ 15, 31
+        */
+        addr_mod_pack_t {.y_src = {.incr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
+
+        /* Increment Faces by 2 to give next 2 faces:
+            Rows: 32, 48, 33, 49, 34, 50........47, 63
+        */
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_1);
+
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_2);
+    }
+    else if constexpr (pack_mode == PackMode::Tilize)
+    {
+        addr_mod_pack_t {.y_src = {.incr = 4}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
+
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_1);
+
+        // Increment faces by 2 (jump 2 dest address 32)
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
+
+        // The tile's last PACR: the per-tile byte-wise pack leaves Z to it.
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_3);
+    }
+    else
+    {
+        addr_mod_pack_t {
+            .y_src = {.incr = 4},
+        }
+            .set(ADDR_MOD_0);
+
+        addr_mod_pack_t {
+            .y_src = {.incr = 0, .clr = 1, .cr = 0},
+            .z_src = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_1);
+
+        addr_mod_pack_t {
+            .y_src = {.incr = 0, .clr = 1, .cr = 0},
+            .z_src = {.incr = 1, .clr = 0},
+        }
+            .set(ADDR_MOD_2);
+    }
+}
+
+/**
+ * @brief Build and program the packer MOP template for the selected pack mode.
+ *
+ * Programs the ckernel MOP (and, for tilize, a replay buffer) with the PACR instruction sequence
+ * that packs one tile worth of data, selecting packer interfaces and ADDR_MODs per the layout.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
+ */
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
+inline void _llk_pack_mop_config_(
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const std::uint32_t num_tiles  = 1)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    constexpr std::uint32_t MEGAROW          = 1;
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+
+    if constexpr (pack_mode == PackMode::Untilize)
+    {
+        const std::uint32_t PACK_INTF_SEL  = (tile_c_dim < TILE_C_DIM) ? p_pacr::SINGLE_INTF_ACTIVE : p_pacr::TWO_INTFS_ACTIVE;
+        const std::uint32_t MOP_INNER_LOOP = face_r_dim;
+        const std::uint32_t MOP_OUTER_LOOP = (tile_c_dim < TILE_C_DIM) ? num_faces : (num_faces >> 1);
+
+        ckernel::ckernel_template tmp(
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
+            TT_OP_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_STRIDED_MODE,
+                ADDR_MOD_0,
+                p_pacr::ADDR_CNT_CTXT_0,
+                ZERO_OUTPUT_FLAG,
+                PACK_INTF_SEL,
+                0,
+                MEGAROW,
+                p_pacr::NO_CTXT_CTRL,
+                0,
+                0));
+
+        tmp.set_last_inner_loop_instr(TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_STRIDED_MODE,
+            ADDR_MOD_1,
+            p_pacr::ADDR_CNT_CTXT_0,
+            ZERO_OUTPUT_FLAG,
+            PACK_INTF_SEL,
+            0,
+            MEGAROW,
+            p_pacr::NO_CTXT_CTRL,
+            0,
+            0));
+        tmp.set_last_outer_loop_instr(TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_STRIDED_MODE,
+            ADDR_MOD_2,
+            p_pacr::ADDR_CNT_CTXT_0,
+            ZERO_OUTPUT_FLAG,
+            PACK_INTF_SEL,
+            0,
+            0,
+            p_pacr::NO_CTXT_CTRL,
+            0,
+            1));
+        tmp.program();
+    }
+    else if constexpr (pack_mode == PackMode::Tilize)
+    {
+        const std::uint32_t PACK_INTF_SEL_0 = 0b0101;
+        const std::uint32_t PACK_INTF_SEL_1 = 0b1010;
+        const std::uint32_t MOP_INNER_LOOP  = 1;
+        const std::uint32_t MOP_OUTER_LOOP  = (num_faces > 1) ? (num_faces >> 1) : 1;
+
+        if (face_r_dim == 1)
+        {
+            // Single-row faces (e.g. a 1x32 tile = two 1x16 faces). The tileize unpacker splits the
+            // single source row into two consecutive DEST rows (row 0 -> face 0, row 1 -> face 1). With
+            // one row per face the two faces are contiguous in L1 ([face 0 | face 1] == one 1x32 row), so
+            // a single PACR with two active read interfaces (interface k reads DEST row base + k) packs
+            // both faces at once - the row-interleave the replay buffer un-swizzles for face_r_dim >= 2
+            // collapses to these two rows. The replay-buffer path cannot express this anyway
+            // (replay_buf_len = face_r_dim - 1 = 0 is an invalid replay length, and num_instrs_per_face
+            // underflows).
+            LLK_ASSERT(num_faces == 2, "Tilize with face_r_dim == 1 supports num_faces == 2 only");
+            ckernel::ckernel_template tmp(
+                MOP_OUTER_LOOP,
+                MOP_INNER_LOOP,
+                // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_3, close the tile.
+                TT_OP_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_NORMAL_MODE,
+                    ADDR_MOD_3,
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    ZERO_OUTPUT_FLAG,
+                    p_pacr::TWO_INTFS_ACTIVE,
+                    0,
+                    0,
+                    p_pacr::NO_CTXT_CTRL,
+                    0,
+                    1));
+            tmp.program();
+            return;
+        }
+
+        // Last row of half-tile (face_r_dim rows) is different between halves, so can't be replayed.
+        LLK_ASSERT(face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 2, 4, 8, or 16 for tilize");
+        const std::uint32_t replay_buf_len = face_r_dim - 1;
+
+        // This replay buffer finishes 2 faces
+        load_replay_buf(
+            0,
+            replay_buf_len,
+            // Lambda function to set up replay buffer
+            [PACK_INTF_SEL_0, PACK_INTF_SEL_1, ZERO_OUTPUT_FLAG, MEGAROW, face_r_dim]
+            {
+                // Number of instructions per face (minus 1 for the last special instruction)
+                const std::uint32_t num_instrs_per_face = (face_r_dim >> 1) - 1;
+
+                // Face 0 -> mask rows 1010
+                // First num_instrs_per_face instructions use ADDR_MOD_0
+                for (std::uint32_t i = 0; i < num_instrs_per_face; i++)
+                {
+                    TTI_PACR(
+                        p_pacr::CFG_CTXT_0,
+                        p_pacr::NO_ROW_PAD_ZERO,
+                        p_pacr::DST_ACCESS_NORMAL_MODE,
+                        ADDR_MOD_0,
+                        p_pacr::ADDR_CNT_CTXT_0,
+                        ZERO_OUTPUT_FLAG,
+                        PACK_INTF_SEL_0,
+                        0,
+                        MEGAROW,
+                        p_pacr::NO_CTXT_CTRL,
+                        0,
+                        0);
+                }
+                // Last instruction for Face 0 uses ADDR_MOD_1
+                TTI_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_NORMAL_MODE,
+                    ADDR_MOD_1,
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    ZERO_OUTPUT_FLAG,
+                    PACK_INTF_SEL_0,
+                    0,
+                    MEGAROW,
+                    p_pacr::NO_CTXT_CTRL,
+                    0,
+                    0);
+
+                // Face 1 -> mask rows 0101
+                // num_instrs_per_face instructions use ADDR_MOD_0
+                // The last instruction is handled separately outside the replay buffer
+                for (std::uint32_t i = 0; i < num_instrs_per_face; i++)
+                {
+                    TTI_PACR(
+                        p_pacr::CFG_CTXT_0,
+                        p_pacr::NO_ROW_PAD_ZERO,
+                        p_pacr::DST_ACCESS_NORMAL_MODE,
+                        ADDR_MOD_0,
+                        p_pacr::ADDR_CNT_CTXT_0,
+                        ZERO_OUTPUT_FLAG,
+                        PACK_INTF_SEL_1,
+                        0,
+                        MEGAROW,
+                        p_pacr::NO_CTXT_CTRL,
+                        0,
+                        0);
+                }
+                // Last PACR instruction of the half-tile must go separately in the MOP. This is to be able to override it, to ensure that for the second half
+                // the tile is closed correctly.
+            });
+
+        ckernel::ckernel_template tmp(
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
+            TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+            TT_OP_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_NORMAL_MODE,
+                ADDR_MOD_2,
+                p_pacr::ADDR_CNT_CTXT_0,
+                ZERO_OUTPUT_FLAG,
+                PACK_INTF_SEL_1,
+                0,
+                0,
+                p_pacr::NO_CTXT_CTRL,
+                0,
+                0) // don't close tile
+        );
+
+        // Close the tile only when it is actually done.
+        tmp.set_last_outer_loop_instr(TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_3,
+            p_pacr::ADDR_CNT_CTXT_0,
+            ZERO_OUTPUT_FLAG,
+            PACK_INTF_SEL_1,
+            0,
+            0,
+            p_pacr::NO_CTXT_CTRL,
+            0,
+            1));
+
+        tmp.program();
+    }
+    else
+    {
+        const std::uint32_t PACK_INTF_SEL =
+            face_r_dim == 1 ? p_pacr::SINGLE_INTF_ACTIVE : (face_r_dim == 2 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE);
+
+        const std::uint32_t MOP_INNER_LOOP = (face_r_dim < 4) ? 1 : face_r_dim >> 2;
+        const std::uint32_t MOP_OUTER_LOOP = num_faces * num_tiles;
+
+        ckernel::ckernel_template tmp(
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
+            TT_OP_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_NORMAL_MODE,
+                ADDR_MOD_0,
+                p_pacr::ADDR_CNT_CTXT_0,
+                ZERO_OUTPUT_FLAG,
+                PACK_INTF_SEL,
+                0,
+                0,
+                0,
+                0,
+                0));
+        tmp.set_last_inner_loop_instr(TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_2,
+            p_pacr::ADDR_CNT_CTXT_0,
+            ZERO_OUTPUT_FLAG,
+            PACK_INTF_SEL,
+            0,
+            0,
+            0,
+            0,
+            0));
+        tmp.set_last_outer_loop_instr(TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_1,
+            p_pacr::ADDR_CNT_CTXT_0,
+            ZERO_OUTPUT_FLAG,
+            PACK_INTF_SEL,
+            0,
+            0,
+            0,
+            0,
+            1));
+
+        // if (partial_face) {
+        //     tmp.set_start_op(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0,
+        //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Don't close the tile, point to the next face
+        //     tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0)); // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
+        //     tmp.set_loop_op1(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0,
+        //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Close the tile
+        // }
+
+        tmp.program();
+    }
+}
+
+namespace llk_pack_internal_bh
+{
+/**
+ * @brief Shared packer-init body behind the @ref _llk_pack_init_ overloads.
+ *
+ * Runs the common init sequence with each stage individually skippable: program the ADDR_MOD slots,
+ * build the MOP template, set the packer strides, and program the packer X (datum) counter. The
+ * skip_* template flags let a caller reuse state already established by a prior init or hw-configure.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, the packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
+ *         when another thread borrows the pack thread's ADCs.
+ * @param pack_src_format: Source (dest register) data format; only used when programming strides.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
+ *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
+ * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
+ *       leaves unguarded SETADC issues. Supported for PackMode::Default only.
+ */
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool mutex_ADC, std::uint32_t live = 0>
+inline void pack_init_apply(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const std::uint32_t num_tiles)
+{
+    static_assert(
+        !mutex_ADC || pack_mode == PackMode::Default,
+        "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
+        "which the mutex cannot cover");
+    static_assert(!live || pack_mode == PackMode::Default, "only the default program is kept live");
+
+    // live bit 0 (llk_pack_init_live): the address modes, strides and X counter are hw_configure's; the state store stays.
+    // Bit 1 (llk_pack_mop_live): its one-tile MOP too, unless an init wrote another (pack_mop_dirty, set by llk_pack_init).
+    // Bit 2: the CBs differ in width, so the strides are written where pack_strides_width differs, unless the caller skips them.
+    if constexpr (live != 0)
+    {
+        if ((live & 4) != 0 && !skip_packer_strides && datum_size_in_bytes(pack_src_format) != pack_strides_width)
+        {
+            set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+        }
+        else
+        {
+            llk_pack_state_set_half(0);
+        }
+        if ((live & 2) == 0 || zero_output || num_tiles != 1 || pack_mop_dirty)
+        {
+            _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+        }
+        return;
+    }
+    // The flag store first: behind the config writes it waits for them.
+    if constexpr (pack_mode == PackMode::Default)
+    {
+        LLK_PACK_OTHER_PROGRAM_CLEAR();
+    }
+    else
+    {
+        LLK_PACK_OTHER_PROGRAM_SET();
+        llk_pack_live_forget();
+    }
+    if constexpr (!skip_addrmod_config)
+    {
+        _llk_pack_configure_addrmod_<pack_mode>();
+    }
+    _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    if constexpr (!skip_packer_strides)
+    {
+        set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+    }
+    // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
+    // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
+    {
+        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
+}
+} // namespace llk_pack_internal_bh
+
+/**
+ * @brief Reconfigure the packer source/destination data formats and tile geometry at runtime.
+ *
+ * Used to switch the packer to a new data format without a full HW re-configure.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param tile_size: Size of one output tile in bytes.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ */
+// skip: LLK_PACK_RECONFIG_SKIP_* writes the caller knows are redundant (kernel-wide uniform formats).
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false, bool size = false>
+inline void _llk_pack_reconfig_data_format_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool partial_face        = false)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    if constexpr (skip & LLK_PACK_RECONFIG_SKIP_ALL)
+    {
+        return;
+    }
+
+    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, skip, inl, size>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+}
+
+/**
+ * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
+ *
+ * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
+ * before the init/execute sequence, or again when a later op needs a different packer configuration.
+ *
+ * @note Drains the packer and blocks this RISC until it is idle before any register is rewritten, so it
+ *       is safe to call while a pack from the previous op is still in flight.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param tile_size: Size of one output tile in bytes.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
+ * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
+ * are unaffected by the issue).
+ * @note Establishes the ADDR_MOD_6/7 invariants (dest += 2 / zero advance) this thread's SFPU ops assume.
+ *       Any op that reprograms either slot must restore its invariant before returning.
+ */
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool size = false>
+inline void _llk_pack_hw_configure_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t tile_c_dim  = TILE_C_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const std::uint32_t relu_config = 0)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
+    configure_pack<is_fp32_dest_acc_en, pack_mode, size>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+
+    // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP. SFPU ops also run from this thread.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    // ADDR_MOD_6 is invariant state: dest += 2, so it behaves like dst_reg++.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+}
+
+/**
+ * @brief Initialize the packer (addrmod + MOP + strides) for a pack op given a source format.
+ *
+ * The single Blackhole pack-init entry point: programs ADDR_MODs, the MOP template, (unless skipped)
+ * the packer strides, and the packer X (datum) counter. Per the "inits own SETADCXX" contract, every
+ * init sets its own X-counter value (FACE_C_DIM - 1 on Blackhole). When packing tilized 8-bit datums
+ * the Blackhole row-unswizzle workaround can be skipped (the issue does not affect 8-bit datums).
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides (e.g. when a prior
+ *         hw-configure / reconfig already established them, or the caller programs them itself).
+ * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
+ *         when another thread borrows the pack thread's ADCs. Exposed upstream as
+ *         llk_pack_init_mutex_ADC / pack_init_mutex_ADC.
+ * @param pack_src_format: Source (dest register) data format. Only consulted when programming strides.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
+ * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
+ *       leaves unguarded SETADC issues. Supported for PackMode::Default only: the other modes embed ADC
+ *       instructions in the MOP itself (e.g. the Tilize MOP's SETADCZW end op), which execute inside
+ *       ckernel_template::run() where a scope guard cannot reach them.
+ */
+template <
+    PackMode pack_mode       = PackMode::Default,
+    bool zero_output         = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false,
+    bool mutex_ADC           = false,
+    std::uint32_t live       = 0>
+inline void _llk_pack_init_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const std::uint32_t num_tiles,
+    const bool skip_bh_tilize_workaround)
+{
+    static_assert(
+        !mutex_ADC || pack_mode == PackMode::Default,
+        "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
+        "which the mutex cannot cover");
+
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
+    if (src_format == DataFormat::Float32)
+    {
+        LLK_ASSERT(num_tiles <= 4, "Max supported num_tiles for FLOAT32 is 4.");
+    }
+    else if ((src_format == DataFormat::Float16) || (src_format == DataFormat::Float16_b))
+    {
+        LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
+    }
+
+    // 8bit datums in the unpack src format are not affected by the blackhole issue,
+    // so we can skip the workaround which involves unswizzling rows in the tile.
+    if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
+    {
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, mutex_ADC>(
+            pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
+    }
+    else
+    {
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, mutex_ADC, live>(
+            pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
+    }
+}
+
+/**
+ * @brief Tear down the packer after a pack op (no-op on Blackhole).
+ *
+ * On Blackhole @ref _llk_pack_init_ always sets the PAC X counter to FACE_C_DIM - 1 (a single row),
+ * which is also its default value, so there is no per-pack state for this teardown to restore.
+ *
+ * @note Pairs with @ref _llk_pack_init_.
+ */
+inline void _llk_pack_uninit_()
+{
+    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
+}
+
+// The fast untilize's uninit, and the close the block packs run if it was not called: back to _llk_pack_init_'s
+// default program, strides, address modes and X counter for 32x32 tiles.
+inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_format)
+{
+    // set_packer_strides also zeroes the channel-1 Y stride the fast untilize strided path programs.
+    set_packer_strides<PackMode::Default, false, true, true>(pack_src_format, TILE_C_DIM);
+    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+}
+
+// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call.
+template <DstSync Dst>
+__attribute__((cold)) inline void pack_close_fast_untilize_slow_()
+{
+    _llk_pack_restore_default_program_(pack_fast_untilize_src);
+    // Restore the DEST offset registers the fast untilize moved; the offset id flips with the math thread, so it stays.
+    _llk_init_packer_dest_offset_registers_<Dst>();
+}
+
+// Closes a fast untilize left open before a block pack; nothing in a kernel without llk_pack_fast_untilize.h.
+template <DstSync Dst>
+inline void _llk_pack_close_fast_untilize_()
+{
+    if constexpr (pack_fast_untilize_linked<Dst>)
+    {
+        if (pack_fast_untilize_seen && LLK_PACK_FAST_UNTILIZE_OPEN())
+        {
+            pack_close_fast_untilize_slow_<Dst>();
+        }
+    }
+}
+
+/**
+ * @brief Pack one tile from the destination register to an L1 address.
+ *
+ * Selects the source dest tile, programs the L1 destination address, runs the packer MOP, and resets
+ * the Z counters afterward.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize> (Tilize not supported here)
+ * @tparam mutex_ADC: When true, serialize the per-tile SETADC issues against mutex::THREAD2_ADC. Needed
+ *         only when another thread borrows the pack thread's ADCs. Exposed upstream as
+ *         llk_pack_mutex_ADC / pack_tile_mutex_ADC.
+ * @param tile_index: Index of the source tile in the destination register.
+ * @param address: L1 destination address for the packed tile.
+ * @note Call @ref _llk_pack_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_uninit_ once all pack calls are complete.
+ * @note mutex_ADC has to match the value given to @ref _llk_pack_init_ ; guarding only one of the two
+ *       leaves unguarded SETADC issues. Supported for PackMode::Default only, see @ref _llk_pack_init_.
+ */
+template <
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    PackMode pack_mode = PackMode::Default,
+    bool mutex_ADC     = false,
+    bool rmw_dest      = (Dst == DstSync::SyncFull && pack_mode == PackMode::Default),
+    bool w_invalidate  = true>
+inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
+{
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+    static_assert(
+        !mutex_ADC || pack_mode == PackMode::Default,
+        "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
+        "which the mutex cannot cover");
+
+    if constexpr (rmw_dest)
+    {
+        program_packer_destination_t<false, w_invalidate>(address);
+    }
+
+    set_dst_write_addr<mutex_ADC>(tile_index);
+
+    if constexpr (!rmw_dest)
+    {
+        if constexpr (w_invalidate)
+        {
+            program_packer_destination(address); // main's call, which a kernel may wrap
+        }
+        else
+        {
+            program_packer_destination_t<true, false>(address);
+        }
+    }
+
+    ckernel::ckernel_template::run();
+
+    // Every pack program leaves Z at 0 (the last PACR of the default and tilize MOPs clears it; the others reset it) and the
+    // pack dest init resets it at kernel start, so the byte-wise form leaves the reset out.
+    if constexpr (!(rmw_dest && pack_mode == PackMode::Default))
+    {
+        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    }
+}
+
+// _llk_pack_'s byte-wise default form for a tile whose destination follows prev_address within the same pack call: the
+// address's high byte is written only where it differs from prev_address's, the last value written.
+template <DstSync Dst, bool w_invalidate = true>
+inline void _llk_pack_next_(const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t prev_address)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    if constexpr (w_invalidate)
+    {
+        LLK_PACK_W_INVALIDATE();
+    }
+    TT_RMWCIB0(0xff, address & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    TT_RMWCIB1(0xff, (address >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    if (((address ^ prev_address) >> 16) != 0)
+    {
+        TT_INSN(TT_OP_RMWCIB2(0xff, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32) + ((address >> 8) & 0xff00));
+    }
+    set_dst_write_addr(tile_index);
+    ckernel::ckernel_template::run();
+}
+
+// Packs num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the default program.
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false, bool w_invalidate = true>
+inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
+{
+    static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
+
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    if constexpr (rmw_dest)
+    {
+        program_packer_destination_t<false, w_invalidate>(address);
+    }
+
+    set_dst_write_addr(start_tile_index);
+
+    if constexpr (!rmw_dest)
+    {
+        if constexpr (w_invalidate)
+        {
+            program_packer_destination(address); // main's call, which a kernel may wrap
+        }
+        else
+        {
+            program_packer_destination_t<true, false>(address);
+        }
+    }
+
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
+    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    ckernel::ckernel_template::run_outer(TT_OP_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10));
+
+    // The byte-wise destination write leaves the Z counters to the last PACR's ADDR_MOD, which ends every pack at Z 0.
+    if constexpr (!rmw_dest)
+    {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    }
+}
+
+// The destination words of _llk_pack_block_closed_, issued ahead of the math wait of a full-sync block.
+template <bool rmw_dest = false, bool w_invalidate = true>
+inline void _llk_pack_block_closed_pre_(const std::uint32_t start_tile_index, const std::uint32_t address)
+{
+    // The pack head's order: the byte-wise write before SETADC, the word write after it.
+    if constexpr (rmw_dest)
+    {
+        program_packer_destination_t<false, w_invalidate>(address);
+        set_dst_write_addr(start_tile_index);
+    }
+    else
+    {
+        set_dst_write_addr(start_tile_index);
+        program_packer_destination_t<true, w_invalidate>(address);
+    }
+}
+
+// The pack of _llk_pack_block_closed_ once its destination words are set.
+inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std::uint32_t tile_stride, const std::uint32_t num_faces)
+{
+    // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
+    // Rewriting an unchanged stride cost the call up to 8 cycles.
+    if (tile_stride != pack_ch1_w_stride())
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride_set(tile_stride);
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        ckernel::ckernel_template::run_outer(TT_OP_MOP(1, 0, num_faces << 10));
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+// Packs num_tiles tiles to L1 tiles tile_stride bytes apart (a multiple of 16 below 64 KB), closing every tile so
+// block-float and padded pages stay intact.
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false, bool w_invalidate = true>
+inline void _llk_pack_block_closed_(
+    const std::uint32_t start_tile_index,
+    const std::uint32_t address,
+    const std::uint32_t num_tiles,
+    const std::uint32_t tile_stride,
+    const std::uint32_t num_faces = TILE_NUM_FACES)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    if constexpr (!rmw_dest)
+    {
+        set_dst_write_addr(start_tile_index);
+    }
+
+    if constexpr (!rmw_dest && w_invalidate)
+    {
+        program_packer_destination(address); // main's call, which a kernel may wrap
+    }
+    else
+    {
+        program_packer_destination_t<!rmw_dest, w_invalidate>(address);
+    }
+
+    // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
+    // Rewriting an unchanged stride cost the call up to 8 cycles.
+    if (tile_stride != pack_ch1_w_stride())
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride_set(tile_stride);
+    }
+
+    if constexpr (rmw_dest)
+    {
+        set_dst_write_addr(start_tile_index);
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        ckernel::ckernel_template::run_outer(TT_OP_MOP(1, 0, num_faces << 10));
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>
+TT_ALWAYS_INLINE void pack_block_fast_pacr_()
+{
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+    TTI_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        addr_mod,
+        p_pacr::ADDR_CNT_CTXT_0,
+        ZERO_OUTPUT_FLAG,
+        p_pacr::ALL_INTF_ACTIVE,
+        0,
+        0,
+        0,
+        0,
+        last);
+}
+
+// Fast block packs for four-face 16-row outputs: records one closed tile (16 PACRs, the W step).
+// Call after the default pack init and after any program that replaces the pack MOP or the replay buffer.
+template <bool zero_output = false>
+inline void _llk_pack_block_fast_init_()
+{
+    // The default init leaves the replay buffer alone, so a re-init before every block records the tile only once.
+    if (pack_fast_replay_valid)
+    {
+        return;
+    }
+    load_replay_buf(
+        0,
+        17,
+        []
+        {
+            for (int face = 0; face < 3; face++)
+            {
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_2, 0>();
+            }
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_1, 1>();
+            TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+        });
+    pack_fast_replay_valid = true;
+}
+
+// _llk_pack_block_ with the destination written by bytes (needs _llk_pack_block_fast_init_).
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_fast_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    program_packer_destination_t<false>(address);
+
+    set_dst_write_addr(start_tile_index);
+
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
+    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    ckernel::ckernel_template::run_outer(TT_OP_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10));
+    // No Z reset: the last PACR's ADDR_MOD clears the source Z and nothing in this program moves the L1 side counters.
+}
+
+// _llk_pack_block_closed_ for four-face 16-row tiles, each replayed from the buffer (needs _llk_pack_block_fast_init_).
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_fast_(
+    const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles, const std::uint32_t tile_stride)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    program_packer_destination_t<false>(address);
+
+    if (tile_stride != pack_ch1_w_stride())
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride_set(tile_stride);
+    }
+
+    set_dst_write_addr(start_tile_index);
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TTI_REPLAY(0, 17, 0, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+// W offset block packs: program the output once, then move each call with the channel-1 W counter (SETADC); the
+// L1_Dest_addr write this saves waits for the packer to drain, 10 to 30 cycles in a call of a few tiles.
+inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint32_t tile_stride)
+{
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+    program_packer_destination_t<false>(address);
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+    pack_ch1_w_stride_set(tile_stride);
+}
+
+// The packer adds the channel-1 W counter times its stride to the output address and wraps at 256 KB.
+constexpr std::uint32_t PACK_W_REACH_WORDS = 1 << 14;
+
+// Whether W offset blocks up to tile tiles_end of page_words pages stay inside the reach of one programmed base.
+constexpr bool _llk_pack_block_w_reach_(const std::uint32_t tiles_end, const std::uint32_t page_words)
+{
+    return tiles_end * page_words <= PACK_W_REACH_WORDS;
+}
+
+// _llk_pack_block_fast_ with the output out_tile tiles from the _llk_pack_block_w_init_ base.
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_w_(const std::uint32_t start_tile_index, const std::uint32_t out_tile, const std::uint32_t num_tiles)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_W, out_tile);
+
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
+    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    ckernel::ckernel_template::run_outer(TT_OP_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10));
+    // Back to W 0 so that packs without the W offset write where they program
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+// _llk_pack_block_closed_fast_ with the output out_tile tiles from the _llk_pack_block_w_init_ base.
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_w_(const std::uint32_t start_tile_index, const std::uint32_t out_tile, const std::uint32_t num_tiles)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_W, out_tile);
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TTI_REPLAY(0, 17, 0, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+// _llk_pack_block_closed_ (one MOP run per tile, any shape) with the output out_tile tiles from the W init base.
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_w_mop_(
+    const std::uint32_t start_tile_index, const std::uint32_t out_tile, const std::uint32_t num_tiles, const std::uint32_t num_faces = TILE_NUM_FACES)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_W, out_tile);
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        ckernel::ckernel_template::run_outer(TT_OP_MOP(1, 0, num_faces << 10));
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}

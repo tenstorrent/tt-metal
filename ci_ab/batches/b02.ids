@@ -1,0 +1,48 @@
+#U 604
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_composite_decode_baseline_perf[blackhole-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_composite_decode_matches_fla_naive[blackhole-1-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_decode_matches_fla_naive[blackhole-0-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_decode_matches_fla_naive[blackhole-2-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_decode_no_initial_state[blackhole-1-mesh_device0]
+models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py::test_fused_decode_perf[blackhole-mesh_device0]
+#U 415
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul[num_loops=20-out_dtype=DataType.BFLOAT16-in1_dtype=DataType.BFLOAT16-in0_dtype=DataType.BFLOAT16]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul[num_loops=20-out_dtype=DataType.BFLOAT16-in1_dtype=DataType.BFLOAT8_B-in0_dtype=DataType.BFLOAT16]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul[num_loops=20-out_dtype=DataType.BFLOAT8_B-in1_dtype=DataType.BFLOAT16-in0_dtype=DataType.BFLOAT16]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul[num_loops=20-out_dtype=DataType.BFLOAT8_B-in1_dtype=DataType.BFLOAT8_B-in0_dtype=DataType.BFLOAT16]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul_fp32[num_loops=20-in_dtype=DataType.BFLOAT16]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul_fp32[num_loops=20-in_dtype=DataType.FLOAT32]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul_with_program_cache[num_loops=20-out_dtype=DataType.BFLOAT16-in1_dtype=DataType.BFLOAT16-in0_dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul_with_program_cache[num_loops=20-out_dtype=DataType.BFLOAT16-in1_dtype=DataType.BFLOAT8_B-in0_dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul_with_program_cache[num_loops=20-out_dtype=DataType.BFLOAT8_B-in1_dtype=DataType.BFLOAT16-in0_dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_attn_matmul_with_program_cache[num_loops=20-out_dtype=DataType.BFLOAT8_B-in1_dtype=DataType.BFLOAT8_B-in0_dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul[num_loops=5-batch=32-K=64-seq_len=608-q_heads=32-kv_heads=2-in0_sharded=False-in1_sharded=False-output_sharded=False-shard_orientation=ShardOrientation.ROW_MAJOR]
+tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul[num_loops=5-batch=32-K=64-seq_len=608-q_heads=32-kv_heads=2-in0_sharded=False-in1_sharded=False-output_sharded=True-shard_orientation=ShardOrientation.ROW_MAJOR]
+#U 317
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_compatibility_goldens[qwen27b_tp4/B1/T1/s0]
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_compatibility_goldens[qwen27b_tp4/B1/T8/s0]
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_decode_matches_golden[qwen27b_tp4-B1-T1-s0]
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_decode_matches_golden[qwen27b_tp4-B1-T4-s0]
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_decode_matches_golden[qwen27b_tp8-B1-T1-s0]
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_decode_matches_golden[qwen9b_tp1-B1-T1-zero]
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py::test_multi_token_equals_chained_single_token
+#U 231
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_bit_identity_fused_layout[blackhole-single-chip]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_bit_identity_standalone_layout[blackhole-single-chip-no-pad]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_bit_identity_standalone_layout[blackhole-single-chip-pad128-skip]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_bit_identity_standalone_layout[blackhole-single-chip-pad128]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_capacity_and_arch_contract_host
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_mesh_block_pair_vs_shared[blackhole-block-2x4]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_perf_vs_shared_op[blackhole-single-chip-five-chunks]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_perf_vs_shared_op[blackhole-single-chip-one-chunk]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_placement_matches_shared_op[blackhole-single-chip]
+models/demos/gemma4/tests/unit/custom_ops/test_moe_compute.py::test_routing_shards_off_the_drain_core_refused[blackhole-single-chip]
+#U 187
+models/experimental/uniad/tests/unit/test_dcn_device.py::test_modulated_deform_conv_device_matches_reference[6-1024-512-20-12-device_params0]
+models/experimental/uniad/tests/unit/test_dcn_device.py::test_modulated_deform_conv_device_matches_reference[6-256-512-40-23-device_params0]
+models/experimental/uniad/tests/unit/test_dcn_device.py::test_modulated_deform_conv_device_matches_reference[6-512-512-20-12-device_params0]
+#U 155
+tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul_split.py::test_linear_split_dtypes[fp32]
+tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul_split.py::test_linear_split_swiglu[no_bias-chunks=1]
+#U 122
+models/demos/deepseek_v3_d_p/tests/didt/test_deepseek_v3_128k_matmul.py::test_deepseek_v3_mla_matmul[blackhole-1chips-v_out_out_proj]
