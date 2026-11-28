@@ -121,6 +121,13 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
             out_tensor.memory_config() == operation_attributes.output_mem_config,
             "Mismatched output memory config. Check to see if the preallocated output tensor has a different shard "
             "spec than the one specified in the passed-in memory config.");
+        TT_FATAL(
+            input_tensor_a.layout() != Layout::TILE || input_tensor_a.is_sharded() || out_tensor.is_sharded() ||
+                out_tensor.padded_shape() == input_tensor_a.padded_shape(),
+            "Interleaved tiles are copied in order, so the output tensor's padded shape {} must equal the input "
+            "tensor's padded shape {}",
+            out_tensor.padded_shape(),
+            input_tensor_a.padded_shape());
         TT_FATAL(out_tensor.dtype() == operation_attributes.output_dtype, "Mismatched output dtype");
         TT_FATAL(out_tensor.storage_type() == StorageType::DEVICE, "Output tensor needs to be on device!");
         TT_FATAL(out_tensor.is_allocated(), "Output tensor needs to be allocated in buffers on device!");
@@ -163,9 +170,14 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
         operation_attributes.output_dtype,
         tt::tt_metal::PageConfig(input_tensor.layout()),
         operation_attributes.output_mem_config);
-    auto output_padded_shape = output_layout.compute_padded_shape(
-        input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
-                                        // padded_shape due to having a different shard_spec.
+    // We need to account for the fact that the output tensor may have a different padded_shape due to having a
+    // different shard_spec. Interleaved tiles are copied in order, though, so between interleaved tensors the output
+    // keeps the input's padded shape: whole padding tiles past the logical shape would otherwise shift every later
+    // tile row.
+    const bool interleaved_tile_copy = input_tensor.layout() == Layout::TILE && !input_tensor.is_sharded() &&
+                                       !operation_attributes.output_mem_config.is_sharded();
+    auto output_padded_shape = interleaved_tile_copy ? input_tensor.padded_shape()
+                                                     : output_layout.compute_padded_shape(input_tensor.logical_shape());
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::experimental::tensor_layout_from_padded_shape(

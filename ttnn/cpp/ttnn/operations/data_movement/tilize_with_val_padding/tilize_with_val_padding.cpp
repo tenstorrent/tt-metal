@@ -23,7 +23,9 @@ using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedTilizeVal build_ndiml_tilize_val(
-    BaseTilizeValType base_tilize, const std::optional<CoreRangeSet>& sub_core_grids) {
+    BaseTilizeValType base_tilize,
+    const ttnn::Shape& output_padded_shape,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     auto original_shape = std::make_shared<Shape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
@@ -33,9 +35,11 @@ MassagedTilizeVal build_ndiml_tilize_val(
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
+            // The requested padded shape is passed on, or reshape would rebuild the tiles on the default padding.
             auto unsqueezed_tensor = ttnn::reshape(
                 output,
                 *original_shape,
+                output_padded_shape,
                 std::nullopt /*Memory Config*/,
                 std::nullopt /*pad value*/,
                 TileReshapeMapMode::CACHE,
@@ -180,7 +184,8 @@ ttnn::Tensor tilize_with_val_padding(
             sub_core_grids);
     };
 
-    return operations::data_movement::build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
+    return operations::data_movement::build_ndiml_tilize_val(
+        base_tilize, output_padded_shape, sub_core_grids)(input_tensor);
 }
 
 ttnn::Tensor tilize_with_val_padding(

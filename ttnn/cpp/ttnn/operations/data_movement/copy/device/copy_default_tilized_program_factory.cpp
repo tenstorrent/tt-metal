@@ -58,20 +58,23 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     auto compute_with_storage_grid_size =
         device->compute_with_storage_grid_size();  // This can be replaced with get_worker_cores in subdevices
 
-    const auto& logical_shape = input.logical_shape();
+    // Tiles are copied in order, so when both tensors share a padded shape every one of its pages is copied:
+    // whole padding tiles past the logical shape are still pages, and later tiles sit after them.
+    const auto& copied_shape =
+        input.padded_shape() == output.padded_shape() ? input.padded_shape() : input.logical_shape();
     const auto& tile = input.tensor_spec().tile();
     const std::uint32_t tile_height = tile.get_height();
     const std::uint32_t tile_width = tile.get_width();
-    const std::uint32_t rank = logical_shape.rank();
+    const std::uint32_t rank = copied_shape.rank();
     std::uint32_t total_tiles = 1;
     if (rank >= 1) {
-        total_tiles = tt::div_up(logical_shape[-1], tile_width);
+        total_tiles = tt::div_up(copied_shape[-1], tile_width);
     }
     if (rank >= 2) {
-        total_tiles *= tt::div_up(logical_shape[-2], tile_height);
+        total_tiles *= tt::div_up(copied_shape[-2], tile_height);
     }
     for (std::uint32_t i = 0; i + 2 < rank; ++i) {
-        total_tiles *= logical_shape[i];
+        total_tiles *= copied_shape[i];
     }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles);
