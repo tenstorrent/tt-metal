@@ -528,3 +528,40 @@ def test_extract_resource_usage_per_core_deprecated_kwarg():
     assert legacy.peak_cb == baseline.peak_cb
     assert legacy.peak_l1 == baseline.peak_l1
     assert legacy.peak_total == baseline.peak_total
+
+
+def _l1_buffer(counter, size):
+    return {
+        "counter": counter,
+        "node_type": "buffer",
+        "params": {"type": "L1", "size": str(size), "address": "0", "device_id": "0"},
+        "connections": [],
+    }
+
+
+def test_peak_l1_memory_usage_does_not_underflow_on_an_uncounted_deallocate():
+    """A capture can free a buffer that was allocated before it started. Subtracting bytes that were
+    never added wrapped the unsigned running total, so the reported peak was roughly 4 GiB."""
+    trace = [
+        {"counter": 0, "node_type": "function_start", "params": {"name": "ttnn.relu"}, "connections": []},
+        # A composite op records its prim calls as nested functions; the freeing prim is not the
+        # top-level op, so the leading-buffer scan never counts this buffer.
+        {"counter": 1, "node_type": "function_start", "params": {"name": "ttnn.relu_"}, "connections": []},
+        _l1_buffer(2, 4096),
+        {"counter": 3, "node_type": "buffer_deallocate", "params": {}, "connections": [2]},
+        {"counter": 4, "node_type": "function_end", "params": {"name": "ttnn.relu_"}, "connections": []},
+        {"counter": 5, "node_type": "function_end", "params": {"name": "ttnn.relu"}, "connections": []},
+    ]
+
+    assert ttnn.graph.extract_peak_L1_memory_usage(trace) == 0
+
+
+def test_peak_l1_memory_usage_pairs_a_counted_buffer_with_its_deallocate():
+    """Control: a buffer the capture allocated is still subtracted when it is freed."""
+    trace = [
+        _l1_buffer(0, 2048),
+        {"counter": 1, "node_type": "buffer_allocate", "params": {"type": "L1", "size": "2048"}, "connections": [0]},
+        {"counter": 2, "node_type": "buffer_deallocate", "params": {}, "connections": [0]},
+    ]
+
+    assert ttnn.graph.extract_peak_L1_memory_usage(trace) == 2048
