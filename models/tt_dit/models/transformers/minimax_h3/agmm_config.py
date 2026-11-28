@@ -91,7 +91,7 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 
 
 class AgmmMode(enum.Enum):
-    """Accuracy / speed trade-off of the dynamic-length path's pinned all-gather matmuls."""
+    """Accuracy / speed trade-off of the pinned all-gather matmuls."""
 
     ACCURATE = "accurate"  # fp32 dest accumulation on every layer
     BALANCED = "balanced"  # fp32 dest accumulation off on the layers with a faster pin that way
@@ -100,31 +100,59 @@ class AgmmMode(enum.Enum):
 DEFAULT_AGMM_MODE = AgmmMode.BALANCED
 
 
-def resolve_agmm_mode(mode: AgmmMode | str | None = None) -> AgmmMode:
-    """`mode` if given, else MINIMAX_H3_AGMM_MODE (`accurate` / `balanced`), else `DEFAULT_AGMM_MODE`."""
+def resolve_agmm_mode(
+    mode: AgmmMode | str | None = None, *, full_grid: ttnn.CoreCoord, pruned: bool = False
+) -> AgmmMode:
+    """`mode` if given, else MINIMAX_H3_AGMM_MODE (`accurate` / `balanced`), else `DEFAULT_AGMM_MODE`; except that
+    a checkpoint that is not `pruned` defaults to ACCURATE on Blackhole, whose BALANCED pins were only checked on
+    the pruned (10Eros) checkpoints."""
     if mode is None:
-        mode = os.environ.get("MINIMAX_H3_AGMM_MODE") or DEFAULT_AGMM_MODE
+        mode = os.environ.get("MINIMAX_H3_AGMM_MODE") or None
+    if mode is None:
+        unchecked = compute_grid_key(full_grid) == BLACKHOLE_COMPUTE_GRID and not pruned
+        mode = AgmmMode.ACCURATE if unchecked else DEFAULT_AGMM_MODE
     return AgmmMode(mode)
 
 
 class AgmmLayerPin(NamedTuple):
     """One layer's pinned program: the (M, K, N) blocking per length class, the worker-grid orientation, the
-    subblock and whether Dst accumulates in fp32."""
+    subblock and whether Dst accumulates in fp32. A `bucketed` pin is the bucketed path's: there it replaces the
+    length-keyed table, and the dynamic-length path does not take it."""
 
     blockings: dict[str, tuple[int, int, int]]
     transpose_core_grid: bool
     subblock: tuple[int, int] = (2, 2)
     fp32_dest_acc_en: bool = True
+    bucketed: bool = False
 
 
-# Pins of the dynamic-length path per device compute grid, mode and (K, N) layer. A mode other than ACCURATE lists
-# only the layers it changes. Blackhole's to_qkv and ff1 run non-transposed, against the op's `M > N` rule.
+# Pins per device compute grid, mode and (K, N) layer. A mode other than ACCURATE lists only the layers it changes.
+# Blackhole's ACCURATE to_qkv and ff1 run non-transposed, against the op's `M > N` rule.
 AGMM_PINS: dict[tuple[int, int], dict[AgmmMode, dict[tuple[int, int], AgmmLayerPin]]] = {
     BLACKHOLE_COMPUTE_GRID: {
         AgmmMode.ACCURATE: {
             (5376, 5376): AgmmLayerPin({"short": (4, 6, 16), "long": (4, 6, 16)}, transpose_core_grid=False),
             (5376, 7168): AgmmLayerPin({"short": (6, 3, 16), "long": (4, 3, 16)}, transpose_core_grid=False),
             (7168, 1344): AgmmLayerPin({"short": (6, 8, 6), "long": (6, 8, 6)}, transpose_core_grid=True),
+        },
+        # The bucketed path's, swept there on 4x8 at 9216 and 6112 rows per device (other bucketed sizes and meshes
+        # take them unswept): against its length-keyed table the M_block of 8 gives most of the gain; fp32 dest
+        # accumulation off leaves Dst 8 tiles, so the subblocks double.
+        AgmmMode.BALANCED: {
+            (5376, 5376): AgmmLayerPin(
+                {"short": (8, 7, 12), "long": (8, 7, 12)},
+                transpose_core_grid=True,
+                subblock=(4, 2),
+                fp32_dest_acc_en=False,
+                bucketed=True,
+            ),
+            (5376, 7168): AgmmLayerPin(
+                {"short": (8, 6, 16), "long": (8, 6, 16)},
+                transpose_core_grid=True,
+                subblock=(4, 2),
+                fp32_dest_acc_en=False,
+                bucketed=True,
+            ),
         },
     },
     WORMHOLE_COMPUTE_GRID: {
@@ -204,17 +232,29 @@ def agmm_pins(
     num_links: int,
     compute_kernel_config: ttnn.WormholeComputeKernelConfig,
     mode: AgmmMode | str | None = None,
-) -> dict[str, AgmmPin]:
-    """The AGMM program of a `(K, N)` layer per length class in `mode` (`resolve_agmm_mode`): the mode's pin for
-    the layer, else its ACCURATE pin. `compute_kernel_config` is the caller's, with the pin's Dst accumulation.
-    Classes with the same blocking share one pin."""
+    dynamic_length: bool = True,
+) -> dict[str, AgmmPin] | None:
+    """The AGMM program of a `(K, N)` layer per length class in `mode` (`resolve_agmm_mode`): the mode's
+    dynamic-length pin for the layer, else its ACCURATE pin. `compute_kernel_config` is the caller's, with the pin's
+    Dst accumulation. Classes with the same blocking share one pin.
+
+    With `dynamic_length` off (the bucketed path) only the mode's own `bucketed` pin applies; None without one,
+    and the layer keeps the length-keyed table (`agmm_kwargs`)."""
     device_grid = compute_grid_key(full_grid)
-    if device_grid not in AGMM_PINS:
-        raise ValueError(f"dynamic_length has no pinned AGMM blockings for the {device_grid} compute grid")
-    pins_by_mode = AGMM_PINS[device_grid]
-    layer = pins_by_mode.get(resolve_agmm_mode(mode), {}).get((k, n)) or pins_by_mode[AgmmMode.ACCURATE].get((k, n))
-    if layer is None:
-        raise ValueError(f"dynamic_length has no pinned AGMM blocking for (K, N)={(k, n)}; TP=4 layouts only")
+    mode = resolve_agmm_mode(mode, full_grid=full_grid)
+    if dynamic_length:
+        if device_grid not in AGMM_PINS:
+            raise ValueError(f"dynamic_length has no pinned AGMM blockings for the {device_grid} compute grid")
+        pins_by_mode = AGMM_PINS[device_grid]
+        layer = pins_by_mode.get(mode, {}).get((k, n))
+        if layer is None or layer.bucketed:
+            layer = pins_by_mode[AgmmMode.ACCURATE].get((k, n))
+        if layer is None:
+            raise ValueError(f"dynamic_length has no pinned AGMM blocking for (K, N)={(k, n)}; TP=4 layouts only")
+    else:
+        layer = AGMM_PINS.get(device_grid, {}).get(mode, {}).get((k, n))
+        if layer is None or not layer.bucketed:
+            return None
     layer = _pin_override(k, n, layer)
     grid = agmm_worker_grid(full_grid, layer.transpose_core_grid, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
