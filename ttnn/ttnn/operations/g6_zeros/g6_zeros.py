@@ -1,13 +1,8 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_zeros: a new DRAM-interleaved TILE tensor whose every element is +0.0.
-
-One device program per call: each writer core sits next to its DRAM bank's NoC1-optimal worker,
-zero-fills a small L1 region, then streams a contiguous same-bank run of output pages from it.
-Nothing is read from DRAM, and each page is written once.
-"""
+"""g6_zeros: a new DRAM-interleaved TILE tensor of ``shape``/``dtype`` filled with +0.0,
+made by ONE device program (single writer kernel, bank-affine coalesced zero runs)."""
 
 from __future__ import annotations
 
@@ -15,18 +10,12 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_zeros_program_descriptor import (
-    create_program_descriptor,
-    knob_values,
-    plan_bank_runs,
-    set_output_address,
-)
+from .g6_zeros_program_descriptor import create_program_descriptor, make_plan
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS
+# 1. INPUT_TAGGERS — inputs[0] is the scenario dict {"shape", "dtype", "layout"}
 # ---------------------------------------------------------------------------
-# `inputs` is (scenario,), scenario = {"shape": tuple, "dtype": ..., "layout": ...}.
 
 
 def tag_dtype(inputs, axes):
@@ -44,11 +33,11 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED
+# 2. SUPPORTED (Phase 0) — bfloat16 / bfloat8_b are knob-turns (page size only)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "dtype": [ttnn.float32],
     "layout": [ttnn.TILE_LAYOUT],
 }
 
@@ -65,148 +54,87 @@ EXCLUSIONS = []
 # ---------------------------------------------------------------------------
 
 
-def _check_arguments(shape, layout, device, memory_config):
+def validate(shape, *, dtype, layout, device, memory_config):
+    # (1) structural checks
     if not isinstance(shape, (list, tuple)) or len(shape) != 4:
-        raise ValueError(f"g6_zeros: shape must be a list or tuple of 4 ints, got {shape!r}")
-    for d in shape:
-        if isinstance(d, bool) or not isinstance(d, int):
-            raise ValueError(f"g6_zeros: shape sizes must be ints, got {shape!r}")
-        if d < 1:
-            raise ValueError(f"g6_zeros: shape sizes must be >= 1, got {shape!r}")
+        raise ValueError(f"g6_zeros: shape must be 4 ints, got {shape!r}")
+    if not all(isinstance(d, int) and not isinstance(d, bool) for d in shape):
+        raise ValueError(f"g6_zeros: shape must be ints, got {shape!r}")
+    if any(d < 1 for d in shape):
+        raise ValueError(f"g6_zeros: every dim must be >= 1, got {shape!r}")
     if shape[2] % 32 != 0 or shape[3] % 32 != 0:
-        raise ValueError(f"g6_zeros: the last two sizes must be multiples of 32, got {shape!r}")
-
+        raise ValueError(f"g6_zeros: d_2 and d_3 must be multiples of 32, got {shape!r}")
     if layout != ttnn.TILE_LAYOUT:
         raise ValueError(f"g6_zeros: layout must be TILE_LAYOUT, got {layout!r}")
-
-    if not isinstance(memory_config, ttnn.MemoryConfig):
-        raise ValueError(f"g6_zeros: memory_config must be a ttnn.MemoryConfig, got {memory_config!r}")
     if (
-        memory_config.buffer_type != ttnn.BufferType.DRAM
+        memory_config is None
+        or memory_config.buffer_type != ttnn.BufferType.DRAM
         or memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     ):
         raise ValueError(f"g6_zeros: memory_config must be DRAM interleaved, got {memory_config!r}")
+    if device is None or not hasattr(device, "compute_with_storage_grid_size"):
+        raise ValueError(f"g6_zeros: device must be an open ttnn device / mesh device, got {device!r}")
 
-    if not isinstance(device, (ttnn.MeshDevice, ttnn.Device)):
-        raise ValueError(f"g6_zeros: device must be a ttnn device or mesh device, got {device!r}")
-    try:
-        device.compute_with_storage_grid_size()
-    except Exception as error:
-        raise RuntimeError(f"g6_zeros: device is not open: {error}") from error
-
-
-def validate(shape, *, dtype, layout, device, memory_config):
-    _check_arguments(shape, layout, device, memory_config)
-
-    scenario = {"shape": tuple(int(d) for d in shape), "dtype": dtype, "layout": layout}
+    # (2) axes from taggers
+    scenario = {"shape": tuple(shape), "dtype": dtype, "layout": layout}
     axes = {}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((scenario,), axes)
 
+    # (3) SUPPORTED per axis
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"g6_zeros: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
 
+    # (4) EXCLUSIONS
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"g6_zeros: unsupported combination (refinement candidate): {exc}")
 
 
 # ---------------------------------------------------------------------------
-# Host plan cache (BB-07, BB-08)
+# Host-side descriptor cache (BB-07): build once per plan key, patch the address per call.
 # ---------------------------------------------------------------------------
-# One (plan, ProgramDescriptor) per key. A repeat call patches the output address and dispatches;
-# it never rebuilds the descriptor. Every shape-, dtype- or knob-dependent value is in the key.
 
-_PLAN_CACHE = {}
+_DESCRIPTOR_CACHE = {}
 
 
-def _device_key(device):
-    grid = device.compute_with_storage_grid_size()
-    return (type(device).__name__, device.id(), grid.x, grid.y)
-
-
-def _plan_key(shape, dtype, device):
-    return (_device_key(device), tuple(int(d) for d in shape), dtype, knob_values())
-
-
-def _num_banks(device):
-    return ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
-
-
-def _bank_seeds(device):
-    # The writer runs on BRISC with NoC1 (WriterConfigDescriptor), so the seeds are NoC1-optimal.
-    # On a mesh this is the first local chip's map; the same program runs on every chip, and a
-    # differently harvested chip stays correct, only possibly farther from its banks.
-    return tuple(ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1))
-
-
-def _plan_for(shape, dtype, device):
-    """The one plan derivation, shared by describe_plan() and the dispatch path."""
-    num_pages = int(shape[0]) * int(shape[1]) * -(-int(shape[2]) // 32) * -(-int(shape[3]) // 32)
-    dram_alignment = ttnn.get_dram_alignment()
-    aligned_page_size = -(-ttnn.tile_size(dtype) // dram_alignment) * dram_alignment
-    return plan_bank_runs(
-        num_pages,
-        _num_banks(device),
-        aligned_page_size,
-        device.compute_with_storage_grid_size(),
-        bank_seeds=_bank_seeds(device),
+def g6_zeros_plan(shape, dtype, device):
+    """Report the selected plan (BB-08): regime R1, cores_per_bank, cores used, burst_pages, B."""
+    out_spec_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-
-
-def describe_plan(shape, *, dtype, device) -> dict:
-    """Report the plan a call with these arguments selects: regime, knobs, and every core's role."""
-    key = _plan_key(shape, dtype, device)
-    plan = _PLAN_CACHE[key][0] if key in _PLAN_CACHE else _plan_for(shape, dtype, device)
-
-    roles = {}
-    for x in range(plan.grid[0]):
-        for y in range(plan.grid[1]):
-            roles[(x, y)] = "idle"
-    for core, core_blocks in zip(plan.cores, plan.blocks):
-        roles[(core.x, core.y)] = [
-            f"writer(bank={run.bank}, first_page_id={run.first_page_id}, core_slots={run.core_slots})"
-            for run in core_blocks
-        ]
-
+    plan = make_plan(out_spec_tensor.buffer_num_pages(), out_spec_tensor.buffer_aligned_page_size(), device)
+    ttnn.deallocate(out_spec_tensor)
     return {
-        "regime": "bank_run",
+        "regime": "R1_bank_affine_coalesced_runs",
         "num_pages": plan.num_pages,
-        "N": plan.num_banks,
-        "aligned_page_size": plan.aligned_page_size,
-        "writers_per_bank": plan.writers_per_bank,
-        "placement": plan.placement,
+        "num_banks": plan.num_banks,
+        "cores_per_bank": plan.cores_per_bank,
+        "cores_used": plan.num_cores,
+        "burst_pages": plan.burst_pages,
         "zero_source_bytes": plan.zero_source_bytes,
-        "zero_source_regions": plan.zero_source_regions,
-        "core_ranges": str(plan.core_ranges),
-        "roles": roles,
     }
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def g6_zeros(shape, *, dtype, layout, device, memory_config) -> ttnn.Tensor:
+def g6_zeros(shape, *, dtype, layout, device, memory_config):
     validate(shape, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
     output = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, memory_config)
 
-    key = _plan_key(shape, dtype, device)
-    cached = _PLAN_CACHE.get(key)
-    if cached is None:
-        plan = _plan_for(shape, dtype, device)
-        # The allocator's buffer is the source of truth; a host derivation that disagrees would
-        # plan runs over the wrong pages.
-        assert plan.num_pages == output.buffer_num_pages(), "g6_zeros: host page count disagrees with the buffer"
-        assert (
-            plan.aligned_page_size == output.buffer_aligned_page_size()
-        ), "g6_zeros: host page stride disagrees with the buffer"
-        cached = (plan, create_program_descriptor(output, plan))
-        _PLAN_CACHE[key] = cached
-    program_descriptor = cached[1]
-    set_output_address(program_descriptor, output)
+    num_pages = output.buffer_num_pages()
+    aps = output.buffer_aligned_page_size()
+    grid = device.compute_with_storage_grid_size()
+    key = (id(device), num_pages, str(dtype), aps, grid.x, grid.y)
 
-    return ttnn.generic_op([output], program_descriptor)
+    desc = _DESCRIPTOR_CACHE.get(key)
+    if desc is None:
+        plan = make_plan(num_pages, aps, device)
+        desc = create_program_descriptor(output, plan)
+        _DESCRIPTOR_CACHE[key] = desc
+    else:
+        writer = desc.kernels[0]
+        writer.common_runtime_args = [output.buffer_address()]
+        desc.kernels = [writer]
+
+    return ttnn.generic_op([output], desc)
