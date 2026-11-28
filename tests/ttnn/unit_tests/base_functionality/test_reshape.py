@@ -349,6 +349,25 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_memory_config, output_memory_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+)
+def test_reshape_on_device_view_memory_config(device, layout, input_memory_config, output_memory_config):
+    torch_input_tensor = torch.rand((2, 3, 32, 32), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.reshape(6, 1, 32, 32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, memory_config=input_memory_config)
+    output_tensor = ttnn.reshape_on_device(input_tensor, 6, 1, 32, 32, memory_config=output_memory_config)
+
+    assert output_tensor.memory_config().buffer_type == output_memory_config.buffer_type
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
+
+
 def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c, h // 2, w * 2)
