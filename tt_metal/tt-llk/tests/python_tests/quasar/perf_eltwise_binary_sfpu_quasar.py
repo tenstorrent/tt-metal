@@ -35,6 +35,22 @@ def _perf_approx_modes(mathop):
     return [ApproximationMode.No]
 
 
+def _perf_int_sign_magnitude(mathop):
+    # Quasar add_int_tile and mul_int_tile pass SIGN_MAGNITUDE_FORMAT=true.
+    return [mathop in (MathOperation.SfpuElwadd, MathOperation.SfpuMulInt32)]
+
+
+_INT_PERF_SWEEP = {
+    **_func.INT_SWEEP,
+    "sign_magnitude": _perf_int_sign_magnitude,
+}
+
+# The quantization tile calls leave SIGN_MAGNITUDE_FORMAT false.
+_QUANT_PERF_SWEEP = {
+    **_func.QUANT_SWEEP,
+    "sign_magnitude": [False],
+}
+
 _FLOAT_PERF_SWEEP = {
     **_func.FLOAT_SWEEP,
     "approx_mode": _perf_approx_modes,
@@ -44,7 +60,7 @@ _FLOAT_PERF_SWEEP = {
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **_func.INT_SWEEP,
+    **_INT_PERF_SWEEP,
     approx_mode=[ApproximationMode.No],
     **_PERF_AXES,
 )
@@ -202,7 +218,7 @@ def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **_func.QUANT_SWEEP,
+    **_QUANT_PERF_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_quant_quasar(
