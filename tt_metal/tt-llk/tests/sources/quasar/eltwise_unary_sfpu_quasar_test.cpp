@@ -24,6 +24,9 @@
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -120,6 +123,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif
@@ -138,6 +148,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -261,6 +274,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -272,6 +291,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -342,5 +364,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 #endif

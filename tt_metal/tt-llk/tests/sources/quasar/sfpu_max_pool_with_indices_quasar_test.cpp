@@ -29,6 +29,9 @@
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -61,6 +64,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif // LLK_TRISC_UNPACK
@@ -81,6 +91,9 @@ using namespace ckernel::sfpu;
 
 static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "max_pool_with_indices test only implements L1_TO_L1");
 static_assert(unpack_to_dest, "max_pool_with_indices test stages its operands through Unpack-to-Dest");
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -128,6 +141,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         wait_mop_idle();
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif // LLK_TRISC_MATH
@@ -139,6 +158,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -171,6 +193,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif // LLK_TRISC_PACK
