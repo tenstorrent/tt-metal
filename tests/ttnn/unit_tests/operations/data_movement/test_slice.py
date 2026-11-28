@@ -3172,3 +3172,24 @@ def test_slice_rm_into_one_row_block_shard_on_one_shard_column(device, rows, dty
     )
 
     assert_exact(x[:, :, 1 : 1 + rows, :], ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("width, dtype", [(80, torch.float32), (160, torch.bfloat16)])
+def test_slice_rm_uneven_core_split(device, width, dtype):
+    # Output rows split 97/96 over the core grid, so the two core groups pad to different multiples of 32.
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    if num_cores % 2:
+        pytest.skip("needs an even number of cores")
+    shape = [1, num_cores // 2, 200, width]
+    ends = [1, num_cores // 2, 193, width]
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=dtype)
+    begins = [0] * len(shape)
+    expected = torch_input[tuple(slice(b, e) for b, e in zip(begins, ends))]
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.slice(ttnn_input, begins, ends))
+
+    assert_equal(expected, actual)
