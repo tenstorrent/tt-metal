@@ -3772,6 +3772,36 @@
   },
   "waiting": null
  },
+ "MB.NCL": {
+  "attempts": 0,
+  "duration_s": 636.8,
+  "history": [
+   {
+    "s": 636.8,
+    "status": "PASS",
+    "t": "2026-11-28T06:45:54"
+   }
+  ],
+  "last_run": "2026-11-28T06:45:52",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/MB.NCL.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [],
+   "units": {
+    "MB.NCL#test_determinism": "392eceff59e2e040",
+    "MB.NCL#test_no_rebuild": "2863bbd7fad9217c",
+    "MB.NCL#test_skip_positions": "25fa9f820456feb7"
+   }
+  },
+  "started": "2026-11-28T06:35:15",
+  "status": "PASS",
+  "units": {
+   "MB.NCL#test_determinism": "PASS",
+   "MB.NCL#test_no_rebuild": "PASS",
+   "MB.NCL#test_skip_positions": "PASS"
+  }
+ },
  "P.1": {
   "agent": {
    "defs": {
