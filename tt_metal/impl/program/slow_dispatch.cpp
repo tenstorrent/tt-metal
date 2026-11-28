@@ -31,6 +31,7 @@
 #include "impl/allocator/allocator.hpp"
 #include "kernel_config_buffer_impl.hpp"
 #include "impl/profiler/dram_counters.hpp"
+#include "impl/profiler/eth_counters.hpp"
 #include "kernels/kernel.hpp"
 #include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -457,6 +458,7 @@ void WaitProgramDone(IDevice& device, const Program& program) {
     llrt::internal_::wait_for_idle(metal_ctx, device.id(), program.impl().logical_cores());
     // Internal programs launched with force_slow_dispatch are waited on here too; they close nothing.
     dram_counters::end_pending(metal_ctx, device.id(), program.get_runtime_id());
+    eth_counters::end_pending(metal_ctx, device.id(), program.get_runtime_id());
 }
 
 void LaunchProgramAsync(
@@ -511,6 +513,7 @@ void LaunchProgramAsync(
 
     if (!force_slow_dispatch) {
         dram_counters::begin_program(metal_ctx, device, program);
+        eth_counters::begin_program(metal_ctx, device, program);
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
