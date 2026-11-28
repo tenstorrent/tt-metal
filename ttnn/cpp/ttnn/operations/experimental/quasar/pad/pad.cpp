@@ -11,7 +11,9 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/experimental/quasar/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
+#include <bit>
 #include <numeric>
+#include <tt-metalium/constants.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "pad.hpp"
@@ -402,6 +404,18 @@ ttnn::Tensor invoke_tile(
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         ttnn::Shape zeros(ttsl::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
         return input_tensor.pad(requested_padded_shape, zeros, value);
+    }
+
+    // Encoding to block float zeroes the tile padding of a tensor whose width is not a multiple of a face, so a
+    // nonzero fill of the input's padding would not survive. Pad a bfloat16 copy and encode once at the requested
+    // shape, where only lanes outside the result are padding.
+    if (is_block_float(input_tensor.dtype()) && std::bit_cast<uint32_t>(value) != 0 &&
+        input_logical_shape[-1] % tt::constants::FACE_WIDTH != 0) {
+        const ttnn::Tensor decoded =
+            typecast(input_tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids);
+        const ttnn::Tensor padded =
+            invoke_tile(decoded, padding_vec, value, use_multicore, memory_config_arg, sub_core_grids);
+        return typecast(padded, input_tensor.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     const bool pad_upper_dims = requested_rank > 2 && !std::equal(
