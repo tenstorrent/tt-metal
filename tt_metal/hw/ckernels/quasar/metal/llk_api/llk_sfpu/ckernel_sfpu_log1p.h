@@ -128,6 +128,9 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
     return r;
 }
 
+// Whether BF16 DEST runs the generated log1p kernel as one call over the whole tile.
+inline constexpr bool log1p_bf16_whole_tile = false;
+
 /**
  * @tparam APPROXIMATION_MODE Ignored
  * @tparam FAST_APPROX Ignored
