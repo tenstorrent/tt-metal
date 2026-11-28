@@ -316,6 +316,13 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             TT_FATAL(
                                 attributes.scale.has_value(),
                                 "Scale value is required for scale causal mask HW dims softmax");
+                            TT_FATAL(
+                                mask.padded_shape()[-2] == tensors_args.input_tensor.padded_shape()[-2] &&
+                                    mask.padded_shape()[-1] == tensors_args.input_tensor.padded_shape()[-1],
+                                "Mask height and width must match the input for scale causal mask HW dims softmax, "
+                                "got mask {} and input {}",
+                                mask.padded_shape(),
+                                tensors_args.input_tensor.padded_shape());
                         }
                     }
                 },
