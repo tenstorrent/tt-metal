@@ -7,11 +7,12 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     BroadcastGolden,
     get_golden_generator,
+    quantize_input_to_unpack_format,
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -40,6 +41,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
+    PARTIAL_FACE,
     REUSE_DEST_TYPE,
     STOCHASTIC_ROUNDING,
     TEST_FACE_DIMS,
@@ -63,16 +65,35 @@ DATACOPY_TILE_SHAPES = [
     [8, 16],
 ]
 
+FLOAT_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+# BFP outputs check the packer's exponent section on every shape, 16x32 (32 exponents) included.
+BFP_OUTPUT_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
+]
+
+
+def get_valid_formats_tensor_shape(tile_dimensions):
+    # The one-face 8x16 tile is read back through a 32x32 buffer, which the BFP readback cannot size.
+    if tile_dimensions == [8, 16]:
+        return FLOAT_FORMATS
+    return FLOAT_FORMATS + BFP_OUTPUT_FORMATS
+
+
+def get_valid_broadcast_types_tensor_shape(formats):
+    broadcast_types = [BroadcastType.None_, BroadcastType.Scalar, BroadcastType.Row]
+    # Column broadcast runs on 32x32 only (skipped below), which adds nothing to the BFP checks.
+    if formats.output_format.is_block_float():
+        return broadcast_types
+    return broadcast_types + [BroadcastType.Column]
+
 
 @parametrize(
     tile_dimensions=DATACOPY_TILE_SHAPES,
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Scalar,
-        BroadcastType.Row,
-        BroadcastType.Column,
-    ],
+    formats=get_valid_formats_tensor_shape,
+    broadcast_type=get_valid_broadcast_types_tensor_shape,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_unary_datacopy_tensor_shape(
@@ -80,6 +101,14 @@ def test_eltwise_unary_datacopy_tensor_shape(
 ):
     if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
         pytest.skip("32-bit formats require dest accumulation")
+    if (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and formats.output_format.is_block_float()
+    ):
+        pytest.skip(
+            "Wormhole still sizes the packer's BFP exponent section from partial_face, not the exponent count "
+            "(https://github.com/tenstorrent/tt-metal/issues/61060)"
+        )
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -164,9 +193,15 @@ def test_eltwise_unary_datacopy_tensor_shape(
             face_r_dim=face_r_dim,
             num_faces_r_dim=num_faces_r_dim,
             num_faces_c_dim=num_faces_c_dim,
+            input_format=formats.input_format,
         )
     else:
         golden_tensor = src_A.to(format_dict[formats.output_format])
+    if formats.output_format.is_block_float():
+        # A tiny tile has too few lanes to absorb unquantized BFP error, so compare against the packed values.
+        golden_tensor = quantize_input_to_unpack_format(
+            golden_tensor, formats.output_format
+        )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -186,6 +221,8 @@ def test_eltwise_unary_datacopy_tensor_shape(
             ACC_TO_DEST(False),
             REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
             DISABLE_SRC_ZERO_FLAG(False),
+            # As tt-metal's Tile sets it: every tile shorter than 32 rows is a partial face.
+            PARTIAL_FACE(partial_face_pack=tile_dimensions[0] < TILE_DIMENSIONS[0]),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
@@ -228,7 +265,7 @@ def test_eltwise_unary_datacopy_tensor_shape(
     )
 
     # Datacopy/bcast should be bit-exact for float formats (no compute loss)
-    if formats.input_format in (DataFormat.Float32, DataFormat.Float16_b):
+    if formats.output_format in (DataFormat.Float32, DataFormat.Float16_b):
         assert torch.equal(
             golden_tensor, res_tensor
         ), "Datacopy/bcast should be exact for float formats"

@@ -114,6 +114,7 @@ inline void llk_pack_reconfig_data_format() {
         RegFmt,
         static_cast<std::uint32_t>(DESC.format),
         tile_size,
+        DESC.shape.face_r_dim,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
         false /* partial_face */);

@@ -412,9 +412,16 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
+// BFP Exp_section_size in 16-byte words: one exponent byte per 16-datum row, rounded up to a whole word.
+constexpr std::uint32_t bfp_exp_section_size(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    constexpr std::uint32_t exponents_per_word = 16;
+    return (face_r_dim * num_faces + exponents_per_word - 1) / exponents_per_word;
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
@@ -433,10 +440,9 @@ inline void set_packer_config(
         config.val[i] = 0;
     }
 
-    config.f.exp_section_size =
-        ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
-            ? 0
-            : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
+    config.f.exp_section_size = ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
+                                    ? 0
+                                    : bfp_exp_section_size(face_r_dim, num_faces); // not used for non-bfp formats except lf8/int8
 
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_output_dst_format;
@@ -496,7 +502,7 @@ inline void set_packer_config(
     cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
     // Save to GPR for quick data format reconfig
-    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = bfp_exp_section_size(face_r_dim, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
 }
 
@@ -510,9 +516,9 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim,
     const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
-    const bool partial_face)
+    const std::uint32_t num_faces)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
@@ -569,7 +575,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>((partial_face ? 1 : num_faces));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>(bfp_exp_section_size(face_r_dim, num_faces));
     }
     else if ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
     {
@@ -599,11 +605,11 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim                  = TILE_C_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const bool partial_face                         = false,
-    const std::uint32_t relu_config                 = 0)
+    const std::uint32_t face_r_dim           = FACE_R_DIM,
+    const std::uint32_t tile_c_dim           = TILE_C_DIM,
+    const std::uint32_t num_faces            = 4,
+    [[maybe_unused]] const bool partial_face = false,
+    const std::uint32_t relu_config          = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
@@ -656,7 +662,7 @@ inline void configure_pack(
 
     t6_mutex_release(mutex::REG_RMW);
 
-    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
+    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
 
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
