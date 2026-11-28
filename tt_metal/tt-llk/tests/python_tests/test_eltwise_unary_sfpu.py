@@ -1202,6 +1202,32 @@ _SOFTPLUS_PARAMS = [
 ]
 
 
+SOFTCAP_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.Softcap],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SOFTCAP_SWEEP)
+def test_eltwise_unary_sfpu_softcap(formats, dest_acc, mathop):
+    # at beta = 5.0 (SOFTCAP_BETA), both signs past the hold.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-48.75, high=48.75
+        ),
+    )
+
+
 @pytest.mark.parametrize("softplus_beta,softplus_threshold", _SOFTPLUS_PARAMS)
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
