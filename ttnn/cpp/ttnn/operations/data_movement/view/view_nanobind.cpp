@@ -17,7 +17,33 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
+// ttnn::view rebuilds the padded shape from the logical shape, so a TILE input padded past the next tile multiple
+// would read the wrong tiles. The docstring leaves such inputs out; reject them at the Python entry, without
+// changing ttnn::view for the ops that call it internally.
+void check_tile_padding(const ttnn::Tensor& tensor) {
+    const auto& logical = tensor.logical_shape();
+    if (tensor.layout() != ttnn::TILE_LAYOUT || logical.rank() < 2) {
+        return;
+    }
+    const auto& padded = tensor.padded_shape();
+    const auto tile = tensor.tensor_spec().tile();
+    const auto round_up = [](uint32_t value, uint32_t multiple) {
+        return (value + multiple - 1) / multiple * multiple;
+    };
+    TT_FATAL(
+        padded[-2] == round_up(logical[-2], tile.get_height()) && padded[-1] == round_up(logical[-1], tile.get_width()),
+        "view needs a TILE tensor padded only up to the next tile multiple, but shape {} is padded to {}",
+        logical,
+        padded);
+}
+
+ttnn::Tensor view_shape_wrapper(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape) {
+    check_tile_padding(input_tensor);
+    return ttnn::view(input_tensor, shape);
+}
+
 ttnn::Tensor view_shape_vector_wrapper(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int32_t>& shape) {
+    check_tile_padding(input_tensor);
     return ttnn::view(input_tensor, shape);
 }
 
@@ -26,25 +52,33 @@ ttnn::Tensor view_shape_vector_wrapper(const ttnn::Tensor& input_tensor, const t
 void bind_view(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        This is a 0 cost view operation that returns the same tensor that was passed to it but with a new shape
-
-        Note: The following conditions must be met:
-            * the memory is stored on the device
-            * the last dimension must not change
-            * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+        Returns a tensor with a new shape that shares the input tensor's device buffer, without copying or moving data.
 
         Args:
-            * input_tensor: Input Tensor.
-            * shape: New shape of tensor.
+            input_tensor (ttnn.Tensor): the input tensor, on device, in ROW_MAJOR layout or in TILE layout with 32x32 tiles. A TILE input's padded shape must be its shape with the last two dimensions rounded up to multiples of 32.
+            shape (ttnn.Shape or List[int]): the new shape. It must have the input's number of elements and the input's last dimension. For a TILE input, its second-to-last dimension must be the input's, or a multiple of 32 in both the input and `shape`. As a list or tuple, one dimension may be `-1`; its size is inferred from the other dimensions.
 
         Returns:
-            ttnn.Tensor: a reference to the input tensor but with the new shape.
+            ttnn.Tensor: the output tensor, with the new shape, the input's dtype and layout, and the input's memory layout, buffer type and shard spec. It holds the input's values in the same row-major order, in the input's device buffer.
 
-        Example:
+        Note:
+            Supported dtypes and layouts:
 
-            >>> tensor = ttnn.from_torch(torch.rand(2, 1, 1, 1, 4, dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.view(tensor, (2, 1, 4))
+            .. list-table::
+               :header-rows: 1
 
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; a sharded input needs a `shape` of rank 2 or more
         )doc";
 
     ttnn::bind_function<"view">(
@@ -53,9 +87,6 @@ void bind_view(nb::module_& mod) {
         // Bind first overload: view(Tensor, ttsl::SmallVector<int32_t>)
         ttnn::overload_t(&view_shape_vector_wrapper, nb::arg("input_tensor"), nb::arg("shape")),
         // Bind second overload: view(Tensor, ttsl::SmallVector<int32_t>)
-        ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, const ttnn::Shape&>(&ttnn::view),
-            nb::arg("input_tensor"),
-            nb::arg("shape")));
+        ttnn::overload_t(&view_shape_wrapper, nb::arg("input_tensor"), nb::arg("shape")));
 }
 }  // namespace ttnn::operations::data_movement
