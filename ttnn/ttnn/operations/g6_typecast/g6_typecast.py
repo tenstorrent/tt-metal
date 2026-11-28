@@ -180,7 +180,6 @@ def _cache_key(input_tensor, dtype):
         _pd.STAGING_DEPTH,
         _pd.RM_BLOCK_TILES,
         _pd.TILE_BLOCK_TILES,
-        _pd.READ_INFLIGHT,
         _pd.L1_OP_BUDGET_BYTES,
         _pd.L1_SLACK_BYTES,
         _pd.COPY_BUF_BYTES,

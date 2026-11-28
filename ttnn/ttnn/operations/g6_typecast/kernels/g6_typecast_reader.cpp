@@ -6,6 +6,10 @@
 // cb_input_tiles in blocks of `block_tiles`: block_tiles page reads in flight, ONE read barrier and
 // ONE reserve/push handshake per block. A ragged last block reserves/pushes its actual extent
 // (compute and writer synchronize the same per-block extent).
+// Perf 1: each tile moves only its LIVE faces (g6_typecast_tile_faces.hpp): faces 1/3 of a last-column tile
+// when W % 32 is 1..16, faces 2/3 of a last-row tile when H % 32 is 1..16 are pure padding and are never
+// read (an unread input face only feeds an output face the writer never writes; Q2185 35.1 -> 16.9 us).
+// Reads are single-packet (a tile <= 4 KB < NOC_MAX_BURST_SIZE; ~30 ns per core on 1-tile cells).
 // No dataflow helper owns an interleaved page-range stream, so this is the raw TensorAccessor loop.
 //
 // rm_mode (regime R2 `rm_pseudo_tile_stream`): the core owns rows [start_row, start_row + core_rows) of an
@@ -18,44 +22,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "g6_typecast_zones.hpp"
-#include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc.h"
 #include "g6_typecast_rm_rows.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
-
-namespace {
-
-// bfloat8_b output only: zero the padding columns (col >= w_tail) of a last-tile-column tile so the
-// packer's shared exponent of a straddling 16-value group never sees padding values.
-// Tile = 4 faces of 16x16 bf16 (face0 TL, face1 TR, face2 BL, face3 BR), row-major inside a face.
-template <uint32_t w_tail>
-FORCE_INLINE void zero_pad_columns(const Noc& noc, const CircularBuffer& cb, uint32_t tile_offset_bytes) {
-    constexpr uint32_t face_dim = 16;
-    constexpr uint32_t elem_bytes = 2;
-    constexpr uint32_t face_bytes = face_dim * face_dim * elem_bytes;
-    if constexpr (w_tail < face_dim) {
-        // Right faces (1, 3) are entirely padding: zero them with the DM engine.
-        noc.async_write_zeros(cb, face_bytes, {.offset_bytes = tile_offset_bytes + 1 * face_bytes});
-        noc.async_write_zeros(cb, face_bytes, {.offset_bytes = tile_offset_bytes + 3 * face_bytes});
-    }
-    // Partial face rows: only the padding lanes of the face that straddles W.
-    constexpr uint32_t col0 = w_tail % face_dim;  // first padding column inside the straddling face
-    constexpr uint32_t face_a = (w_tail < face_dim) ? 0 : 1;
-    constexpr uint32_t face_b = face_a + 2;
-    if constexpr (col0 != 0) {
-        uint32_t base = cb.get_write_ptr() + tile_offset_bytes;
-        for (uint32_t face : {face_a, face_b}) {
-            volatile tt_l1_ptr uint16_t* f = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base + face * face_bytes);
-            for (uint32_t r = 0; r < face_dim; ++r) {
-                for (uint32_t c = col0; c < face_dim; ++c) {
-                    f[r * face_dim + c] = 0;
-                }
-            }
-        }
-    }
-}
-
-}  // namespace
+#include "g6_typecast_tile_faces.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
@@ -71,10 +39,12 @@ void kernel_main() {
     constexpr uint32_t values_per_row = get_compile_time_arg_val(10);
     constexpr uint32_t staging_align = get_compile_time_arg_val(11);
     constexpr uint32_t staging_depth = get_compile_time_arg_val(12);
-    // TILE only: blocks of reads kept in flight (1 = one barrier per block); CB depth in blocks.
-    constexpr uint32_t read_inflight = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_blocks = get_compile_time_arg_val(14);
-    constexpr auto input_args = TensorAccessorArgs<15>();
+    // TILE only: tile rows per batch slice, H % 32, and the tile's byte geometry (header, face) for face skip.
+    constexpr uint32_t tensor_tile_rows = get_compile_time_arg_val(13);
+    constexpr uint32_t h_tail = get_compile_time_arg_val(14);
+    constexpr uint32_t tile_hdr_bytes = get_compile_time_arg_val(15);
+    constexpr uint32_t face_bytes = get_compile_time_arg_val(16);
+    constexpr auto input_args = TensorAccessorArgs<17>();
 
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
@@ -138,84 +108,59 @@ void kernel_main() {
             }
             stage = next_stage;
         }
-        return;
-    }
-    [[maybe_unused]] Noc noc;
-    CircularBuffer cb_in(cb_input_tiles);
+    } else {
+        constexpr uint32_t Wt = tensor_tile_cols;
+        constexpr uint32_t Ht = tensor_tile_rows;
+        constexpr bool skip_r = w_tail >= 1 && w_tail <= 16;  // faces 1/3 of a last-column tile are padding
+        constexpr bool skip_b = h_tail >= 1 && h_tail <= 16;  // faces 2/3 of a last-row tile are padding
+        // bf8b output only (bf16 input, 2 B values): zero the padding columns (col >= w_tail % 16) of the face pair
+        // that straddles W, so the packer's shared exponent of a straddling 16-value face row never sees padding.
+        // Whole padding faces need nothing: they are never read nor written, and bfp8 shares an exponent only
+        // within one 16-value face row.
+        constexpr uint32_t col0 = w_tail % 16;
+        constexpr uint32_t face_a = (w_tail != 0 && w_tail < 16) ? 0 : 1;
 
-    const uint32_t end_tile = start_tile + core_tiles;
-    // Retire a landed block (the oldest unpushed one, so it sits at the CB write pointer): bf8b pad-column
-    // mask, then publish it.
-    auto finish_block = [&](uint32_t block_start, uint32_t block_extent) {
-        if constexpr (mask_pad_columns) {
-            // Last-tile-column tiles of this block: page id % tensor_tile_cols == tensor_tile_cols - 1.
-            for (uint32_t t = 0; t < block_extent; ++t) {
-                if ((block_start + t) % tensor_tile_cols == tensor_tile_cols - 1) {
-                    zero_pad_columns<w_tail>(noc, cb_in, t * in_page_bytes);
-                }
-            }
-            noc.write_zeros_l1_barrier();
-        }
-        cb_push_back(cb_input_tiles, block_extent);
-    };
-    auto issue_block = [&](uint32_t block_start, uint32_t block_extent, uint32_t l1_addr) {
-        for (uint32_t t = 0; t < block_extent; ++t) {
-            noc_async_read_page(block_start + t, input_accessor, l1_addr);
-            l1_addr += in_page_bytes;
-        }
-    };
-
-    uint32_t block_start = start_tile;
-    if constexpr (read_inflight > 1) {
-        // Sliding window of `read_inflight` full blocks on the wire (catalog `trid_double_issue`): block k is
-        // tagged with id (k % read_inflight) + 1, which block k - read_inflight also carried, so ONE
-        // trid-scoped barrier retires the oldest block and frees its id while the younger blocks keep the
-        // NoC busy. The CB write pointer only advances on push, so block k lands `in_flight` block slots past
-        // it (wrapped by hand); reserving (in_flight + 1) blocks makes that slot safe. The ragged tail (and a
-        // core with fewer tiles than one block) takes the plain path below.
-        static_assert(read_inflight <= NOC_MAX_TRANSACTION_ID, "read_inflight exceeds the NoC transaction id range");
-        static_assert(block_tiles <= NOC_MAX_TRANSACTION_ID_COUNT, "block exceeds the per-id pending-read counter");
-        constexpr uint32_t block_bytes = block_tiles * in_page_bytes;
-        const uint32_t cb_base = get_write_ptr(cb_input_tiles);  // nothing pushed yet: start of the CB region
-        const uint32_t cb_end = cb_base + cb_blocks * block_bytes;
-        const uint32_t full_blocks = core_tiles / block_tiles;
-        for (uint32_t k = 0; k < full_blocks; ++k) {
-            G6_ZONE("READ_BLOCK");
-            const uint32_t trid = (k % read_inflight) + 1;
-            if (k >= read_inflight) {
-                dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid);
-                finish_block(start_tile + (k - read_inflight) * block_tiles, block_tiles);
-            }
-            const uint32_t in_flight = (k < read_inflight) ? k : (read_inflight - 1);
+        const uint32_t end_tile = start_tile + core_tiles;
+        g6_faces::TilePos tp = g6_faces::tile_pos<Wt, Ht>(start_tile);
+        for (uint32_t block_start = start_tile; block_start < end_tile; block_start += block_tiles) {
+            const uint32_t extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
             {
                 G6_ZONE("READ_WAIT_SPACE");
-                cb_reserve_back(cb_input_tiles, (in_flight + 1) * block_tiles);
+                cb_reserve_back(cb_input_tiles, extent);
             }
-            uint32_t l1_addr = get_write_ptr(cb_input_tiles) + in_flight * block_bytes;
-            if (l1_addr >= cb_end) {
-                l1_addr -= cb_end - cb_base;
+            G6_ZONE("READ_BLOCK");
+            const uint32_t base = get_write_ptr(cb_input_tiles);
+            [[maybe_unused]] const g6_faces::TilePos tp_block = tp;
+            uint32_t l1 = base;
+            for (uint32_t t = 0; t < extent; ++t) {
+                const uint32_t page = block_start + t;
+                g6_faces::for_live_segments<in_page_bytes, tile_hdr_bytes, face_bytes, skip_r, skip_b, Wt, Ht>(
+                    tp, [&](uint32_t off, uint32_t bytes) {
+                        noc_async_read_one_packet(input_accessor.get_noc_addr(page, off), l1 + off, bytes);
+                    });
+                g6_faces::advance<Wt, Ht>(tp);
+                l1 += in_page_bytes;
             }
-            dataflow_kernel_lib::set_read_trid(noc, trid);
-            issue_block(start_tile + k * block_tiles, block_tiles, l1_addr);
+            noc_async_read_barrier();
+            if constexpr (mask_pad_columns && col0 != 0) {
+                g6_faces::TilePos tpm = tp_block;
+                for (uint32_t t = 0; t < extent; ++t) {
+                    if (tpm.col == Wt - 1) {
+                        const uint32_t tile = base + t * in_page_bytes;
+                        for (uint32_t f : {face_a, face_a + 2}) {
+                            volatile tt_l1_ptr uint16_t* p =
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile + f * face_bytes);
+                            for (uint32_t r = 0; r < 16; ++r) {
+                                for (uint32_t c = col0; c < 16; ++c) {
+                                    p[r * 16 + c] = 0;
+                                }
+                            }
+                        }
+                    }
+                    g6_faces::advance<Wt, Ht>(tpm);
+                }
+            }
+            cb_push_back(cb_input_tiles, extent);
         }
-        const uint32_t to_drain = (full_blocks < read_inflight) ? full_blocks : read_inflight;
-        for (uint32_t d = 0; d < to_drain; ++d) {
-            const uint32_t k = full_blocks - to_drain + d;
-            dataflow_kernel_lib::async_read_barrier_with_trid(noc, (k % read_inflight) + 1);
-            finish_block(start_tile + k * block_tiles, block_tiles);
-        }
-        dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
-        block_start = start_tile + full_blocks * block_tiles;
-    }
-    for (; block_start < end_tile; block_start += block_tiles) {
-        G6_ZONE("READ_BLOCK");
-        const uint32_t block_extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
-        {
-            G6_ZONE("READ_WAIT_SPACE");
-            cb_reserve_back(cb_input_tiles, block_extent);
-        }
-        issue_block(block_start, block_extent, get_write_ptr(cb_input_tiles));
-        noc_async_read_barrier();
-        finish_block(block_start, block_extent);
     }
 }

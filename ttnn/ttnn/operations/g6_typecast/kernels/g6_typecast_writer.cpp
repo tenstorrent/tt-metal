@@ -5,12 +5,16 @@
 // Drains cb_output_tiles in blocks of `block_tiles` (a ragged last block waits/pops its actual
 // extent, matching reader and compute), writes the tiles of each block to [start_tile, start_tile + core_tiles),
 // flushes before releasing the slot, and ends with one write barrier so no transaction is in flight at exit (BB-03).
+// Perf 1: each tile writes only its LIVE faces (g6_typecast_tile_faces.hpp, the reader's twin); the output
+// padding faces are left untouched (padding-in-ttnn §1: output padding is not the op's contract). Writes are
+// single-packet (a tile <= 4 KB < NOC_MAX_BURST_SIZE).
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "g6_typecast_zones.hpp"
 #include "g6_typecast_rm_rows.hpp"
+#include "g6_typecast_tile_faces.hpp"
 
 // rm_mode (regime R2 `rm_pseudo_tile_stream`): mirror of the reader. Per block of `rows_per_block` rows:
 // wait the block's ceil(rows * W / 1024) dense pseudo-tile pages, expand the rows into bank-run order in
@@ -29,7 +33,14 @@ void kernel_main() {
     constexpr uint32_t values_per_row = get_compile_time_arg_val(7);
     constexpr uint32_t staging_align = get_compile_time_arg_val(8);
     constexpr uint32_t staging_depth = get_compile_time_arg_val(9);
-    constexpr auto output_args = TensorAccessorArgs<10>();
+    // TILE only: tile grid per batch slice, W % 32, H % 32 and the output tile's byte geometry (face skip).
+    constexpr uint32_t tensor_tile_cols = get_compile_time_arg_val(10);
+    constexpr uint32_t w_tail = get_compile_time_arg_val(11);
+    constexpr uint32_t tensor_tile_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t h_tail = get_compile_time_arg_val(13);
+    constexpr uint32_t tile_hdr_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t face_bytes = get_compile_time_arg_val(15);
+    constexpr auto output_args = TensorAccessorArgs<16>();
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
@@ -77,24 +88,33 @@ void kernel_main() {
             stage = (stage + 1 == staging_depth) ? 0 : stage + 1;
         }
         noc_async_write_barrier();
-        return;
-    }
-
-    const uint32_t end_tile = start_tile + core_tiles;
-    for (uint32_t block_start = start_tile; block_start < end_tile; block_start += block_tiles) {
-        G6_ZONE("WRITE_BLOCK");
-        const uint32_t block_extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
-        {
-            G6_ZONE("WRITE_WAIT_DATA");
-            cb_wait_front(cb_output_tiles, block_extent);
+    } else {
+        constexpr uint32_t Wt = tensor_tile_cols;
+        constexpr uint32_t Ht = tensor_tile_rows;
+        constexpr bool skip_r = w_tail >= 1 && w_tail <= 16;
+        constexpr bool skip_b = h_tail >= 1 && h_tail <= 16;
+        const uint32_t end_tile = start_tile + core_tiles;
+        g6_faces::TilePos tp = g6_faces::tile_pos<Wt, Ht>(start_tile);
+        for (uint32_t block_start = start_tile; block_start < end_tile; block_start += block_tiles) {
+            const uint32_t extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
+            {
+                G6_ZONE("WRITE_WAIT_DATA");
+                cb_wait_front(cb_output_tiles, extent);
+            }
+            G6_ZONE("WRITE_BLOCK");
+            uint32_t l1 = get_read_ptr(cb_output_tiles);
+            for (uint32_t t = 0; t < extent; ++t) {
+                const uint32_t page = block_start + t;
+                g6_faces::for_live_segments<out_page_bytes, tile_hdr_bytes, face_bytes, skip_r, skip_b, Wt, Ht>(
+                    tp, [&](uint32_t off, uint32_t bytes) {
+                        noc_async_write_one_packet(l1 + off, output_accessor.get_noc_addr(page, off), bytes);
+                    });
+                g6_faces::advance<Wt, Ht>(tp);
+                l1 += out_page_bytes;
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_output_tiles, extent);
         }
-        uint32_t l1_addr = get_read_ptr(cb_output_tiles);
-        for (uint32_t t = 0; t < block_extent; ++t) {
-            noc_async_write_page(block_start + t, output_accessor, l1_addr);
-            l1_addr += out_page_bytes;
-        }
-        noc_async_writes_flushed();
-        cb_pop_front(cb_output_tiles, block_extent);
+        noc_async_write_barrier();
     }
-    noc_async_write_barrier();
 }

@@ -1,0 +1,19 @@
+order=['baseline', 'fs_rw'] launches=12
+TFS F320             baseline=1768  fs_rw=1701 (1.04x)
+TFS F324             baseline=1785  fs_rw=1705 (1.05x)
+TFS Q2200            baseline=1044  fs_rw=999 (1.05x)
+TFS Q2221            baseline=1116  fs_rw=1084 (1.03x)
+TFS Q2227            baseline=635  fs_rw=551 (1.15x)
+TFS S_aligned        baseline=4921  fs_rw=4890 (1.01x)
+TFS S_w48            baseline=2751  fs_rw=2711 (1.01x)
+TFS S_bf8b_w12       baseline=2998  fs_rw=2591 (1.16x)
+TFS S_bf8b_w40h33    baseline=2054  fs_rw=1833 (1.12x)
+TFS S_i32_bf16       baseline=1599  fs_rw=1520 (1.05x)
+TFS S_bf16_u8        baseline=1353  fs_rw=1325 (1.02x)
+TFS S_f32_bf16_l1    baseline=1404  fs_rw=1367 (1.03x)
+order=['baseline', 'fs_rw'] launches=12
+TFS P39              baseline=17020  fs_rw=16904 (1.01x)
+TFS S_big_w20        baseline=17803  fs_rw=18049 (0.99x)
+order=['fs_rw', 'baseline'] launches=12
+TFS P39              baseline=16926  fs_rw=16750 (1.01x)
+TFS S_big_w20        baseline=18025  fs_rw=17958 (1.00x)

@@ -21,7 +21,6 @@ Knobs (single source each — every dependent quantity derives from them):
   STAGING_DEPTH    — R2 only: staging slots per dataflow direction (2 = DMA / row-move overlap)
   RM_BLOCK_TILES   — R2 only: target pseudo-tiles per block (min'd with BLOCK_TILES_CAP)
   TILE_BLOCK_TILES — R1 only: target tiles per block (min'd with BLOCK_TILES_CAP)
-  READ_INFLIGHT    — R1 only: blocks of reads in flight (trid window), clamped to the effective depth
   L1_OP_BUDGET_BYTES / L1_SLACK_BYTES — L1 grant (BB-05) and allocator headroom
 """
 
@@ -52,9 +51,6 @@ RM_BLOCK_TILES = 2
 #   Q2185 [16,4096,12] bf16->fp32 DRAM: 36.6/37.5/35.2/35.7/34.6/35.0/34.9(d4)  (DRAM-write-bound)
 # Depth 3 is within noise of depth 2 at block 3-4, so BUFFER_DEPTH stays 2 (keeps R2 unchanged).
 TILE_BLOCK_TILES = 4
-# R1 only: blocks of reads kept on the wire (transaction-id sliding window); 1 = one read barrier per block.
-# Clamped to the effective CB depth (a block in flight owns a CB slot).
-READ_INFLIGHT = 1
 L1_OP_BUDGET_BYTES = 1347776
 L1_SLACK_BYTES = 65536
 
@@ -152,6 +148,14 @@ def _compute_config(in_dtype, out_dtype):
     return compute_config
 
 
+def _tile_geometry(dtype, page_bytes):
+    """(header bytes, face bytes) of one tile: bfloat8_b = 64 B of shared exponents then 4 x 256 B mantissa
+    faces; every other format = 4 faces of page / 4 bytes, no header."""
+    if dtype == ttnn.bfloat8_b:
+        return 64, 256
+    return 0, page_bytes // 4
+
+
 def create_program_descriptor(input_tensor, output_tensor):
     if (input_tensor.dtype, output_tensor.dtype) in BIT_IDENTICAL_ARMS:
         return _create_copy_program_descriptor(input_tensor, output_tensor)
@@ -188,13 +192,17 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         out_l1_bytes_per_bank = _div_up(tensor_tiles, _num_l1_banks(device)) * out_page_bytes
     block_tiles, effective_depth = plan_blocks(core_tiles_max, in_page_bytes, out_page_bytes, out_l1_bytes_per_bank)
     cb_pages = effective_depth * block_tiles
-    read_inflight = max(1, min(READ_INFLIGHT, effective_depth))
 
-    # ---- bf8b padding-column masking (shared exponent must not see padding values) ----
+    # ---- tile grid + tails: live-face transfers (Perf 1) and bf8b padding-column masking ----
     w = logical_shape[-1]
+    h = logical_shape[-2] if len(logical_shape) >= 2 else 1
     w_tail = w % TILE_HW
+    h_tail = h % TILE_HW
     tensor_tile_cols = _div_up(w, TILE_HW)
+    tensor_tile_rows = _div_up(h, TILE_HW)
     mask_pad_columns = int(out_dtype == ttnn.bfloat8_b and w % 16 != 0)
+    in_hdr, in_face = _tile_geometry(input_tensor.dtype, in_page_bytes)
+    out_hdr, out_face = _tile_geometry(out_dtype, out_page_bytes)
 
     # ---- CBs ----
     cb_input_tiles = ttnn.CBDescriptor(
@@ -232,7 +240,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
     # ---- kernels ----
     # RM-only CT slots (6..11) are inert zeros on the TILE path.
     reader_ct = [CB_INPUT_TILES, block_tiles, in_page_bytes, mask_pad_columns, tensor_tile_cols, w_tail]
-    reader_ct += [0, CB_INPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1, read_inflight, effective_depth]
+    reader_ct += [0, CB_INPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1, tensor_tile_rows, h_tail, in_hdr, in_face]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_reader.cpp"),
@@ -245,6 +253,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
     )
 
     writer_ct = [CB_OUTPUT_TILES, block_tiles, out_page_bytes, 0, CB_OUTPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1]
+    writer_ct += [tensor_tile_cols, w_tail, tensor_tile_rows, h_tail, out_hdr, out_face]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_writer.cpp"),
@@ -278,7 +287,6 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         "core_tiles_max": core_tiles_max,
         "block_tiles": block_tiles,
         "effective_depth": effective_depth,
-        "read_inflight": read_inflight,
         "mask_pad_columns": bool(mask_pad_columns),
     }
     return program_descriptor, plan
@@ -385,9 +393,9 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
     assert start_row == num_rows
 
     # mask_pad_columns / tensor_tile_cols / w_tail are TILE-only (0 here).
-    reader_ct = [CB_INPUT_TILES, block_tiles, in_aligned, 0, 0, 0]
+    reader_ct = [CB_INPUT_TILES, block_tiles, in_aligned, 0, 1, 0]  # TILE-only mask / tile cols / w_tail: inert
     reader_ct += [1, CB_INPUT_STAGING, rows_per_block, in_row_bytes, values_per_row, STAGING_ALIGN, staging_depth]
-    reader_ct += [1, effective_depth]  # TILE-only read_inflight / cb_blocks: inert here
+    reader_ct += [1, 0, 1, 0]  # TILE-only tile rows / h_tail / tile header / face bytes: inert here
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_reader.cpp"),
@@ -400,6 +408,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
     )
     writer_ct = [CB_OUTPUT_TILES, block_tiles, out_aligned, 1, CB_OUTPUT_STAGING, rows_per_block, out_row_bytes]
     writer_ct += [values_per_row, STAGING_ALIGN, staging_depth]
+    writer_ct += [1, 0, 1, 0, 0, 0]  # TILE-only tile grid / tails / tile geometry: inert here
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_writer.cpp"),

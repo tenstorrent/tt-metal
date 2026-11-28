@@ -31,10 +31,17 @@ CASES = {
     "i32_dram": ((8, 1024, 256), ttnn.int32, DRAM),
     "f32_l1": ((4, 512, 512), ttnn.float32, L1),
     "Q2191": ((16, 1, 12), ttnn.float32, DRAM),
+    # Perf 1 live-face transfers: both tails, W tail > 16 with the bf8b column mask, bf8b H tail, rank 2.
+    "tails_bf8b": ((2, 33, 40), ttnn.bfloat8_b, DRAM),
+    "wtail20_bf8b": ((3, 70, 52), ttnn.bfloat8_b, DRAM),
+    "wtail5_bf8b_l1": ((2, 45, 37), ttnn.bfloat8_b, L1),
+    "tails_f32": ((3, 47, 100), ttnn.float32, DRAM),
+    "rank2_i32": ((65, 12), ttnn.int32, DRAM),
 }
 
-# Knob sweep from the environment (perf work): G6_SWEEP="cap:depth:inflight,..." ("-" = default). The default
-# list pins the shipped knobs plus a forced-pipelined reader (cap 3 -> ragged tail, depth 3, 2 / 3 in flight).
+# Knob sweep from the environment (perf work): G6_SWEEP="cap:depth,..." ("-" = default). The default list pins
+# the shipped knobs plus forced multi-block pipelines (cap 3 -> ragged tail, depth 3; cap 1, depth 2) so the
+# per-tile face walk (Perf 1 live-face transfers) crosses block boundaries. READ_INFLIGHT was removed in Perf 1.
 _sweep = os.environ.get("G6_SWEEP")
 _cases = os.environ.get("G6_CASES")
 if _cases:
@@ -42,7 +49,7 @@ if _cases:
 KNOBS = (
     [tuple(None if v == "-" else int(v) for v in s.split(":")) for s in _sweep.split(",")]
     if _sweep
-    else [(None, None, None), (3, 3, 2), (3, 3, 3)]
+    else [(None, None), (3, 3), (1, 2)]
 )
 
 
@@ -52,15 +59,13 @@ def _torch_ref(x, dst):
     return x.float()
 
 
-@pytest.mark.parametrize("knobs", KNOBS, ids=lambda k: f"cap{k[0]}_d{k[1]}_f{k[2]}")
+@pytest.mark.parametrize("knobs", KNOBS, ids=lambda k: f"cap{k[0]}_d{k[1]}")
 @pytest.mark.parametrize("case", list(CASES))
 def test_g6_typecast_tile_perf(device, monkeypatch, case, knobs):
     shape, dst, mem = CASES[case]
-    cap, depth, inflight = knobs
+    cap, depth = knobs
     if cap is not None:
         monkeypatch.setattr(pd, "BLOCK_TILES_CAP", cap)
-    if inflight is not None:
-        monkeypatch.setattr(pd, "READ_INFLIGHT", inflight)
     if depth is not None:
         monkeypatch.setattr(pd, "BUFFER_DEPTH", depth)
     monkeypatch.setattr(op_mod, "_PROGRAM_CACHE", {})
