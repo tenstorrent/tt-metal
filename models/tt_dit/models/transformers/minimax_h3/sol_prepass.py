@@ -761,7 +761,9 @@ class SolPrepass(Module):
         pooled: bool = True,
     ) -> dict:
         """`pooled=False` returns the mask alone, for the sparse op's kept-blocks-only mode: pooled K is gathered
-        for the routing only and pooled V not at all."""
+        for the routing only and pooled V not at all. The routing keeps full blocks only, so the tokens of a partly
+        filled last block (`logical_n % 64` of them) are then keys for no query; Sol's own `tail=False` can still
+        route to that block."""
         assert abs(scale - self._state["scale"]) < 1e-12, "scale is baked into the prepared constants"
         geo = self.geo
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
