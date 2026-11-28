@@ -140,12 +140,27 @@ class TestRetest(unittest.TestCase):
         self.assertIn("reset gate: busy", phase.checks[-1].details)
 
     def test_the_runner_passes_the_reset_gate_and_hook_to_the_retest(self):
-        src = (SUITE_DIR / "diag_runner.py").read_text()
-        call = src[
-            src.index("run_retest(") : src.index(")", src.index("snap_out_for_resets", src.index("run_retest(")))
-        ]
-        self.assertIn("gate=reset_gate", call)
-        self.assertIn("hook=hook", call)
+        import diag_runner
+
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), mock.patch.object(
+            diag_runner, "run_retest", return_value=None
+        ) as run_retest:
+            d = Path(tmp)
+            diag_runner.run_diag(
+                "weekly",
+                input_snapshot=d / "missing.json",
+                output=d / "r.json",
+                snapshot_out=d / "s.json",
+                dry_run=True,
+                tt_smi_path="/usr/bin/true",
+                skip_triage=True,
+                skip_qsfp_tests=True,
+                skip_sys_triage=True,
+                stage_order="gddr_act_c3",  # the weekly retest's test, so the retest runs
+                reset_gate="G",
+                hook="H",
+            )
+        self.assertEqual((run_retest.call_args.kwargs["gate"], run_retest.call_args.kwargs["hook"]), ("G", "H"))
 
     def test_failed_snapshot_keeps_the_pre_test_snapshot_as_verdict(self):
         phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=PASS), snapshot_error=True)

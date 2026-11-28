@@ -13,7 +13,7 @@ from typing import Sequence
 from .common import print_phase_summary
 from .device_tests import run_tests
 from .model import FAIL, PASS, SKIP, Check, Phase
-from .resets import reset_loop
+from .resets import add_reset_outcome, reset_loop
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
 
@@ -53,15 +53,8 @@ def run_retest(
     # Own dir: keeps the pre-test reset_1_* log.
     reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest", gate=gate, hook=hook)
     # reset_* checks don't count toward the verdict; restate under a name that does.
-    broke = [c.name for c in phase.checks if c.status == FAIL]
-    refused = next((c.details for c in phase.checks if c.status == SKIP), None)
-    status, details = PASS, f"unit back after tt-smi {reset_flag}"
-    if broke:
-        status, details = FAIL, f"reset before the retest left the unit degraded: {', '.join(broke)}"
-    elif refused:  # the gate refused the reset: no second boot to retest on
-        status, details = SKIP, f"did not run: {refused}"
-    phase.add(Check(name="retest_reset_ok", status=status, details=details, ip="other"))
-    if status != PASS:
+    ok_text, fail_prefix = f"unit back after tt-smi {reset_flag}", "reset before the retest left the unit degraded"
+    if add_reset_outcome(phase, "retest_reset_ok", ok_text, fail_prefix) != PASS:  # no second boot to retest on
         return None
 
     snap_phase = None

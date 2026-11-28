@@ -303,18 +303,20 @@ def run_post_test_reset(
     # snapshot — but nothing runs after this one, so a reset that broke
     # enumeration here would leave no trace on the verdict. Restate the
     # outcome under a name that counts.
-    broke = [c.name for c in phase.checks if c.status == FAIL]
-    last = phase.checks[-1] if phase.checks else None
-    status, details = PASS, f"unit healthy after {' '.join(plan)}"
-    if broke:
-        status, details = FAIL, f"post-test reset left the unit degraded: {', '.join(broke)}"
-    elif last is not None and last.status == SKIP:
-        status, details = SKIP, f"did not run: {last.details}"
-    phase.add(
-        Check(
-            name="post_test_reset_ok",
-            status=status,
-            details=details,
-            ip="other",
-        )
+    add_reset_outcome(
+        phase, "post_test_reset_ok", f"unit healthy after {' '.join(plan)}", "post-test reset left the unit degraded"
     )
+
+
+def add_reset_outcome(phase: Phase, name: str, ok_text: str, fail_prefix: str) -> str:
+    """Restate *phase*'s reset checks as one check *name* that counts toward the verdict, and return its status:
+    FAIL if any check failed, else SKIP if the reset gate refused a reset (its SKIP says why), else PASS."""
+    broke = [c.name for c in phase.checks if c.status == FAIL]
+    refused = next((c.details for c in phase.checks if c.status == SKIP), None)
+    status, details = PASS, ok_text
+    if broke:
+        status, details = FAIL, f"{fail_prefix}: {', '.join(broke)}"
+    elif refused:
+        status, details = SKIP, f"did not run: {refused}"
+    phase.add(Check(name=name, status=status, details=details, ip="other"))
+    return status
