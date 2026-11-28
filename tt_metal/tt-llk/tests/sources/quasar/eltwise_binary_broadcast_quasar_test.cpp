@@ -39,6 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
+    const std::uint32_t tiles_in_block      = INPUT_NUM_TILES_IN_BLOCK;
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
@@ -54,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
-        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, INPUT_NUM_TILES_IN_BLOCK);
+        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {
@@ -83,8 +84,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    const std::uint32_t start_l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK;
-                    _llk_unpack_binary_broadcast_operands_(start_l1_tile_idx /*start_l1_tile_idx_0*/, start_l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
+                    // The *_tiles_bcast calls unpack one tile per call.
+                    for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+                    {
+                        const std::uint32_t l1_tile_idx = block * tiles_in_block + tile;
+                        _llk_unpack_binary_broadcast_operands_(l1_tile_idx /*start_l1_tile_idx_0*/, l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
+                    }
                 }
             }
         }
