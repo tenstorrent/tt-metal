@@ -554,18 +554,28 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
 BRINGUP_OPS = "ttnn/ttnn/bringup"
 
 
+def porcelain_paths(out: str) -> list[str]:
+    """F311: the paths of `git status --porcelain -z` output. A rename or copy entry (status R / C) is followed by its
+    old path as a field of its own, with no status prefix: it is skipped, not cut as an entry (WA / MB.NC: moved kernels
+    showed up as 'n/ttnn/...' and failed the path check)."""
+    fields, paths, i = out.split("\0"), [], 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            i += 1  # the old path
+    return paths
+
+
 def _dirty_under(repo: Path, prefixes: list[str]) -> list[str]:
     """Modified or untracked files (not deleted, no __pycache__) at or under any prefix."""
     out = subprocess.run(
         ["git", "status", "--porcelain", "-uall", "-z", "--", *prefixes], cwd=repo, capture_output=True, text=True
     ).stdout
-    files = []
-    for entry in out.split("\0"):
-        if len(entry) < 4:
-            continue
-        p = entry[3:]
-        if "__pycache__" not in p and (repo / p).is_file():
-            files.append(p)
+    files = [p for p in porcelain_paths(out) if "__pycache__" not in p and (repo / p).is_file()]
     return sorted(files)
 
 

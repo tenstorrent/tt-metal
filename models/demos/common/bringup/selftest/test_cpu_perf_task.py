@@ -74,3 +74,12 @@ def test_a_mesh_only_shared_test_is_op_level(tmp_path, monkeypatch):
     assert not G.needs_determinism(op, [("P.1", f"{r} models/x/tests/test_op.py")])
     t.write_text("BATCH_SHARED = True\n")
     assert G.needs_determinism(op, [("P.1", f"{r} models/x/tests/test_op.py")])
+
+
+def test_porcelain_renames_keep_their_paths():
+    """F311: `git status --porcelain -z` prints a rename as 'R  new' then the old path as its own field: the old path
+    is not an entry (it was cut to 'n/ttnn/...' and failed the path check, MB.NC)."""
+    from models.demos.common.bringup.core.gate import porcelain_paths
+
+    out = "R  ttnn/ttnn/x/generic/k.cpp\0ttnn/ttnn/x/k.cpp\0D  ttnn/ttnn/y.cpp\0 M a.py\0?? b.py\0"
+    assert porcelain_paths(out) == ["ttnn/ttnn/x/generic/k.cpp", "ttnn/ttnn/y.cpp", "a.py", "b.py"]

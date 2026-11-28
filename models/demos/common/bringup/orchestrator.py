@@ -538,10 +538,9 @@ def dirty(repo: Path) -> dict[str, str]:
         ["git", "status", "--porcelain", "-uall", "-z"], cwd=repo, capture_output=True, text=True
     ).stdout
     res = {}
-    for entry in out.split("\0"):
-        if len(entry) < 4:
-            continue
-        p = entry[3:]
+    from models.demos.common.bringup.core.gate import porcelain_paths  # F311
+
+    for p in porcelain_paths(out):
         if any(re.search(pat, p) for pat in IGNORED):
             continue
         f = repo / p
