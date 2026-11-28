@@ -24,6 +24,11 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
+    // torch rejects a dropout probability outside [0, 1]. The program factory bakes
+    // (uint32_t)(INT_MAX * prob) as a compile-time arg, which wraps for out-of-range or NaN
+    // values, so a bad probability silently changes which elements are dropped.
+    TT_FATAL(args.prob >= 0.0f && args.prob <= 1.0f, "Dropout probability must be in [0, 1], got {}", args.prob);
+
     auto out_memory_config = args.output_memory_config;
     auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {

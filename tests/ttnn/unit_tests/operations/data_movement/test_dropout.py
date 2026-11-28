@@ -70,6 +70,18 @@ def test_dropout_rejects_mismatched_output_shape(device, expect_error):
         ttnn.experimental.dropout(input_tensor, probability=0.5, scale=2.0, seed=1, output_tensor=output_tensor)
 
 
+@pytest.mark.parametrize("probability", [-0.1, 1.5, float("nan")])
+def test_dropout_rejects_probability_out_of_range(device, probability, expect_error):
+    # The program factory bakes (uint32_t)(INT_MAX * probability), which wraps for a value
+    # outside [0, 1] or NaN, so a bad probability silently changes the drop pattern instead
+    # of raising like torch.
+    input_tensor = ttnn.from_torch(
+        torch.ones((1, 1, 32, 64)), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "probability must be in"):
+        ttnn.experimental.dropout(input_tensor, probability=probability, scale=1.0, seed=1)
+
+
 @pytest.mark.parametrize("in_place", [False, True])
 @pytest.mark.parametrize("use_per_device_seed", [False, True])
 def test_dropout_seed_distinguishes_cache_entries(device, in_place, use_per_device_seed):
