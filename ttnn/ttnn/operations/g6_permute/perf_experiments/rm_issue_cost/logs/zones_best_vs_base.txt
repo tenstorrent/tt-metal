@@ -1,0 +1,204 @@
+######## p44_L1_base_full (r7 op 2, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r7_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 144
+== program 1: run_id=2048 (op 2, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 79,975 cyc (59,241 ns)
+   firmware span (DEVICE FW DURATION): 80,726 cyc (59,797 ns); first FW start to first kernel start: 596 cyc (441 ns)
+   per-core kernel span: min 65,235  median 79,340  max 79,400 cyc (48,322 / 58,770 / 58,815 ns)   balance max/median = 1.00
+   cores above 1.2 x median: 0   cores below 0.8 x median: 0   (of 110)
+   kernel start spread (launch stagger): 618 cyc (458 ns) over all lanes = 0.8% of the kernel span, 602 cyc (446 ns) over cores (first start per core); end spread over cores 14,687 cyc (10,879 ns)
+   timer bases: 1
+   marker rows per lane: max 26 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       65,138       79,310       79,400           58,748       1.00           79,919
+   NCRISC     110       10,078       13,002       13,057            9,631       1.00           13,644
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      199.0     147.4       228             68        209        228
+   BRISC    PERM-WR-FLUSH            zone      110     182       1-2       41.4      30.7        51             41         80         90
+   BRISC    PERM-WR-GATHER           zone      110     182       1-2   34,721.6  25,719.7    49,386         49,332     61,720     61,749
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     182       1-2   44,785.8  33,174.7    65,023         64,804     78,917     79,003
+   BRISC    PERM-WR-ISSUE            zone      110     182       1-2    3,824.1   2,832.6     5,433          5,422      6,800      6,816
+   BRISC    PERM-WR-WAIT             zone      110     182       1-2    6,033.3   4,469.1    10,022          9,825      9,997     10,059
+   NCRISC   PERM-RD-BARRIER          zone      110     182       1-2      259.6     192.3       289            223        500        564
+   NCRISC   PERM-RD-ISSUE            zone      110     182       1-2    6,745.6   4,996.7     9,583          9,575     11,994     12,002
+   NCRISC   PERM-RD-LOAD-BLOCK       zone      110     182       1-2    7,173.0   5,313.3    10,032          9,965     12,834     12,891
+   NCRISC   PERM-RD-RESERVE          zone      110     182       1-2       46.1      34.2        59             44         88         96
+######## p44_L1_base_nogather (r7 op 14, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r7_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 144
+== program 13: run_id=14336 (op 14, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 18,242 cyc (13,513 ns)
+   firmware span (DEVICE FW DURATION): 19,006 cyc (14,079 ns); first FW start to first kernel start: 600 cyc (444 ns)
+   per-core kernel span: min 15,898  median 17,600  max 17,660 cyc (11,776 / 13,037 / 13,081 ns)   balance max/median = 1.00
+   cores above 1.2 x median: 0   cores below 0.8 x median: 0   (of 110)
+   kernel start spread (launch stagger): 605 cyc (448 ns) over all lanes = 3.3% of the kernel span, 603 cyc (447 ns) over cores (first start per core); end spread over cores 2,278 cyc (1,687 ns)
+   timer bases: 1
+   marker rows per lane: max 22 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       15,822       17,571       17,660           13,016       1.01           18,242
+   NCRISC     110       10,113       13,034       13,092            9,655       1.00           13,670
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      204.2     151.3       237             69        213        237
+   BRISC    PERM-WR-FLUSH            zone      110     182       1-2       39.7      29.4        47             37         76         85
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     182       1-2   10,060.9   7,452.5    15,678         15,505     17,198     17,253
+   BRISC    PERM-WR-ISSUE            zone      110     182       1-2    3,835.9   2,841.4     5,460          5,425      6,826      6,841
+   BRISC    PERM-WR-WAIT             zone      110     182       1-2    6,051.8   4,482.8    10,058          9,892     10,028     10,092
+   NCRISC   PERM-RD-BARRIER          zone      110     182       1-2      260.8     193.2       289            223        504        561
+   NCRISC   PERM-RD-ISSUE            zone      110     182       1-2    6,752.9   5,002.1     9,592          9,576     12,006     12,023
+   NCRISC   PERM-RD-LOAD-BLOCK       zone      110     182       1-2    7,192.9   5,328.1    10,060         10,001     12,874     12,928
+   NCRISC   PERM-RD-RESERVE          zone      110     182       1-2       52.0      38.5        67             45         97        117
+######## p44_L1_best_full (r7 op 26, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r7_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 144
+== program 25: run_id=26624 (op 26, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 69,605 cyc (51,559 ns)
+   firmware span (DEVICE FW DURATION): 70,342 cyc (52,105 ns); first FW start to first kernel start: 587 cyc (435 ns)
+   per-core kernel span: min 55,257  median 68,616  max 69,220 cyc (40,931 / 50,827 / 51,274 ns)   balance max/median = 1.01
+   cores above 1.2 x median: 0   cores below 0.8 x median: 0   (of 110)
+   kernel start spread (launch stagger): 609 cyc (451 ns) over all lanes = 0.9% of the kernel span, 600 cyc (444 ns) over cores (first start per core); end spread over cores 14,250 cyc (10,556 ns)
+   timer bases: 1
+   marker rows per lane: max 56 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       55,200       68,593       69,211           50,810       1.01           69,584
+   NCRISC     110        6,004        7,333        7,471            5,432       1.02            7,924
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      207.3     153.5       407             88        197        407
+   BRISC    PERM-WR-GATHER           zone      110     512       4-5   12,371.7   9,164.2    12,489         49,458     61,846     61,898
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     512       4-5   13,646.4  10,108.4    15,280         54,541     67,940     68,569
+   BRISC    PERM-WR-ISSUE            zone      110     512       4-5      721.4     534.4     1,039          2,710      3,444      4,024
+   BRISC    PERM-WR-WAIT             zone      110     512       4-5      357.2     264.6     1,653          1,497      1,660      1,801
+   BRISC    id9976                   zone      110     512       4-5       39.4      29.2        42            156        197        198
+   NCRISC   PERM-RD-BARRIER          zone      110     512       4-5      156.8     116.1       521            619        731        852
+   NCRISC   PERM-RD-ISSUE            zone      110     292       2-3    1,166.3     863.9     1,223          2,329      3,487      3,520
+   NCRISC   PERM-RD-RESERVE          zone      110     292       2-3       48.7      36.1        59             96        144        156
+######## p44_L1_best_nogather (r7 op 38, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r7_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 144
+== program 37: run_id=38912 (op 38, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 9,939 cyc (7,362 ns)
+   firmware span (DEVICE FW DURATION): 10,677 cyc (7,909 ns); first FW start to first kernel start: 589 cyc (436 ns)
+   per-core kernel span: min 7,772  median 9,216  max 9,447 cyc (5,757 / 6,827 / 6,998 ns)   balance max/median = 1.03
+   cores above 1.2 x median: 0   cores below 0.8 x median: 0   (of 110)
+   kernel start spread (launch stagger): 618 cyc (458 ns) over all lanes = 6.2% of the kernel span, 588 cyc (436 ns) over cores (first start per core); end spread over cores 2,105 cyc (1,559 ns)
+   timer bases: 1
+   marker rows per lane: max 46 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110        7,736        9,194        9,447            6,811       1.03            9,923
+   NCRISC     110        6,038        7,349        7,471            5,444       1.02            7,937
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      221.1     163.8       550             69        190        550
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     512       4-5    1,755.2   1,300.2     2,868          7,091      8,530      8,813
+   BRISC    PERM-WR-ISSUE            zone      110     512       4-5      758.7     562.0     1,073          2,727      3,508      4,460
+   BRISC    PERM-WR-WAIT             zone      110     512       4-5      814.9     603.6     1,724          2,961      3,841      4,259
+   BRISC    id9976                   zone      110     512       4-5       43.4      32.2        48            170        216        222
+   NCRISC   PERM-RD-BARRIER          zone      110     512       4-5      157.2     116.4       513            613        729        837
+   NCRISC   PERM-RD-ISSUE            zone      110     292       2-3    1,170.4     867.0     1,217          2,336      3,502      3,546
+   NCRISC   PERM-RD-RESERVE          zone      110     292       2-3       51.1      37.8        61             97        150        157
+######## p44_DRAM_base_full (r8 op 2, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r8_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 288
+== program 1: run_id=2048 (op 2, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 117,093 cyc (86,736 ns)
+   firmware span (DEVICE FW DURATION): 117,869 cyc (87,310 ns); first FW start to first kernel start: 579 cyc (429 ns)
+   per-core kernel span: min 70,064  median 101,308  max 116,776 cyc (51,899 / 75,043 / 86,501 ns)   balance max/median = 1.15
+   cores above 1.2 x median: 0   cores below 0.8 x median: 27   (of 110)
+   kernel start spread (launch stagger): 698 cyc (517 ns) over all lanes = 0.6% of the kernel span, 596 cyc (441 ns) over cores (first start per core); end spread over cores 46,501 cyc (34,445 ns)
+   timer bases: 1
+   marker rows per lane: max 26 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       70,064      101,258      116,776           75,006       1.15          117,001
+   NCRISC     110       11,084       31,365       45,826           23,233       1.46           46,147
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      235.0     174.1       257            107        238        257
+   BRISC    PERM-WR-FLUSH            zone      110     182       1-2       51.6      38.2        65             52        102        112
+   BRISC    PERM-WR-GATHER           zone      110     182       1-2   36,082.8  26,728.0    51,456         51,155     64,180     64,275
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     182       1-2   58,625.2  43,426.0   101,440         69,700    100,850    116,346
+   BRISC    PERM-WR-ISSUE            zone      110     182       1-2    5,185.1   3,840.8     7,392          7,350      9,207      9,254
+   BRISC    PERM-WR-WAIT             zone      110     182       1-2   17,146.0  12,700.7    42,518         10,946     28,003     42,548
+   NCRISC   PERM-RD-BARRIER          zone      110     182       1-2    1,821.8   1,349.5    16,044            848      2,214     16,044
+   NCRISC   PERM-RD-ISSUE            zone      110     182       1-2   16,528.3  12,243.2    41,909          9,474     28,208     44,416
+   NCRISC   PERM-RD-LOAD-BLOCK       zone      110     182       1-2   18,540.1  13,733.4    42,545         10,974     31,228     45,660
+   NCRISC   PERM-RD-RESERVE          zone      110     182       1-2       54.0      40.0        64             51        103        115
+######## p44_DRAM_base_nogather (r8 op 14, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r8_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 288
+== program 13: run_id=14336 (op 14, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 59,488 cyc (44,065 ns)
+   firmware span (DEVICE FW DURATION): 60,252 cyc (44,631 ns); first FW start to first kernel start: 567 cyc (420 ns)
+   per-core kernel span: min 19,777  median 40,784  max 59,136 cyc (14,650 / 30,210 / 43,804 ns)   balance max/median = 1.45
+   cores above 1.2 x median: 39   cores below 0.8 x median: 32   (of 110)
+   kernel start spread (launch stagger): 669 cyc (496 ns) over all lanes = 1.1% of the kernel span, 622 cyc (461 ns) over cores (first start per core); end spread over cores 39,159 cyc (29,007 ns)
+   timer bases: 1
+   marker rows per lane: max 22 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       19,777       40,730       59,136           30,170       1.45           59,415
+   NCRISC     110       11,044       33,660       52,138           24,933       1.55           52,499
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      429.7     318.3     3,374            140        257      3,374
+   BRISC    PERM-WR-FLUSH            zone      110     182       1-2       51.8      38.4        62             53        101        110
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     182       1-2   24,512.0  18,157.0    56,647         18,421     40,276     58,703
+   BRISC    PERM-WR-ISSUE            zone      110     182       1-2    5,371.7   3,979.1     9,827          7,339      9,296     10,845
+   BRISC    PERM-WR-WAIT             zone      110     182       1-2   18,959.9  14,044.4    49,030         10,885     31,417     49,062
+   NCRISC   PERM-RD-BARRIER          zone      110     182       1-2    2,116.6   1,567.9    23,506            749      2,298     23,506
+   NCRISC   PERM-RD-ISSUE            zone      110     182       1-2   17,980.2  13,318.7    48,454          9,501     29,519     50,786
+   NCRISC   PERM-RD-LOAD-BLOCK       zone      110     182       1-2   20,302.8  15,039.1    49,052         10,913     33,530     51,982
+   NCRISC   PERM-RD-RESERVE          zone      110     182       1-2       61.5      45.5        79             62        117        130
+######## p44_DRAM_best_full (r8 op 26, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r8_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 288
+== program 25: run_id=26624 (op 26, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 82,070 cyc (60,793 ns)
+   firmware span (DEVICE FW DURATION): 82,884 cyc (61,396 ns); first FW start to first kernel start: 631 cyc (467 ns)
+   per-core kernel span: min 64,383  median 80,264  max 81,754 cyc (47,691 / 59,455 / 60,559 ns)   balance max/median = 1.02
+   cores above 1.2 x median: 0   cores below 0.8 x median: 0   (of 110)
+   kernel start spread (launch stagger): 655 cyc (485 ns) over all lanes = 0.8% of the kernel span, 589 cyc (436 ns) over cores (first start per core); end spread over cores 17,161 cyc (12,712 ns)
+   timer bases: 1
+   marker rows per lane: max 56 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       64,374       80,208       81,666           59,414       1.02           82,034
+   NCRISC     110       41,755       57,676       59,113           42,723       1.02           59,429
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      236.3     175.0       452            106        238        452
+   BRISC    PERM-WR-GATHER           zone      110     512       4-5   13,306.2   9,856.5    13,962         52,804     66,532     66,853
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     512       4-5   16,058.8  11,895.4    24,203         63,857     79,616     81,105
+   BRISC    PERM-WR-ISSUE            zone      110     512       4-5      818.2     606.1     1,776          3,010      3,768      5,356
+   BRISC    PERM-WR-WAIT             zone      110     512       4-5    1,735.2   1,285.3     8,608          6,876      8,160      8,752
+   BRISC    id9976                   zone      110     512       4-5       48.4      35.9        85            186        236        289
+   NCRISC   PERM-RD-BARRIER          zone      110     512       4-5    1,022.1     757.1     2,804          1,891      5,204      6,849
+   NCRISC   PERM-RD-LOAD-BLOCK       zone      110     512       4-5   11,098.6   8,221.2    15,540         40,737     56,602     58,061
+   NCRISC   PERM-RD-RESERVE          zone      110     512       4-5    3,307.1   2,449.7     8,006          9,990     16,761     19,080
+   NCRISC   id35860                  zone      110     512       4-5    5,939.4   4,399.6     6,488         23,251     29,620     29,968
+   NCRISC   id45793                  zone      110     402       3-4      834.5     618.1       884          2,457      3,313      3,373
+######## p44_DRAM_best_nogather (r8 op 38, launch 2)
+# ttnn/ttnn/operations/g6_permute/perf_experiments/rm_issue_cost/logs/r8_device.csv
+# ARCH blackhole  CHIP_FREQ 1350 MHz (1 cycle = 0.7407 ns)  programs: 1 of 288
+== program 37: run_id=38912 (op 38, device 0)
+   cores used: 110   lanes: 220 (BRISC 110, NCRISC 110)
+   kernel span, first start to last end over all cores: 40,451 cyc (29,964 ns)
+   firmware span (DEVICE FW DURATION): 41,272 cyc (30,572 ns); first FW start to first kernel start: 642 cyc (476 ns)
+   per-core kernel span: min 26,973  median 37,683  max 40,136 cyc (19,980 / 27,913 / 29,730 ns)   balance max/median = 1.07
+   cores above 1.2 x median: 0   cores below 0.8 x median: 19   (of 110)
+   kernel start spread (launch stagger): 636 cyc (471 ns) over all lanes = 1.6% of the kernel span, 559 cyc (414 ns) over cores (first start per core); end spread over cores 12,986 cyc (9,619 ns)
+   timer bases: 1
+   marker rows per lane: max 52 of 254; lanes at the cap: 0
+   RISC     lanes   kernel min       median          max cyc    median ns max/median  span over cores cyc
+   BRISC      110       26,972       37,650       40,011           27,889       1.06           40,379
+   NCRISC     110       25,806       36,516       38,986           27,049       1.07           39,301
+   RISC     zone                     kind    lanes    exec exec/lane   mean cyc   mean ns   max cyc lane total min     median        max
+   BRISC    PERM-WR-FINAL-BARRIER    zone      110     110         1      234.8     173.9       714            106        237        714
+   BRISC    PERM-WR-GATHER-BLOCK     zone      110     512       4-5    7,486.3   5,545.4    12,476         26,471     37,098     39,453
+   BRISC    PERM-WR-ISSUE            zone      110     512       4-5    1,166.5     864.1     4,417          3,002      5,386      9,445
+   BRISC    PERM-WR-WAIT             zone      110     512       4-5    6,147.4   4,553.6     8,485         22,762     29,770     33,217
+   BRISC    id9976                   zone      110     512       4-5       47.5      35.1        48            190        236        237
+   NCRISC   PERM-RD-BARRIER          zone      110     512       4-5    1,222.1     905.2     3,840          1,978      6,025      8,357
+   NCRISC   PERM-RD-LOAD-BLOCK       zone      110     512       4-5    7,139.0   5,288.2    11,295         24,801     35,471     37,935
+   NCRISC   PERM-RD-RESERVE          zone      110     512       4-5       57.3      42.4        62            228        286        292
+   NCRISC   id35860                  zone      110     512       4-5    4,881.2   3,615.7     4,933         19,514     24,393     24,428
+   NCRISC   id45793                  zone      110     402       3-4    1,018.3     754.3     3,847          2,340      3,376      7,146
