@@ -88,6 +88,7 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/grouped_matmul/grouped_matmul_nanobind.hpp"
 #include "ttnn/operations/fabric_reduce_scatter/fabric_reduce_scatter_nanobind.hpp"
+#include "ttnn/operations/layer_send/layer_send_nanobind.hpp"
 
 namespace nb = nanobind;
 
@@ -246,6 +247,9 @@ void py_module(nb::module_& mod) {
 
     auto m_fabric_reduce_scatter = mod.def_submodule("fabric_reduce_scatter", "fabric_reduce_scatter operation");
     fabric_reduce_scatter::bind_fabric_reduce_scatter_operation(m_fabric_reduce_scatter);
+
+    auto m_layer_send = mod.def_submodule("layer_send", "layer_send operation");
+    layer_send::bind_layer_send_operation(m_layer_send);
 }
 }  // namespace ttnn::operations
 

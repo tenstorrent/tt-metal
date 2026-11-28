@@ -35,7 +35,12 @@ the TensorAccessor compile-time args hold; an ND-sharded accessor takes the oute
 tensor's first dim, so a program built for a ladder cache's 1-batch slab wrote every engine slab's (slot, layer) into
 batch 0) and dispatched prepared (ttnn.bringup.prepare_program / run_prepared, OV-23): io [ring, slab], per-call
 values the slab's first page (its (slot, layer) batch) and the 4 ring rows. Data movement only: the slab's bytes equal
-the legacy path's (tests/test_snapshot_send.py)."""
+the legacy path's (tests/test_snapshot_send.py).
+
+NC.3 (OWNER 2026-11-27, native C++ port series): every form (static, dynamic, multi) runs as the native C++ op
+ttnn.layer_send (ttnn/cpp/ttnn/operations/layer_send: the same kernels moved verbatim, the static pattern's plan
+ported to C++; this module's routes made once into a ttnn.layer_send_plan). The Python prepared route stays reachable
+for the op test only (``SnapshotSend.route = "python"``, tests/native/test_native_sends.py)."""
 
 from __future__ import annotations
 
@@ -485,11 +490,24 @@ def tree(R: int, C: int, owner: tuple, wrap_x: bool, wrap_y: bool) -> dict:
     return par
 
 
+def _pack_blocks(n: int, blocks) -> tuple[int, int]:
+    """(the 4 ring rows, the 4 block codes) packed 8 bits a block (PB.7C dynamic / PB.9G multi)."""
+    rrp, cp = 0, 0
+    for b, (k, rr) in enumerate(blocks):
+        c = 0xFF if k == "zero" else 0xFE if k == "local" else int(k)
+        assert 0 <= c <= 0xFF and (c >= 0xFE or c < n) and 0 <= int(rr) < 256, (k, rr)
+        rrp |= int(rr) << (8 * b)
+        cp |= c << (8 * b)
+    return rrp, cp
+
+
 class SnapshotSend:
     """The window snapshot write of every layer on one mesh (module docstring). ``__call__(ring, slab, page0,
     blocks)``: ring [1, 1, 192, 512] bf16 ROW_MAJOR (the layer's ring; each chip its own), slab the served snapshot
     tensor [batches, 1, 128, 512] bf16 ROW_MAJOR (ND-sharded or interleaved), page0 = batch x 128 (its (slot, layer)
     first row), blocks = 4 x (kind, ring row): kind 'zero', 'local' or the owner's chip-linear index."""
+
+    route = "native"  # NC.3: "python" = the prepared route (tests/native/test_native_sends.py only)
 
     def __init__(self, mesh):
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan
@@ -520,6 +538,29 @@ class SnapshotSend:
             self.port_xy.append((int(w.x), int(w.y)))
         self._pp = {}  # (block pattern, ring geometry, slab geometry) -> (PreparedProgram, kernels)
         self.trees = {}
+        # NC.3: every chip's fabric neighbours in mesh_plan's order (dir, peer row, peer col, link) and the native plans
+        self._hops = []
+        for r in range(self.R):
+            for c in range(self.C):
+                hs = []
+                for d, port in self.chips[(r, c)].items():
+                    pr = tuple(port["peer"])
+                    hs.append((DIRS.index(d), int(pr[0]), int(pr[1]), int(port["links"][0]), 0, 0))
+                self._hops.append(hs)
+        self._nplans = {}
+
+    def _nplan(self, kind: int, pattern=()):
+        """NC.3: the ttnn.layer_send plan of one form (static: one a block pattern), made once."""
+        key = (kind, tuple(pattern))
+        plan = self._nplans.get(key)
+        if plan is None:
+            from .window_send import K_SNAP_MULTI, native_plan
+
+            consts = [self.page, self.k] + ([WAIT_LIMIT] if kind == K_SNAP_MULTI else [])
+            sems = self.msem_addr if kind == K_SNAP_MULTI else self.sem_addr
+            wraps = (self.wrap_x, self.wrap_y)
+            plan = self._nplans[key] = native_plan(self.mesh, kind, self._hops, consts, sems, pattern, wraps)
+        return plan
 
     def _tree(self, o: int) -> dict:
         if o not in self.trees:
@@ -715,6 +756,12 @@ class SnapshotSend:
 
     def _call_dyn(self, ring: ttnn.Tensor, slab: ttnn.Tensor, page0: int, blocks) -> None:
         io = [ring, slab]
+        if self.route == "native" and getattr(self, "_hops", None) is not None:  # (DS41-353)
+            from .window_send import K_SNAP_DYN
+
+            rrp, cp = _pack_blocks(self.n, blocks)
+            ttnn.layer_send(io, self._nplan(K_SNAP_DYN), [int(page0), rrp, cp])
+            return
         key = ("dyn", _geom(ring), _geom(slab))
         hit = self._pp.get(key)
         if hit is None:
@@ -745,6 +792,13 @@ class SnapshotSend:
         assert int(slab.shape[-1]) == 512 and int(slab.shape[-2]) == BLOCKS * BROWS, slab.shape
         pattern = tuple(k if k in ("zero", "local") else int(k) for k, _ in blocks)
         io = [ring, slab]
+        if self.route == "native" and getattr(self, "_hops", None) is not None:  # (DS41-353)
+            from .window_send import K_SNAP_STATIC
+
+            codes = [0xFF if k == "zero" else 0xFE if k == "local" else int(k) for k in pattern]
+            plan = self._nplan(K_SNAP_STATIC, codes)
+            ttnn.layer_send(io, plan, [int(page0)] + [int(rr) for _, rr in blocks])
+            return
         key = (pattern, _geom(ring), _geom(slab))  # (FIX.32: never a program built for another slab's geometry)
         hit = self._pp.get(key)
         if hit is None:
@@ -1079,6 +1133,16 @@ def multi(self, items: list) -> None:
             ttnn.create_global_semaphore(self.mesh, hcrs, 0, ttnn.BufferType.L1_SMALL) for _ in range(4 * MAX_SEGS)
         ]
         self.msem_addr = [int(ttnn.get_global_semaphore_address(s)) for s in self.msems]
+    if self.route == "native" and getattr(self, "_hops", None) is not None:  # (DS41-353)
+        from .window_send import K_SNAP_MULTI
+
+        vals = []
+        for _, _, page0, blocks in items:
+            assert len(blocks) == BLOCKS, blocks
+            vals += [int(page0), *_pack_blocks(self.n, blocks)]
+        io = [it[0] for it in items] + [it[1] for it in items]
+        ttnn.layer_send(io, self._nplan(K_SNAP_MULTI), vals)
+        return
     ring0, slab0 = items[0][0], items[0][1]
     io = [ring0, slab0]
     key = ("multi", ns, _geom(ring0), _geom(slab0))

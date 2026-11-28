@@ -685,6 +685,7 @@ class GluedSend:
     CORE = (0, 0)
     BATCH_BYTES = 16384
     COPY_BATCH = 8
+    route = "native"  # NC.3: ttnn.layer_send; "python" = the prepared route (tests/native/test_native_sends.py only)
 
     def __init__(self, mesh, q_rows: int):
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan
@@ -710,6 +711,9 @@ class GluedSend:
         v = mesh.worker_core_from_logical_core(cc)
         node = lambda ch: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))  # noqa: E731
         self._chips = {}  # q: (send, recv, args without the io addresses, link or None)
+        self._hops = []  # NC.3: chip q's hop to q + 1 (none on the last chip; ttnn.layer_send_plan)
+        self._sem_addr = sem_addr
+        self._nplan = None
         for q in range(self.n):
             send, recv = q < self.n - 1, q > 0
             src = divmod(q, C)
@@ -723,6 +727,11 @@ class GluedSend:
                 args = [sem_addr, v.x, v.y, int(dn.mesh_id), int(dn.chip_id)]
                 link = (node(src), node(port["peer"]), port["links"][0])
             self._chips[q] = (send, recv, args, link)
+            if send:
+                pr = tuple(port["peer"])
+                self._hops.append([(0, int(pr[0]), int(pr[1]), int(port["links"][0]), dst[0], dst[1])])
+            else:
+                self._hops.append([])
         alloc = lambda rows: ttnn.zeros(  # noqa: E731
             [1, 1, rows, 512], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM
         )
@@ -846,6 +855,15 @@ class GluedSend:
             k += 1
         assert len(utails) == S, len(utails)
         io = [region, rows] + utails + rings
+        if self.route == "native" and getattr(self, "_hops", None) is not None:  # (DS41-353)
+            if self._nplan is None:
+                from .window_send import K_GLUED, native_plan
+
+                consts = [self.page, self.seg, self.nseg, WINDOW, self.batch, self.slot, self.q_rows, S]
+                consts += [self.COPY_BATCH, RING_PIECES]
+                self._nplan = native_plan(self.mesh, K_GLUED, self._hops, consts, [self._sem_addr])
+            ttnn.layer_send(io, self._nplan, self._values(S, carries, tsel, pieces))
+            return
         key = tuple(keys)
         pp = self._pps.get(key)
         if pp is None:
@@ -853,6 +871,11 @@ class GluedSend:
             pp = self._pps[key] = ttnn.bringup.prepare_program(self._build(region, rows, utails, rings), io, slots)
             want = self.n * (2 + S + 4 * S + 2 + S + 3 * RING_PIECES * S)
             assert pp.patch_count == want, f"glued send: {pp.patch_count} patched slots, {want} expected"
+        ttnn.bringup.run_prepared(pp, io, self._values(S, carries, tsel, pieces))
+
+    @staticmethod
+    def _values(S: int, carries: list, tsel: list, pieces: list) -> list:
+        """The call's values: (active, tail, first page, rotation) a segment slot, then its ring pieces."""
         vals = []
         for s in range(S):
             c = carries[s] if s < len(carries) else None
@@ -867,7 +890,7 @@ class GluedSend:
             for a, b, n in ps:
                 v += [int(a), int(b), int(n)]
             vals += v + [0] * (3 * RING_PIECES - len(v))
-        ttnn.bringup.run_prepared(pp, io, vals)
+        return vals
 
 
 _GSENDS: dict = {}

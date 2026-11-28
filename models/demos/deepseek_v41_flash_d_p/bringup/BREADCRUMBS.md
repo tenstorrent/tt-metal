@@ -1908,3 +1908,50 @@
   (0 growth on fresh buffers / new data); the scratch is allocated once per configuration (first call), as before.
   Cores: the same port / final cores as the Python plan (no matmul; the 110-core cap does not apply).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.2 --spec $BRINGUP_SPEC --check`.
+
+## NC.3 (perf, attempt 1): the per-layer fabric sends to a native C++ op (ttnn.layer_send)
+
+- Expected saving a chunk (written before the first measurement, after the code; perf_guide: host-only change, the same
+  kernels): device ~0; host: the Python prepare/run_prepared patching goes, the C++ program-cache hit stays; by DS41-398
+  ~10-40 us a call (more for the calls with many value slots: glued 96, multi 15 a segment) x 20 calls a form a chunk
+  (layers 0-19) = ~0.2-0.8 ms host a chunk for each form a chunk runs (single: window fused + snapshot; packed 4 x 2k:
+  glued + multi).
+- What: one native device op `ttnn.layer_send(io, plan, values)` in ttnn/cpp/ttnn/operations/layer_send with six
+  program kinds (WindowSend.__call__ / .fused, SnapshotSend static / _call_dyn / multi, GluedSend). Every chip's program
+  is the Python _build* loop body for that chip; the 11 kernel strings moved verbatim to device/kernels (generated from
+  the module strings; GluedSend's `#define G_SEND/G_RECV` prefix became KernelDescriptor defines). The routes stay
+  Python's (combine_rf route / mesh_plan, computed once in __init__ as before) and go to C++ once per instance as a
+  `ttnn._ttnn.operations.layer_send.layer_send_plan` (its hash computed once); the static snapshot's pattern plan
+  (tree / _dir / masks) ported to C++ (layer_send_program_factory.cpp pattern_plan; _dir keeps mesh_plan's order).
+  Program key: the plan hash + per io tensor its buffer type / layout (sharded: memory config + padded shape, FIX.32);
+  the per-call values (page0, packed ring rows / codes, ring pieces, carries) are an attribute outside the key, written
+  with the io addresses into recorded runtime-arg slots by override_runtime_arguments (the Python route's io and value
+  slots, one for one).
+- Hand port, not tt_ops_code_gen native_migrate (NATIVE_PORT_RULES allows it "if the tool cannot"): the tool ports one
+  ttnn.generic_op package with its own acceptance suite; these are four model classes (six programs) sharing fabric
+  routing state and run_prepared value slots, with no op package or tests to migrate from (DS41-400). The separate
+  checkout was not used.
+- Model call sites unchanged (attention.py / model.py / packed_glued.py call the same methods). Each class has
+  `route = "native"` (class attribute); `"python"` keeps the prepared route reachable for the op test only. No setting:
+  the allowed paths exclude tt/settings.py (as NC.1 / NC.2). Guard `getattr(self, "_hops", None)` (DS41-353: a held
+  instance from before a reload).
+- Gate test tests/native/test_native_sends.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads, 28 s): 10
+  cases (window_fused8192 / 5120, window8192, snap_dyn / snap_static x own / mixed, snap_multi4, glued4x2k mixed /
+  temps tails), fixed-seed bytes in every io tensor of every chip, the served snapshot tensor ND-sharded as
+  tt/served.alloc_served. Mismatch / repeat / cache growth 0 in every case. Host a warm call native vs python: window
+  fused 46.8 / 56.8 (8192), 47.5 / 57.2 (5120), window 43.2 / 47.5, snap_dyn 50.5 / 65.3-66.1, snap_static 53.5-55.2 /
+  66.9-70.9, multi4 88.2 / 135.5, glued 71.3-72.0 / 121.3-121.9 us. Device: window equal (40-43 us), glued equal
+  (66 us), snapshot 51-57 vs 60-64 us, multi 90 vs 130 us (same kernels and args; not investigated: op level only).
+  Saving a chunk (20 calls a form): single 8192 ~0.2 (window fused) + ~0.3 (snapshot) ms host; packed 4 x 2k ~1.0
+  (glued) + ~0.9 (multi) ms host; device ~0 (window / glued) to -0.2 / -0.8 ms (snapshot / multi). Report
+  results/NC.3_layer.md.
+- Cores (rule 18, no matmul): as the Python programs: core (0, 0) a chip (window / glued; fused copy cores (0..NC-1, 0)),
+  snapshot home (0, 0) + a port core (1 + d, 0) a fabric direction.
+- Rule 20, per-chunk values this touches: page0, the 4 ring rows / block codes (snapshot), the ring pieces (window
+  fused, glued), the carries (active, tail slot, first page, rotation; glued), the multi segments' ring / slab
+  addresses: all runtime args written on a program-cache hit (0 growth on fresh buffers with new values); the io
+  addresses likewise. Nothing on the host but the values list a call (as before).
+- Not run: `orchestrator measure --task NC.3` and any model load (NATIVE_PORT_RULES.md, owner: op-level checks only; the
+  series' one ladder is NC.8).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.3 --spec $BRINGUP_SPEC --check`; build:
+  `cmake --build build --target install`.

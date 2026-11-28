@@ -1588,3 +1588,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 23:20 heartbeat: NC.2 agent active (native_migrate on fabric_reduce_scatter in the separate checkout); RAM used 68 GB; / 69G free.
 - 23:50 heartbeat: NC.2 native_migrate fabric_reduce_scatter in rounds; RAM used 67 GB; / 69G free.
 - 00:20 heartbeat: NC.2 native_migrate fabric_reduce_scatter not_ported after 5 rounds (85 min): one acceptance case >5% slower on device than the original (perf only, correctness passes); agent handling. RAM used 73 GB; / 68G free.
+- 00:32 NC.2 PASS -> 8c26d3280e0 (C++ ttnn.fabric_reduce_scatter). Op level: identical on 7 cases, repeats 0, no cache growth; host a call 72-117 -> 46-74 us; the MoE block's call 7413 -> 46 us (its old route was not prepared); device same or faster (comp 66 -> 48, MoE 164 -> 146 us). Accepted. NC.3 next.

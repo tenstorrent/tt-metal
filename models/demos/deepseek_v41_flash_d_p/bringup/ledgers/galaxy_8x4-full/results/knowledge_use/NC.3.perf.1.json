@@ -1,0 +1,95 @@
+{
+ "used": [
+  {
+   "id": "DS41-398",
+   "how": "called the C++ op directly (ttnn.layer_send, no ttnn.bringup wrapper) and estimated the host saving from its native vs prepared numbers",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-399",
+   "how": "kept the scratch / plan state per instance (made once), never per call, so the port does not re-allocate per call",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-353",
+   "how": "guarded the native branch with getattr(self, '_hops') for instances built before an in-place reload",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-277",
+   "how": "program key includes a sharded io tensor's memory config and padded shape (FIX.32: the ND-sharded accessor's args depend on the shape)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-385",
+   "how": "compared native vs python host / device times within one run, alternating rounds",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to port a model-internal prepared program (run_prepared value slots, no generic_op package) natively when native_migrate cannot take it: now DS41-400"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work: the native programs are the Python programs' exactly (same kernels, cores, args); tests/native/test_native_sends.py mismatch 0"
+  }
+ ],
+ "cited_only": [
+  "DS41-400"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.3",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T00:48:50",
+  "head": "8c26d3280e0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.3_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.3.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/test_native_sends.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/snapshot_send.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_send.py",
+   "ttnn/cpp/ttnn-nanobind/__init__.cpp",
+   "ttnn/cpp/ttnn/operations/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/layer_send/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/glued_ring.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/glued_send.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/snap_home.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/snap_home_dyn.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/snap_home_multi.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/snap_port.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/snap_port_dyn.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/snap_port_multi.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/window_copy.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/window_send.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/kernels/window_send_fused.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/layer_send_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/layer_send_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/layer_send_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/layer_send_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/device/layer_send_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/layer_send/layer_send.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/layer_send.hpp",
+   "ttnn/cpp/ttnn/operations/layer_send/layer_send_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/layer_send/layer_send_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/layer_send/sources.cmake",
+   "ttnn/ttnn/bringup/INDEX.md"
+  ]
+ }
+}
