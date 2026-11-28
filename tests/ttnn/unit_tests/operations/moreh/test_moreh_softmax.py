@@ -52,6 +52,14 @@ UNALIGNED = [
 ]
 UNALIGNED_IDS = ["w_small", "w_large", "h_small", "h_large"]
 
+# Long enough that the sum of exp tiles grows far past one tile.
+LONG = [
+    ([1, 1, 65536, 32], 2, Strategy.LARGE_H, BackwardStrategy.LARGE_H),
+    ([1, 1, 32, 65536], 3, Strategy.LARGE_W, BackwardStrategy.LARGE_W),
+    ([4096, 1, 32, 32], 0, Strategy.LARGE_C, BackwardStrategy.LARGE_C),
+]
+LONG_IDS = ["h_large", "w_large", "c_large"]
+
 
 # Not the nightly helpers: their zero padding hides a broken mask, and they can't pass a provided input_grad.
 def run_moreh_softmax_nan_pad_test(shape, dim, strategy, device, provide_output=False):
@@ -227,3 +235,24 @@ def test_moreh_softmax_provided_output(device):
 def test_moreh_softmax_backward_provided_output(device):
     torch.manual_seed(0)
     run_moreh_softmax_backward_nan_pad_test([2, 32, 128], 2, BackwardStrategy.SMALL_W, device, provide_output=True)
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("long", LONG, ids=LONG_IDS)
+def test_moreh_softmax_long_dim(long, device):
+    torch.manual_seed(0)
+    shape, dim, strategy, backward_strategy = long
+    x = torch.randn(shape).bfloat16()
+    dy = (torch.rand(shape) + 0.5).bfloat16()
+    y = torch.softmax(x.float(), dim)
+    expected_grad = y * (dy.float() - (y * dy.float()).sum(dim, keepdim=True))
+
+    tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.operations.moreh.softmax(tt_x, dim, strategy=strategy)).float()
+    # Each value is about 1/N, below any useful absolute tolerance, so check that the rows sum to 1.
+    assert torch.allclose(output.sum(dim), torch.ones(1), atol=0.1)
+
+    tt_y = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_dy = ttnn.from_torch(dy, layout=ttnn.TILE_LAYOUT, device=device)
+    grad = ttnn.to_torch(ttnn.operations.moreh.softmax_backward(tt_y, tt_dy, dim, strategy=backward_strategy)).float()
+    assert (grad - expected_grad).abs().max() < 0.25 * expected_grad.abs().max()
