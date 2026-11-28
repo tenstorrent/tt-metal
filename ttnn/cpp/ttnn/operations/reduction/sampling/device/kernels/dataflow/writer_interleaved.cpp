@@ -167,6 +167,10 @@ void kernel_main() {
 
     // Top-p filtering in float32 for precision
     const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
+    // p >= 1 keeps every top-k token. The probabilities summed here are bfloat16 and their total can
+    // land slightly above 1, so testing cum_prob_f > p_f alone would cut the tail at p = 1.0, which is
+    // how callers turn top-p off.
+    const bool top_p_enabled = p_f < 1.0f;
     float cum_prob_f = 0.0f;
     uint32_t kept_tokens = 0;
     bool cutoff_found_in_phase_0 = false;
@@ -174,7 +178,7 @@ void kernel_main() {
     uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         cum_prob_f += bf16_to_f32(local_values[i]);
-        if (cum_prob_f > p_f) {
+        if (top_p_enabled && cum_prob_f > p_f) {
             top_p_cutoff = i + 1;
             cutoff_found_in_phase_0 = true;
             kept_tokens = top_p_cutoff - start_id_local_phase_0;
@@ -186,7 +190,7 @@ void kernel_main() {
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
             cum_prob_f += bf16_to_f32(local_values[i]);
-            if (cum_prob_f > p_f) {
+            if (top_p_enabled && cum_prob_f > p_f) {
                 top_p_cutoff = i + 1;
                 kept_tokens += top_p_cutoff - start_id_local_phase_1;
                 cutoff_found_in_phase_1 = true;
