@@ -116,11 +116,17 @@ Data Type
 
 ttnn supports the following data types:
 
+- **uint8**
+- **int8**
 - **uint16**
+- **int32**
 - **uint32**
 - **float32**
 - **bfloat16**
 - **bfloat8_b**
+- **bfloat4_b**
+- **fp8_e4m3** — limited to Blackhole row-major tensors for DeepSeek V3 prefill combine and dispatch.
+- **mxfp8_e4m3**, **mxfp8_e5m2**, **mxfp6_e2m3**, **mxfp6_e3m2**, **mxfp4**, **mxint8**, **mxint4**, **mxint2** — Quasar-only microscaling formats, supported only in tile layout.
 
 
 .. note::
@@ -171,15 +177,11 @@ For inputs that include zero, the reciprocal result is a large constant value: 1
 Storage
 *******
 
-**OWNED_HOST_STORAGE**
+**StorageType.HOST**
 
-    The buffer of the tensor is on the host and its allocation/deallocation is owned by ttnn.
+    The tensor is stored in host memory. Host buffers may be owned by ttnn or borrowed from ``torch`` / ``numpy`` / an external buffer.
 
-**BORROWED_HOST_STORAGE**
-
-    The buffer of the tensor is on the host and it was borrowed from ``torch`` / ``numpy`` / an external buffer.
-
-**DEVICE_STORAGE**
+**StorageType.DEVICE**
 
     The buffer of the tensor is on a ttnn device. And its allocation/deallocation is owned by ttnn.
 
@@ -189,7 +191,7 @@ Tensor Sharding
 ***************
 
 Sharding refers to a tensor that is split across a distributed memory space, with that distribution ideally being abstracted away.
-Currently we support L1 sharding, which refers to the distribution of a tensor across the L1 memory space of different cores.
+TT-NN supports L1 sharding across cores and DRAM sharding across DRAM banks, used for example by DRAM-sharded matmul.
 
 
 
@@ -250,7 +252,7 @@ Memory Config
 
 **ttnn.create_sharded_memory_config**
 
-    The buffer of the tensor is sharded (physically distributed). Currently the tensor can only be physically distributed across different cores' L1.
+    This helper constructs a configuration that shards the tensor across different cores' L1. DRAM sharding uses a ``MemoryConfig`` with ``BufferType.DRAM`` and a shard specification instead.
     Use :ref:`ttnn.create_sharded_memory_config<ttnn.create_sharded_memory_config>` to create a sharded memory config.
 
 
