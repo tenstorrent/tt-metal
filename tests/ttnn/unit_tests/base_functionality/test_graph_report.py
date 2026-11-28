@@ -1603,6 +1603,154 @@ class TestGraphReportFixtureMultiRankTeardown:
         ]
 
 
+class TestComparisonOnlyMultiRank:
+    """Comparison-only mode on a multi-rank run: each rank writes its own records file, and rank 0 merges them into
+    db.sqlite, instead of every rank writing comparison_records.json and opening the shared database at once."""
+
+    @staticmethod
+    def _records(tensor_id):
+        record = {
+            "tensor_id": tensor_id,
+            "golden_tensor_id": tensor_id + 100,
+            "matches": True,
+            "desired_pcc": 0.99,
+            "actual_pcc": 0.995,
+        }
+        return {"local_tensor_comparison_records": [record], "global_tensor_comparison_records": [], "tensors": []}
+
+    def test_flush_on_a_multi_rank_run_writes_only_this_ranks_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ttnn.graph, "_distributed_rank_and_size", lambda: (1, 2))
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", self._records(7))
+        ttnn.graph.flush_comparison_records_to_db(tmp_path)
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["comparison_records_2_of_2.json"]
+        assert json.loads((tmp_path / "comparison_records_2_of_2.json").read_text()) == self._records(7)
+        assert not ttnn.graph.has_comparison_records()
+
+    def test_rank_0_merges_every_ranks_records(self, tmp_path):
+        for rank, tensor_id in ((0, 7), (1, 8)):
+            path = tmp_path / graph_report.rank_comparison_records_name(rank, 2)
+            path.write_text(json.dumps(self._records(tensor_id)))
+        db_path = graph_report.import_rank_comparison_records(tmp_path)
+        rows = _query_db(db_path, "SELECT tensor_id, rank FROM local_tensor_comparison_records ORDER BY rank")
+        assert rows == [(7, 0), (8, 1)]
+        assert _query_db(db_path, "SELECT value FROM report_metadata WHERE key = 'schema_version'") == [
+            (graph_report.DATABASE_SCHEMA_VERSION,)
+        ]
+
+    def _write_rank_files(self, directory, tensor_id_by_rank, world_size=2):
+        for rank, tensor_id in tensor_id_by_rank.items():
+            path = directory / graph_report.rank_comparison_records_name(rank, world_size)
+            path.write_text(json.dumps(self._records(tensor_id)))
+
+    def test_merged_files_are_removed(self, tmp_path):
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["db.sqlite"]
+
+    def test_a_rank_without_records_is_not_merged_again(self, tmp_path):
+        """Tests sharing a report_name flush into one directory. A rank with no records in the second writes no file,
+        so its file from the first, if left, was merged again: a UNIQUE constraint error on rank 0, and the second
+        flush's records lost. Seen on a two-rank Blackhole LoudBox run."""
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        self._write_rank_files(tmp_path, {0: 9})
+        db_path = graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        rows = _query_db(db_path, "SELECT tensor_id, rank FROM local_tensor_comparison_records ORDER BY tensor_id")
+        assert rows == [(7, 0), (8, 1), (9, 0)]
+
+    def test_files_are_removed_when_the_merge_fails(self, tmp_path, expect_error):
+        """So the failure isn't repeated by every later flush into the same directory."""
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        self._write_rank_files(tmp_path, {0: 7})  # Already in the database, as from a rerun of the same test.
+        with expect_error(sqlite3.IntegrityError, "UNIQUE constraint failed"):
+            graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["db.sqlite"]
+
+    def test_files_of_another_world_size_are_not_merged(self, tmp_path):
+        """Left by an earlier run of another size into the same directory; their ranks may not exist in this one."""
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        self._write_rank_files(tmp_path, {3: 9}, world_size=4)
+        db_path = graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        rows = _query_db(db_path, "SELECT tensor_id, rank FROM local_tensor_comparison_records ORDER BY tensor_id")
+        assert rows == [(7, 0), (8, 1)]
+        assert (tmp_path / graph_report.rank_comparison_records_name(3, 4)).exists()
+
+    def test_rank_records_files_are_not_taken_for_captures(self, tmp_path):
+        """A later graph report import into the same directory skips them, as it skips comparison_records.json."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [("a.json", _make_report(_minimal_single_op_graph()))])
+        (report_dir / graph_report.rank_comparison_records_name(1, 2)).write_text(json.dumps(self._records(7)))
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+
+    @staticmethod
+    def _run_fixture(monkeypatch, tmp_path, calls, rank, has_records, flush=None, merge=None):
+        """Run the fixture's setup and teardown with comparison mode on and the graph report off, on rank ``rank`` of
+        two, recording flushes, barriers, merges and the config save in ``calls``."""
+        config = SimpleNamespace(
+            enable_graph_report=False,
+            enable_comparison_mode=True,
+            enable_detailed_buffer_report=False,
+            report_path=str(tmp_path),
+        )
+        monkeypatch.setattr(ttnn, "CONFIG", config)
+        monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: False)
+        monkeypatch.setattr(ttnn.graph, "has_comparison_records", lambda: has_records)
+        monkeypatch.setattr(ttnn.graph, "flush_comparison_records_to_db", flush or (lambda path: calls.append("flush")))
+        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: True)
+        monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+        monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: 2)
+        monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
+        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append("config"))
+        monkeypatch.setattr(
+            graph_report,
+            "import_rank_comparison_records",
+            merge or (lambda path, **kwargs: calls.append(("merge", kwargs))),
+        )
+        fixture = graph_report._run_pytest_graph_report_fixture(
+            SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+        )
+        next(fixture)
+        next(fixture, None)
+
+    @pytest.mark.parametrize(
+        "rank, has_records, expected_calls",
+        [
+            (0, True, ["flush", "barrier", ("merge", {"world_size": 2}), "barrier", "config"]),
+            (1, True, ["flush", "barrier", "barrier", "config"]),
+            (1, False, ["barrier", "barrier", "config"]),
+        ],
+        ids=["rank_0_with_records", "rank_1_with_records", "rank_1_without_records"],
+    )
+    def test_fixture_merges_on_rank_0_between_barriers(self, monkeypatch, tmp_path, rank, has_records, expected_calls):
+        """Every rank reaches both barriers, records or not; only rank 0 merges."""
+        calls = []
+        self._run_fixture(monkeypatch, tmp_path, calls, rank, has_records)
+        assert calls == expected_calls
+
+    def test_a_failed_write_still_reaches_both_barriers(self, monkeypatch, tmp_path, expect_error):
+        """Its error is raised after the second barrier, so the other ranks aren't left waiting."""
+        calls = []
+
+        def failing_flush(path):
+            raise OSError("No space left on device")
+
+        with expect_error(OSError, "No space left on device"):
+            self._run_fixture(monkeypatch, tmp_path, calls, 1, True, flush=failing_flush)
+        assert calls == ["barrier", "barrier", "config"]
+
+    def test_rank_0_merge_error_still_releases_the_other_ranks(self, monkeypatch, tmp_path, expect_error):
+        calls = []
+
+        def failing_merge(path, **kwargs):
+            raise ValueError("merge failed")
+
+        with expect_error(ValueError, "merge failed"):
+            self._run_fixture(monkeypatch, tmp_path, calls, 0, True, merge=failing_merge)
+        assert calls == ["flush", "barrier", "barrier", "config"]
+
+
 class TestDeallocateTensorLookup:
     """A top-level buffer_deallocate becomes a ttnn::deallocate operation whose input is the tensor living at the freed
     address when it is freed; one inside an operation lifts that tensor into the operation's inputs."""
