@@ -37,7 +37,7 @@ void bind_rotate(nb::module_& mod) {
             fill (float): Fill value for areas outside the rotated tensor. Default: 0.0
             expand (bool): If True, return error. Only False is supported (same output dimensions). Default: False
             interpolation_mode (str): Interpolation method - "nearest" (sharp, faster) or "bilinear" (smooth, slower). Default: "nearest"
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Default: DRAM_INTERLEAVED
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Default: None (uses the input tensor's memory configuration)
 
         Returns:
             ttnn.Tensor: Rotated tensor of shape (N, H, W, C) - same as input

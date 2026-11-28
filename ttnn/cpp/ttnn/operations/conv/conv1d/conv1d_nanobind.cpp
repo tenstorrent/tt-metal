@@ -43,7 +43,7 @@ void bind_conv1d(nb::module_& mod) {
 
         Keyword Args:
             bias_tensor (ttnn.Tensor, optional): Optional bias tensor. Default: None
-            dtype (ttnn.DataType, optional): The data type of the input tensor. Default: None (will use the same dtype as input_tensor).
+            dtype (ttnn.DataType, optional): The data type of the output tensor. Default: None (will use the same dtype as input_tensor).
             conv_config (ttnn.Conv2dConfig, optional): Configuration for convolution. Default: None
             compute_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for compute kernel. Default: None
             memory_config (ttnn.MemoryConfig, optional): Output Tensor's Memory Configuration. Default: None
