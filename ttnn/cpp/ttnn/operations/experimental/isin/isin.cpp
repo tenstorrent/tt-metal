@@ -9,6 +9,7 @@
 
 #include "tt-metalium/vocabulary/shape.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 
 #include <enchantum/enchantum.hpp>
 
@@ -26,12 +27,24 @@ struct IsInPreprocessingResult {
 };
 
 void validate_inputs(const Tensor& elements, const Tensor& test_elements) {
+    TT_FATAL(elements.storage_type() == StorageType::DEVICE, "Elements tensor is not on a device");
+    TT_FATAL(elements.is_allocated(), "Elements tensor's buffer is null");
+    TT_FATAL(test_elements.storage_type() == StorageType::DEVICE, "Test elements tensor is not on a device");
+    TT_FATAL(test_elements.is_allocated(), "Test elements tensor's buffer is null");
+
     // Ensure both input tensors have the same data type for element comparison
     TT_FATAL(
         elements.dtype() == test_elements.dtype(),
         "elements.dtype: {}, test_elements.dtype: {}, they must be equal",
         enchantum::to_string(elements.dtype()),
         enchantum::to_string(test_elements.dtype()));
+
+    const auto dtype = elements.dtype();
+    TT_FATAL(
+        dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 || dtype == DataType::INT32 ||
+            dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8,
+        "elements.dtype: {} is not supported, supported dtypes are BFLOAT16, FLOAT32, INT32, UINT32, UINT16 and UINT8",
+        enchantum::to_string(dtype));
 }
 
 uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_elements) {
@@ -123,8 +136,23 @@ Tensor isin(
     const std::optional<Tensor>& opt_out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    // Validate that input tensors have compatible data types
+    // Validate the input tensors
     validate_inputs(elements, test_elements);
+
+    // An empty elements tensor gives an empty mask, as in torch.isin
+    if (elements.logical_volume() == 0) {
+        if (!opt_out.has_value()) {
+            return ttnn::empty_like(elements, ttnn::experimental::prim::OUTPUT_TENSOR_DATA_TYPE);
+        }
+        TT_FATAL(
+            opt_out->dtype() == ttnn::experimental::prim::OUTPUT_TENSOR_DATA_TYPE,
+            "Preallocated output should be of uint32 dtype");
+        TT_FATAL(
+            opt_out->logical_volume() == 0,
+            "Preallocated output should be empty when elements is empty, got shape {}",
+            opt_out->logical_shape());
+        return *opt_out;
+    }
 
     // Prepare tensors: convert to row-major layout, flatten to 1D, and calculate batch size
     const auto is_in_preprocessing_result = preprocess_isin_inputs(elements, test_elements);
