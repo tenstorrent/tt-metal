@@ -485,3 +485,114 @@ def test_max_pool2d_dram_slice_rejects_zero_stride(device, expect_error):
             dilation=[1, 1],
             dram_slice_config=ttnn.Op2DSliceConfig(num_slices=2, slice_type=SliceWidth),
         )
+
+
+def _row_major_sharded_config(gx, gy, shard_shape, strategy):
+    return ttnn.MemoryConfig(
+        memory_layout=strategy,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}),
+            list(shard_shape),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _assert_pool_row_major_output_canary(device, kind, channels, height, width, gx, gy, strategy):
+    """The last row-major channel block must not write past the output shard.
+
+    A canary tensor of the output's per-core size is placed directly above the output
+    slot. The pool output is correct either way, so a changed canary is the only signal.
+    """
+    num_cores = gx * gy
+    in_shard = (height * width // num_cores, channels) if strategy == HS else (height * width, channels // num_cores)
+    input_config = _row_major_sharded_config(gx, gy, in_shard, strategy)
+
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, height * width, channels, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_config,
+    )
+
+    def run_pool(input_tensor):
+        if kind == "max":
+            return ttnn.max_pool2d(
+                input_tensor=input_tensor,
+                batch_size=1,
+                input_h=height,
+                input_w=width,
+                channels=channels,
+                kernel_size=[2, 2],
+                stride=[2, 2],
+                padding=[0, 0],
+                dilation=[1, 1],
+            )
+        return ttnn.avg_pool2d(
+            input_tensor=input_tensor,
+            batch_size=1,
+            input_h=height,
+            input_w=width,
+            channels=channels,
+            kernel_size=[2, 2],
+            stride=[2, 2],
+            padding=[0, 0],
+        )
+
+    def per_core_tensor(rows, value=None):
+        shape = (1, 1, rows * num_cores, 16) if strategy == HS else (1, 1, rows, 16 * num_cores)
+        host = torch.randn(shape) if value is None else torch.full(shape, value)
+        host = host.to(torch.bfloat16)
+        return host, ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=_row_major_sharded_config(gx, gy, (rows, 16), strategy),
+        )
+
+    output = run_pool(ttnn_input)
+    out_rows, out_cols = output.memory_config().shard_spec.shape
+    out_bytes_per_core = out_rows * out_cols * 2
+    ttnn.deallocate(output)
+
+    canary, canary_tensor = per_core_tensor(64)
+    _, hole = per_core_tensor(out_bytes_per_core // 32, 0.0)
+    _, blocker = per_core_tensor(64, 0.0)
+    ttnn.deallocate(hole)
+
+    output = run_pool(ttnn_input)
+    assert output.buffer_address() + out_bytes_per_core == canary_tensor.buffer_address()
+    changed = int((ttnn.to_torch(canary_tensor) != canary).sum().item())
+    assert changed == 0, f"{changed} values after the output were overwritten"
+
+    out_h, out_w = height // 2, width // 2
+    got = ttnn.to_torch(output).float().reshape(1, out_h, out_w, channels).permute(0, 3, 1, 2)
+    # Read the reference from the device input: a stock run may already have overwritten it.
+    ref = ttnn.to_torch(ttnn_input).float().reshape(1, height, width, channels).permute(0, 3, 1, 2)
+    if kind == "max":
+        ref = torch.nn.functional.max_pool2d(ref, kernel_size=2, stride=2)
+    else:
+        ref = torch.nn.functional.avg_pool2d(ref, kernel_size=2, stride=2)
+    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    assert got.shape == ref.shape, f"output shape {got.shape} != {ref.shape}"
+    assert torch.allclose(got, ref, atol=atol, rtol=rtol), "pool output does not match torch"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("kind", ["max", "avg"])
+@pytest.mark.parametrize(
+    "channels, height, width, gx, gy, strategy",
+    [
+        pytest.param(384, 32, 32, 8, 1, HS, id="height-sharded-384"),
+        pytest.param(512, 28, 28, 8, 4, WS, id="width-sharded-512-16-per-core"),
+        pytest.param(256, 32, 32, 8, 1, HS, id="height-sharded-256-control"),
+        pytest.param(1024, 28, 28, 8, 4, WS, id="width-sharded-1024-control"),
+    ],
+)
+def test_pool2d_row_major_output_canary(device, kind, channels, height, width, gx, gy, strategy):
+    _assert_pool_row_major_output_canary(device, kind, channels, height, width, gx, gy, strategy)
