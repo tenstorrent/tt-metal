@@ -1308,6 +1308,45 @@ def test_paged_fill_cache_batched_rejects_mismatched_batch_idx_tensor(device, ba
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
 
 
+@pytest.mark.parametrize("bad_shape", [(4, 1), (4, 1, 1, 1)])
+def test_paged_fill_cache_batched_rejects_multi_page_batch_idx_tensor(device, bad_shape, expect_error):
+    """The writer reads batch_idx_tensor as ONE ROW_MAJOR page (page 0), so a tensor with the right volume
+    but several pages, e.g. [4, 1] or [4, 1, 1, 1], must be rejected instead of filling the wrong cache blocks."""
+    initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
+        num_input_batch=4,
+        num_input_heads=1,
+        input_seq_len=128,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=[0, 1, 2, 3],
+    )
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    def make_idx(shape):
+        return ttnn.from_torch(
+            torch.arange(4, dtype=torch.int32).reshape(shape),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+        )
+
+    # Control: the single-page layouts are accepted.
+    for ok_shape in [(4,), (1, 4)]:
+        ttnn.experimental.paged_fill_cache(
+            cache_tt, input_tt, page_table_tt, batch_idx_tensor=make_idx(ok_shape), batch_idx=0
+        )
+
+    with expect_error(RuntimeError, r"Batch idx tensor must occupy a single ROW_MAJOR page"):
+        ttnn.experimental.paged_fill_cache(
+            cache_tt, input_tt, page_table_tt, batch_idx_tensor=make_idx(bad_shape), batch_idx=0
+        )
+
+
 def test_paged_fill_cache_rejects_multi_batch_input_without_tensor(device, expect_error):
     """input_batch > 1 with no batch_idx_tensor was previously a silent wrong-result; now FATAL."""
     initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
