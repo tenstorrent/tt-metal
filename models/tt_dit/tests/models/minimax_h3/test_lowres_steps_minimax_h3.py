@@ -21,6 +21,7 @@ from ....pipelines.minimax_h3.packing import (
 )
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     EROS_MAX_BETA7_FIX1,
+    HYPERFLOW_V1,
     LOWRES_STEPS_ENV,
     MiniMaxH3Pipeline,
     lowres_handoff_rows,
@@ -217,7 +218,10 @@ def _lowres_stages(weights, frames, forwards, height=48, width=84):
     return [(call[3].num_inference_steps, call[2].shape[0]) for call in calls]
 
 
-@pytest.mark.parametrize("weights, frames, forwards", [(EROS_MAX_BETA7_FIX1, 47, 4)])  # 47 latent frames: 6 s
+@pytest.mark.parametrize(
+    "weights, frames, forwards",
+    [(EROS_MAX_BETA7_FIX1, 47, 4), (HYPERFLOW_V1, 47, 8), (HYPERFLOW_V1, 72, 8)],  # 47 latent frames: 6 s, 72: 10 s
+)
 def test_cells_that_passed_run_their_setting_by_default(monkeypatch, weights, frames, forwards):
     monkeypatch.delenv(LOWRES_STEPS_ENV, raising=False)
     # the first two forwards at 896x512: a 32x56 latent, 16x28 rows a frame
@@ -239,6 +243,7 @@ def test_cells_that_passed_run_their_setting_by_default(monkeypatch, weights, fr
         (EROS_MAX_BETA7_FIX1, 72, 4, (48, 84)),  # 10 s at 4 forwards: not judged on enough seeds yet
         (EROS_MAX_BETA7_FIX1, 47, 8, (48, 84)),  # a forward count nobody judged
         (EROS_MAX_BETA7_FIX1, 47, 4, (36, 64)),  # a resolution nobody judged
+        (HYPERFLOW_V1, 47, 4, (48, 84)),  # a forward count nobody judged
     ],
 )
 def test_other_requests_stay_at_full_resolution_by_default(monkeypatch, weights, frames, forwards, size):

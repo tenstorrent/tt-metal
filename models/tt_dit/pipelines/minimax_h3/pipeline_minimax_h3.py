@@ -650,12 +650,15 @@ LOWRES_SCALE_ENV = "MINIMAX_H3_LOWRES_SCALE"
 # Weights are named by a sha256, never by a file name: of a transformer file's safetensors header (its tensor
 # table and merge recipe), or of the whole adapter file merged into the plain weights.
 EROS_MAX_BETA7_FIX1 = "d17bd72c3ed451da8bbb04b904d70121315efd4c4918e91c4858b1d7ee67c146"
+HYPERFLOW_V1 = "9297f4505bfdef59c3014d11274411809c19b0abfe26161cab2b425a696df447"
 # (weights, latent frames, latent height, latent width, forwards) -> (low-res first forwards, scale): what a request
 # runs when `MINIMAX_H3_LOWRES_STEPS` is unset. A cell is listed only once its clips passed the side-by-side look
 # and VBench against full resolution, at the setting they passed with. All are 1344x768 with the first two forwards
 # at 896x512.
 LOWRES_DEFAULTS = {
     (EROS_MAX_BETA7_FIX1, 47, 48, 84, 4): (2, "2/3"),  # 6 s
+    (HYPERFLOW_V1, 47, 48, 84, 8): (2, "2/3"),  # 6 s
+    (HYPERFLOW_V1, 72, 48, 84, 8): (2, "2/3"),  # 10 s
 }
 
 
