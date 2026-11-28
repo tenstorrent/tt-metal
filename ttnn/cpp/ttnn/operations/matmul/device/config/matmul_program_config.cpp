@@ -848,6 +848,10 @@ MatmulProgramConfig get_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = fused_activation,
+                // in0 is read in place from the cores that hold its shards, so the core grid must start at the
+                // shard grid's origin. Left unset, normalization anchors a grid of this size at (0,0) and a
+                // block-sharded in0 placed elsewhere is read from the wrong cores.
+                .allowed_worker_cores = CoreRangeSet(grid_bbox),
             };
         }
     } else {
