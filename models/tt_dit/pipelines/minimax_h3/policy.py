@@ -81,12 +81,12 @@ class SolSchedule:
         return step < self.dense_steps
 
 
-#: Sol-Attn settings per model behind `H3_SOL_ATTN=1`, each as its side-by-side sheet ran it. A model with no entry
-#: runs `SolSchedule()`.
+#: Sol-Attn settings per model behind `H3_SOL_ATTN=1`. A model with no entry runs `SolSchedule()`.
 SOL_PRESETS = {
-    # The 10Eros-Max card: "13% SLA sparsity on all blocks, start at 0.2" (2 of the 8 forwards dense).
-    "10eros-max": SolSchedule(tau=1.13, dense_layers=0),
-    # The recipe NVIDIA ships for HyperFlow: no sinks.
+    # The 10Eros-Max card ("13% SLA sparsity on all blocks, start at 0.2": 2 of the 8 forwards dense) with a third
+    # dense forward. With two, sound events left the served export up to 7 LU under dense; with three, within 1 LU.
+    "10eros-max": SolSchedule(tau=1.13, dense_steps=3, dense_layers=0),
+    # The recipe NVIDIA ships for HyperFlow, as its side-by-side sheet ran it: no sinks.
     "hyperflow": SolSchedule(sinks=False),
 }
 

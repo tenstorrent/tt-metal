@@ -52,24 +52,24 @@ def test_sinks_switch_drops_the_dense_prefix():
     assert sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_SINKS": "1"}).sinks
 
 
-_CARD13 = SolSchedule(tau=1.13, dense_steps=2, dense_layers=0, sinks=True)  # the 10Eros-Max arm of the Sol sheet
-_HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # its HyperFlow arm
+_EROS = SolSchedule(tau=1.13, dense_steps=3, dense_layers=0, sinks=True)  # the 10Eros-Max card and a third dense step
+_HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # the HyperFlow arm of the Sol sheet
 
 
 @pytest.mark.parametrize(
     ("env", "preset", "expected"),
     [
-        ({"H3_SOL_PRESET": "10eros-max"}, None, _CARD13),
+        ({"H3_SOL_PRESET": "10eros-max"}, None, _EROS),
         ({}, "hyperflow", _HF),
         ({"H3_SOL_PRESET": "hyperflow"}, None, _HF),
-        ({"H3_SOL_PRESET": "10eros-max"}, "hyperflow", _CARD13),
+        ({"H3_SOL_PRESET": "10eros-max"}, "hyperflow", _EROS),
         # An empty value names no preset: the pipeline's own stands.
         ({"H3_SOL_PRESET": ""}, "hyperflow", _HF),
         ({}, None, SolSchedule()),
         (
             {"H3_SOL_PRESET": "10eros-max", "H3_SOL_TAU": "1.97", "H3_SOL_SINKS": "0"},
             None,
-            SolSchedule(1.97, 2, 0, False),
+            SolSchedule(1.97, 3, 0, False),
         ),
         ({"H3_SOL_DENSE_LAYERS": "0", "H3_SOL_SINKS": "1"}, "hyperflow", replace(_HF, dense_layers=0, sinks=True)),
     ],
@@ -267,6 +267,21 @@ def test_route_factors_compose_to_the_route_constants(shards, rows, logical_n, s
     assert f["n_valid_blocks"] == n_valid_blocks
     for hit, expected in zip((0.0, 1.0), masks):
         assert torch.equal(_mask(hit, const_or, valid_blocks), expected)
+
+
+@pytest.mark.parametrize(("rows", "logical_n"), [(9600, 73419), (14400, 110219)])  # the 6 s and 10 s rungs
+def test_no_score_drops_a_pair_with_a_prefix_token(rows, logical_n):
+    """The text, condition and audio rows are the sink prefix: only video-to-video pairs can go sparse."""
+    geo, sink_tokens = SolGeometry(shards=8, rows=rows, logical_n=logical_n), 843
+    (miss, _), _ = _reference_masks(geo, sink_tokens)
+    valid = build_route_constants(geo, sink_tokens=sink_tokens, scale=0.125, **_RULE)["valid_blocks"][0, 0]
+    prefix = [(s, b) for s in range(geo.shards) for b in range(geo.nb) if s * geo.rows + b * geo.block < sink_tokens]
+    assert len(prefix) == -(-sink_tokens // geo.block)
+    for s, b in prefix:
+        column = s * geo.nb_pad + b
+        assert valid[: geo.nb, column].all()  # a full block: computed exactly, not pooled
+        assert torch.equal(miss[s, 0, b], valid[b])  # as a query: every key block
+        assert (miss[:, 0, :, column] == valid[:, column]).all()  # as a key: for every query block
 
 
 def _host_constants(monkeypatch, geo, *, trace_captured=False):
