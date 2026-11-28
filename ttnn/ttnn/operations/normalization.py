@@ -93,7 +93,7 @@ def _golden_function(
     import torch
 
     if residual_input_tensor is not None:
-        input_tensor += residual_input_tensor
+        input_tensor = input_tensor + residual_input_tensor
 
     if weight is not None:
         if len(weight.shape) >= 2:

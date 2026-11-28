@@ -1836,10 +1836,11 @@ void py_module(nb::module_& mod) {
         mod,
         "upper_limit",
         "The max value for ReLU function.",
-        "This function caps off the input to a max value and a min value of 0.",
+        "This function caps off the input to a max value and a min value of 0. The cap is applied first and the clamp "
+        "at 0 second, so a negative upper_limit gives 0 for every element of the signed and floating point dtypes.",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8)doc",
         R"doc(System memory is not supported.)doc",
-        R"doc(\mathrm{output\_tensor}_i = \min(\max(\mathrm{input\_tensor}_i, 0), \verb|upper_limit|))doc");
+        R"doc(\mathrm{output\_tensor}_i = \max(\min(\mathrm{input\_tensor}_i, \verb|upper_limit|), 0))doc");
     bind_unary_operation_with_scalar_parameter<"relu_min", &ttnn::relu_min>(
         mod,
         "lower_limit",
