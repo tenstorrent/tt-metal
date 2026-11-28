@@ -43,6 +43,35 @@ FORCE_INLINE void store_block(
     }
 }
 
+// Walks a `rows x cols` rectangle as blocks of at most `block_rows x block_cols`, issuing every write.
+template <uint32_t page_size, typename Accessor>
+FORCE_INLINE void store_rect(
+    const Accessor& output,
+    uint32_t src_addr,
+    uint32_t src_row_stride_bytes,
+    uint32_t dst_page,
+    uint32_t dst_row_stride_pages,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t block_rows,
+    uint32_t block_cols) {
+    for (uint32_t block_row = 0; block_row < rows; block_row += block_rows) {
+        const uint32_t brows = rows - block_row < block_rows ? rows - block_row : block_rows;
+        for (uint32_t block_col = 0; block_col < cols; block_col += block_cols) {
+            DeviceZoneScopedN("S2I-STORE-BLOCK");
+            const uint32_t bcols = cols - block_col < block_cols ? cols - block_col : block_cols;
+            store_block<page_size>(
+                output,
+                src_addr + block_row * src_row_stride_bytes + block_col * page_size,
+                src_row_stride_bytes,
+                dst_page + block_row * dst_row_stride_pages + block_col,
+                dst_row_stride_pages,
+                brows,
+                bcols);
+        }
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -61,28 +90,34 @@ void kernel_main() {
     const uint32_t rect_tile_cols = get_arg_val<uint32_t>(3);
     const uint32_t block_tile_rows = get_arg_val<uint32_t>(4);
     const uint32_t block_tile_cols = get_arg_val<uint32_t>(5);
+    // Rows are issued from this one to the end, then from row 0: the host rotates cores whose rectangles start
+    // on the same bank apart, so each write step lands on distinct banks. Two segments keep the walk modulo-free.
+    const uint32_t issue_first_row = get_arg_val<uint32_t>(6);
 
     const auto output = TensorAccessor(output_args, output_addr, page_size);
     const uint32_t src_row_stride_bytes = src_row_stride_slots * page_size;
     const uint32_t rect_src_addr = get_read_ptr(cb_input_shard) + src_first_slot * page_size;
 
-    for (uint32_t block_row = 0; block_row < rect_tile_rows; block_row += block_tile_rows) {
-        const uint32_t rows =
-            rect_tile_rows - block_row < block_tile_rows ? rect_tile_rows - block_row : block_tile_rows;
-        for (uint32_t block_col = 0; block_col < rect_tile_cols; block_col += block_tile_cols) {
-            DeviceZoneScopedN("S2I-STORE-BLOCK");
-            const uint32_t cols =
-                rect_tile_cols - block_col < block_tile_cols ? rect_tile_cols - block_col : block_tile_cols;
-            store_block<page_size>(
-                output,
-                rect_src_addr + block_row * src_row_stride_bytes + block_col * page_size,
-                src_row_stride_bytes,
-                dst_first_page + block_row * dst_row_stride_pages + block_col,
-                dst_row_stride_pages,
-                rows,
-                cols);
-        }
-    }
+    store_rect<page_size>(
+        output,
+        rect_src_addr + issue_first_row * src_row_stride_bytes,
+        src_row_stride_bytes,
+        dst_first_page + issue_first_row * dst_row_stride_pages,
+        dst_row_stride_pages,
+        rect_tile_rows - issue_first_row,
+        rect_tile_cols,
+        block_tile_rows,
+        block_tile_cols);
+    store_rect<page_size>(
+        output,
+        rect_src_addr,
+        src_row_stride_bytes,
+        dst_first_page,
+        dst_row_stride_pages,
+        issue_first_row,
+        rect_tile_cols,
+        block_tile_rows,
+        block_tile_cols);
 
     {
         // Also on a lane with no tiles: every issued write is acked before the next program starts.

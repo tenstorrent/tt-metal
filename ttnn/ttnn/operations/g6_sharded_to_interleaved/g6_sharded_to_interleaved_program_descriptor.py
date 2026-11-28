@@ -34,6 +34,9 @@ class Knobs:
     # Block extents along tile_row / tile_col; None = the lane's whole rectangle (one block per lane).
     block_tile_rows: int | None = None
     block_tile_cols: int | None = None
+    # Rotate each core's row walk so that cores whose rectangles start on the same output bank issue to
+    # different banks at every write step (see `issue_first_row`). False = every core walks from row 0.
+    bank_stagger: bool = True
 
 
 DEFAULT_KNOBS = Knobs()
@@ -67,6 +70,8 @@ class Plan:
     blocks: tuple  # Block per core, None for a grid core without a shard
     page_size: int
     knobs: Knobs
+    # Shards k and k + issue_period start on the same output bank; 0 = no rotation.
+    issue_period: int
 
 
 def _tile_grid(input_tensor):
@@ -164,6 +169,14 @@ def build_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
     if page_size > NOC_MAX_BURST_SIZE:
         raise RuntimeError(f"g6_sharded_to_interleaved: page {page_size} B exceeds one NoC packet")
 
+    issue_period = 0
+    if knobs.bank_stagger and num_shards > 1:
+        n_banks = ttnn.get_memory_view(input_tensor.device(), memory_config.buffer_type).num_banks
+        # First output page of shard k is k * shard_page_stride, so its bank repeats every
+        # n_banks / gcd(stride, n_banks) shards.
+        shard_page_stride = shard_tile_cols if shards_along_cols > 1 else shard_tile_rows * tensor_tile_cols
+        issue_period = n_banks // math.gcd(shard_page_stride, n_banks)
+
     return Plan(
         tensor_tile_rows=tensor_tile_rows,
         tensor_tile_cols=tensor_tile_cols,
@@ -174,7 +187,16 @@ def build_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS):
         blocks=tuple(blocks),
         page_size=page_size,
         knobs=knobs,
+        issue_period=issue_period,
     )
+
+
+def issue_first_row(plan, k, rect_rows):
+    """The row core k's lane rectangle is issued from. The j-th core of each bank-sharing class (k // period)
+    is rotated by j rows, so at write step i the class issues to rows j + i: distinct pages, distinct banks."""
+    if plan.issue_period == 0 or rect_rows == 0:
+        return 0
+    return (k // plan.issue_period) % rect_rows
 
 
 def _check_l1_budget(plan, device, memory_config):
@@ -211,10 +233,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
 
     knobs = plan.knobs
     lane_rt_args = [ttnn.RuntimeArgs() for _ in range(knobs.num_write_lanes)]
-    for core, block in zip(plan.cores, plan.blocks):
+    for k, (core, block) in enumerate(zip(plan.cores, plan.blocks)):
         rects = _lane_rects(block, knobs.num_write_lanes) if block is not None else []
         for lane in range(knobs.num_write_lanes):
-            args = [0, 0, 0, 0, 0, 0]
+            args = [0, 0, 0, 0, 0, 0, 0]
             if lane < len(rects) and rects[lane][2] * rects[lane][3] > 0:
                 row_off, col_off, rows, cols = rects[lane]
                 args = [
@@ -224,6 +246,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
                     cols,
                     _block_extent(knobs.block_tile_rows, rows),
                     _block_extent(knobs.block_tile_cols, cols),
+                    issue_first_row(plan, k, rows),
                 ]
             lane_rt_args[lane][core.x][core.y] = args
 

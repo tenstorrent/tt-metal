@@ -17,8 +17,10 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from .g6_sharded_to_interleaved_program_descriptor import (
     DEFAULT_KNOBS,
     TILE,
+    _lane_rects,
     build_plan,
     cached_plan,
+    issue_first_row,
     lookup_program,
     store_program,
 )
@@ -181,16 +183,27 @@ def describe_plan(input_tensor, memory_config, knobs=DEFAULT_KNOBS) -> dict:
     """The plan a call with these arguments runs (BB-08, BB-21): regime, lanes, per-core role and block."""
     plan = cached_plan(input_tensor, memory_config, knobs) or build_plan(input_tensor, memory_config, knobs)
     cores = []
-    for core, block in zip(plan.cores, plan.blocks):
-        entry = {"core": (core.x, core.y), "role": "idle" if block is None else "writer", "block": None}
+    for k, (core, block) in enumerate(zip(plan.cores, plan.blocks)):
+        entry = {
+            "core": (core.x, core.y),
+            "role": "idle" if block is None else "writer",
+            "block": None,
+            "issue_first_row": None,
+        }
         if block is not None:
             entry["block"] = (block.first_tile_row, block.first_tile_col, block.tile_rows, block.tile_cols)
+            # Per lane: the lane rectangle's row the writes start from.
+            entry["issue_first_row"] = [
+                issue_first_row(plan, k, rows) for _, _, rows, _ in _lane_rects(block, plan.knobs.num_write_lanes)
+            ]
         cores.append(entry)
     return {
         "plan": "owner_writes",
         "num_write_lanes": plan.knobs.num_write_lanes,
         "block_tile_rows": plan.knobs.block_tile_rows,
         "block_tile_cols": plan.knobs.block_tile_cols,
+        "bank_stagger": plan.knobs.bank_stagger,
+        "issue_period": plan.issue_period,
         "tensor_tiles": (plan.tensor_tile_rows, plan.tensor_tile_cols),
         "shard_tiles": (plan.shard_tile_rows, plan.shard_tile_cols),
         "num_shards": plan.num_shards,

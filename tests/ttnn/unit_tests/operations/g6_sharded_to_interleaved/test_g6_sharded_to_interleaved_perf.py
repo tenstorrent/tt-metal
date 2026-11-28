@@ -43,7 +43,11 @@ CASES = {
         ttnn.L1_MEMORY_CONFIG,
     ),
 }
-KNOBS = {"lanes1": Knobs(), "lanes2": Knobs(num_write_lanes=2)}
+KNOBS = {
+    "lanes1": Knobs(),
+    "lanes2": Knobs(num_write_lanes=2),
+    "nostagger": Knobs(bank_stagger=False),
+}
 EAGER_CALLS = 12
 TRACE_CALLS = 16  # calls per captured trace: amortizes the execute_trace command itself
 TRACE_REPLAYS = 50

@@ -28,3 +28,5 @@
 {"event":"test_run","status":"pass","tests":"golden test_golden.py -k 1x128x256x32 or l1","result":"4 passed: p1 production, p1 loose, p1 other spec, p2 to L1","ts":"2026-11-27T23:59:23-05:00"}
 {"event":"test_run","status":"pass","tests":"precision_baseline.py (baseline + precision_matrix dtype x 4 geometries x 2 distributions)","result":"20 passed, all bit-exact","ts":"2026-11-27T23:59:42-05:00"}
 {"event":"test_run","status":"pass","tests":"impl_debug.py + trace_replay.py","result":"31 passed","ts":"2026-11-28T00:00:08-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-28T00:19:14-05:00"}
+{"event":"hypothesis","what":"p1 write phase is destination-ejection bound: 103 cores hit 11 of 110 L1 banks per step (10k mod 110); aggregate ~850 GB/s ~= 11 banks x 64B/cyc. Latin-square stagger s_k=(k//L)%rows, L=n_banks/gcd(S,n_banks), two-segment walk, should spread every step over 103 distinct banks","ts":"2026-11-28T00:19:14-05:00"}
