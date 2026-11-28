@@ -1044,7 +1044,7 @@ void py_module(nb::module_& mod) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT8_B, BFLOAT16, FLOAT32
                   - TILE
 
             .. list-table:: mat1_tensor
@@ -1052,7 +1052,7 @@ void py_module(nb::module_& mod) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT8_B, BFLOAT16, FLOAT32
                   - TILE
 
             .. list-table:: mat2_tensor
@@ -1060,7 +1060,7 @@ void py_module(nb::module_& mod) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT8_B, BFLOAT16, FLOAT32
                   - TILE
 
         Args:

@@ -74,6 +74,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
 
               Limitations:
                 - Input tensors must be on-device and rank 4.
+                - FLOAT32 input requires compute_kernel_config with fp32_dest_acc_en=true.
                 - Unsharded runs: :attr:`input_tensor` must be interleaved.
                 - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
                 - When using :attr:`residual_input_tensor`, it must match the :attr:`input_tensor` logical and padded shape, and sharding spec for sharded inputs.
