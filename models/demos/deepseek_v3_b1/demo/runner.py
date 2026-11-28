@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
+from models.common.incremental_detokenizer import IncrementalDetokenizer
+
 
 class ModelLike(Protocol):
     def start(self) -> None:
@@ -80,21 +82,25 @@ def run_generation(
         on_before_decode()
 
         generated_token_ids: list[int] = []
-        generated_chunks: list[str] = []
+        detokenizer = IncrementalDetokenizer(tokenizer, skip_special_tokens=False)
         for _ in range(max_new_tokens):
             decode_input = make_input_tensor(next_token_id)
             decode_output = model.decode_step(decode_input)
             next_token_id = extract_token_id(decode_output)
 
             generated_token_ids.append(next_token_id)
-            chunk = tokenizer.decode([next_token_id], skip_special_tokens=False)
-            generated_chunks.append(chunk)
-            write_text(chunk)
+            chunk = detokenizer.push(next_token_id)
+            if chunk:
+                write_text(chunk)
+
+        tail = detokenizer.flush()
+        if tail:
+            write_text(tail)
 
         return GenerationResult(
             prompt_token_ids=prompt_token_ids,
             generated_token_ids=generated_token_ids,
-            generated_text="".join(generated_chunks),
+            generated_text=tokenizer.decode(generated_token_ids, skip_special_tokens=False),
         )
     finally:
         if started:
