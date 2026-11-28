@@ -9,7 +9,7 @@
 #include "internal/tt-1xx/cache.h"
 #include "internal/tt-1xx/risc_common.h"
 #include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_sfpu_common.h"
+#include "sfpu/shim.h"
 #include "sanitizer/api.h"
 #include "sfpu/ckernel_sfpu_triangle_solve.h"
 #include "llk_triangle_solve_sync.h"
