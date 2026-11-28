@@ -541,6 +541,100 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, tensor_sh
     assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
+def _untilize_falls_back_to_single_core(grid_area, height_tiles, width_tiles, batch=1):
+    # Mirrors select_program_factory. `height_tiles` is the physical tile-row count (batch included), which
+    # is what num_tiles_per_col and compute_ncores use; the block count for compute_ncores_wh only covers
+    # the last two dims, so it leaves the batch out.
+    def ncores(nblocks):
+        return math.ceil(nblocks / math.ceil(nblocks / grid_area))
+
+    def ncores_wh(nblocks):
+        nblocks_per_core = math.ceil(nblocks / grid_area)
+        num_blocks = lambda size: math.ceil(width_tiles / size) * math.ceil(height_tiles / size)
+        size = math.isqrt(nblocks_per_core)
+        if size * size != nblocks_per_core or num_blocks(size) >= grid_area:
+            size = next((c for c in range(size + 1, width_tiles * height_tiles + 1) if num_blocks(c) < grid_area), 1)
+        return num_blocks(size)
+
+    if width_tiles > 32 and (height_tiles > 32 or width_tiles > height_tiles):
+        if ncores(height_tiles) < ncores_wh(width_tiles * (height_tiles // batch)):
+            return False
+    return height_tiles > 1
+
+
+# Widths whose rows don't fit in a CB, so untilize falls back to a single core.
+# `batch` > 1 makes the input rank 3, which also covers the block factory's third_dim loop.
+@pytest.mark.parametrize(
+    "dtype, width, batch",
+    [
+        (ttnn.bfloat16, 7168, 1),
+        (ttnn.float32, 4096, 1),
+        (ttnn.bfloat8_b, 12288, 1),
+        (ttnn.int32, 4096, 1),
+        (ttnn.bfloat16, 8192, 3),
+    ],
+)
+def test_untilize_multi_core_interleaved_wide_rows(device, dtype, width, batch):
+    # The single-core fallback only happens when a whole row of tiles doesn't fit in a CB (get_pf_type:
+    # half of L1 split over one input and one output CB, minus the allocator base). The bound below uses
+    # the worker L1 size, which is not the same L1 size get_pf_type uses, and ignores the base, so it can
+    # overestimate the capacity. It is only used to skip when the row clearly fits, e.g. on Quasar, whose
+    # larger L1 takes the default multi-core factory here instead.
+    tile_bytes = {ttnn.bfloat16: 2048, ttnn.float32: 4096, ttnn.int32: 4096, ttnn.bfloat8_b: 1088}[dtype]
+    max_tiles_per_cb = ttnn._ttnn.reports.get_device_info(device).worker_l1_size // 2 // (2 * tile_bytes)
+    if width // 32 <= max_tiles_per_cb:
+        pytest.skip(f"a row of {width // 32} tiles fits in L1 on this device, so there is no single-core fallback")
+
+    grid = device.compute_with_storage_grid_size()
+    heights = range(1024 if batch > 1 else 2048, 8192 + 1, 64)
+    fallback = [
+        h for h in heights if _untilize_falls_back_to_single_core(grid.x * grid.y, batch * h // 32, width // 32, batch)
+    ]
+    block = [h for h in heights if h not in fallback]
+    assert fallback, f"no row count in {heights} falls back to a single core on a {grid.x}x{grid.y} grid"
+
+    torch_dtype = {ttnn.float32: torch.float32, ttnn.int32: torch.int32}.get(dtype, torch.bfloat16)
+    for height in fallback[:3] + block[:1]:
+        shape = [batch, height, width] if batch > 1 else [height, width]
+        if dtype == ttnn.int32:
+            input_torch_tensor = torch.randint(-(2**31), 2**31 - 1, shape, dtype=torch_dtype)
+        else:
+            input_torch_tensor = torch.randn(shape, dtype=torch_dtype)
+        input_ttnn_tensor = ttnn.from_torch(
+            input_torch_tensor,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Pin the native prim so the codegen routing can't mask the factory choice, and check the
+        # factory it picks: the old single-core fallback also gives bit-exact output.
+        # try/finally so a failing captured call can't leave capture active for the rest of the session.
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        try:
+            ttnn._ttnn.operations.data_movement.untilize_force_native(
+                input_ttnn_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True
+            )
+        finally:
+            captured_graph = ttnn.graph.end_graph_capture()
+        factories = [
+            node["params"]["program_factory_type"]
+            for node in captured_graph
+            if node.get("node_type") == "function_start" and "program_factory_type" in node.get("params", {})
+        ]
+        assert factories == [
+            "ttnn::prim::UntilizeMultiCoreBlockProgramFactory"
+        ], f"{shape} selected {factories}, expected the block factory"
+
+        ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        if dtype == ttnn.bfloat8_b:
+            # bfloat8_b is lossy and untilize emits bfloat16 for it.
+            assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
+        else:
+            assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "tensor_shape",

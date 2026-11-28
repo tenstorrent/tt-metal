@@ -69,8 +69,8 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     // If the input is interleaved and an entire row of tiles can't fit in a CB at once
     if (!tensor.is_sharded() && num_tiles_per_row > max_tiles_per_cb) {
         // If the output is also interleaved and the tensor is only a single tile high, we can
-        // parallelize the work column wise. Otherwise we have to resort to the single core implementation,
-        // as the current default multi core implementation processes an entire row of tiles at once.
+        // parallelize the work column wise. Otherwise the default multi core implementation can't be used,
+        // as it processes an entire row of tiles at once.
         if (!output_is_sharded && num_tiles_per_col == 1) {
             return 0;
         }
@@ -417,6 +417,12 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
+        // get_pf_type only returns 1 for interleaved input, so the block factory (interleaved only) applies
+        // unless the output is sharded. That case, interleaved input with sharded output and wide rows, is
+        // the only one that still runs on a single core.
+        if (!output_is_sharded) {
+            return UntilizeMultiCoreBlockProgramFactory{};
+        }
         return UntilizeSingleCoreProgramFactory{};
     }
 
