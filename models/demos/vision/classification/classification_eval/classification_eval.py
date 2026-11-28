@@ -47,7 +47,10 @@ def evaluation(
     for i in range(iterations // batch_size):
         if model_name == "vit":
             inputs, labels = get_batch(data_loader, image_processor)
-        elif model_name in ["mobilenetv2", "swin_s", "resnet50", "efficientnet_b0", "swin_v2", "vovnet"]:
+        elif model_name == "mobilenetv2":
+            # torchvision's MobileNet_V2 transform resizes the short side to 256 before the 224 center crop
+            inputs, labels = get_batch(data_loader, res, resize_size=256)
+        elif model_name in ["swin_s", "resnet50", "efficientnet_b0", "swin_v2", "vovnet"]:
             inputs, labels = get_batch(data_loader, res)
 
         # preprocess
