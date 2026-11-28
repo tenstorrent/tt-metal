@@ -11,6 +11,8 @@ class UNet(nn.Module):
         super(UNet, self).__init__()
 
         features = init_features
+        # The number of encoder and decoder levels the forward pass runs (num_levels_from_env).
+        self.depth = 4
         self.encoder1 = nn.Sequential(
             nn.Conv2d(in_channels, features, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(num_features=features),
@@ -97,29 +99,18 @@ class UNet(nn.Module):
         self.conv = nn.Conv2d(in_channels=features, out_channels=out_channels, kernel_size=1)
 
     def forward(self, x):
-        enc1 = self.encoder1(x)
-        enc2 = self.encoder2(self.pool1(enc1))
-        enc3 = self.encoder3(self.pool2(enc2))
-        enc4 = self.encoder4(self.pool3(enc3))
-        bottleneck = self.bottleneck(self.pool4(enc4))
+        skips = []
+        for level in range(1, self.depth + 1):
+            x = getattr(self, f"encoder{level}")(x if level == 1 else getattr(self, f"pool{level - 1}")(x))
+            skips.append(x)
+        # Below the full depth the next encoder stands in for the bottleneck: it has the bottleneck's
+        # shapes at that depth.
+        bottleneck = self.bottleneck if self.depth == 4 else getattr(self, f"encoder{self.depth + 1}")
+        x = bottleneck(getattr(self, f"pool{self.depth}")(x))
 
-        dec4 = self.upconv4(bottleneck)
-        dec4 = torch.cat((dec4, enc4), dim=1)
-        dec4 = self.decoder4(dec4)
+        for level in range(self.depth, 0, -1):
+            x = getattr(self, f"upconv{level}")(x)
+            x = torch.cat((x, skips[level - 1]), dim=1)
+            x = getattr(self, f"decoder{level}")(x)
 
-        dec3 = self.upconv3(dec4)
-
-        dec3 = torch.cat((dec3, enc3), dim=1)
-
-        dec3 = self.decoder3(dec3)
-
-        dec2 = self.upconv2(dec3)
-        dec2 = torch.cat((dec2, enc2), dim=1)  # 0.9976
-
-        dec2 = self.decoder2(dec2)
-
-        dec1 = self.upconv1(dec2)
-        dec1 = torch.cat((dec1, enc1), dim=1)
-        dec1 = self.decoder1(dec1)
-
-        return self.conv(dec1)
+        return self.conv(x)

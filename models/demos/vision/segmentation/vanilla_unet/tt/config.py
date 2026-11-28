@@ -10,10 +10,23 @@ from models.tt_cnn.tt.builder import (
     AutoShardedStrategyConfiguration,
     Conv2dConfiguration,
     HeightShardedStrategyConfiguration,
+    HeightSliceStrategyConfiguration,
     L1FullSliceStrategyConfiguration,
     MaxPool2dConfiguration,
     ShardingStrategy,
 )
+
+# The L1 plan (L1 input shards, L1 activations, unsliced convs) runs on an 8x8 core range at the
+# grid's origin; a grid that does not hold it runs from DRAM instead.
+L1_PLAN_GRID_SIZE = 8
+
+
+def reduced_grid(device) -> bool:
+    """Whether ``device``'s grid does not hold the L1 plan's 8x8 core range."""
+    if device is None:
+        raise ValueError("A device is required to choose the UNet memory plan")
+    grid = device.compute_with_storage_grid_size()
+    return grid.x < L1_PLAN_GRID_SIZE or grid.y < L1_PLAN_GRID_SIZE
 
 
 @dataclass
@@ -82,8 +95,10 @@ class TtUNetConfigBuilder:
         input_width: int = 640,
         batch_size: int = 1,
         init_features: int = 32,
+        device=None,
     ):
         self.parameters = parameters
+        self.reduced_grid = reduced_grid(device)
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.input_height = input_height
@@ -93,7 +108,7 @@ class TtUNetConfigBuilder:
 
         l1_input_core_grid = ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(L1_PLAN_GRID_SIZE - 1, L1_PLAN_GRID_SIZE - 1)),
             }
         )
         l1_input_shard_shape = (in_channels, input_height * input_width // l1_input_core_grid.num_cores())
@@ -104,8 +119,12 @@ class TtUNetConfigBuilder:
     def build_configs(self) -> TtUNetLayerConfigs:
         return TtUNetLayerConfigs(
             # Input memory configurations
-            l1_input_memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, self.l1_input_shard_spec
+            l1_input_memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG
+                if self.reduced_grid
+                else ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, self.l1_input_shard_spec
+                )
             ),
             # Encoder 1
             encoder1_conv1=self._create_conv_config_from_params(
@@ -368,6 +387,17 @@ class TtUNetConfigBuilder:
         enable_act_double_buffer=False,
     ) -> Conv2dConfiguration:
         """Create a Conv2dConfiguration from preprocessed parameters dict containing weight and bias"""
+        slice_strategy = L1FullSliceStrategyConfiguration()
+        config_tensors_in_dram = False
+        if self.reduced_grid:
+            # A reduced grid's L1 holds no whole activation: the conv reads and writes DRAM in the
+            # height slices conv2d chooses, with conv2d's own block height, and its config tensors
+            # go to DRAM since L1_SMALL holds only a few banks there.
+            sharding_strategy = HeightShardedStrategyConfiguration()
+            slice_strategy = HeightSliceStrategyConfiguration()
+            config_tensors_in_dram = True
+            enable_weights_double_buffer = False
+            enable_act_double_buffer = False
         return Conv2dConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -389,7 +419,8 @@ class TtUNetConfigBuilder:
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
-            slice_strategy=L1FullSliceStrategyConfiguration(),
+            slice_strategy=slice_strategy,
+            config_tensors_in_dram=config_tensors_in_dram,
             output_layout=ttnn.TILE_LAYOUT,
         )
 
@@ -435,6 +466,7 @@ def create_unet_configs_from_parameters(
     input_height: int = 480,
     input_width: int = 640,
     batch_size: int = 1,
+    device=None,
 ) -> TtUNetLayerConfigs:
     """
     Create Vanilla UNet configuration object given weights and input tensor dimensions
@@ -447,6 +479,7 @@ def create_unet_configs_from_parameters(
         input_height=input_height,
         input_width=input_width,
         batch_size=batch_size,
+        device=device,
     )
 
     return builder.build_configs()
