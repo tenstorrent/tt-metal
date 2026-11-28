@@ -196,6 +196,28 @@ def grid_linear_kwargs(device):
     )
 
 
+_ACTIVATIONS = {None: None, "relu": ttnn.UnaryOpType.RELU}
+
+
+def grid_linear(x, weight, bias=None, activation=None, **kwargs):
+    """``ttnn.linear(x, weight, bias=bias, activation=activation, **kwargs)``, with its result
+    independent of what else holds L1 on a reduced grid.
+
+    Without a program config, ttnn.linear sizes its K blocks to the L1 free at the call, and a
+    reduced grid's per-core share is large enough for that to change them. Each block boundary
+    rounds the partial sums, so the same input then gives different bits as other buffers come and
+    go. There the program config sizes the blocks by ``in_features`` alone. The compute config
+    stays the caller's, else the one ttnn.linear picks without a program config."""
+    device = x.device()
+    if not reduced_grid(device):
+        return ttnn.linear(x, weight, bias=bias, activation=activation, **kwargs)
+    kwargs.pop("core_grid", None)
+    kwargs.setdefault("compute_kernel_config", _linear_compute_config(device.arch(), False))
+    rows = math.prod(list(x.padded_shape)[:-1])
+    program_config = linear_program_config(device, rows, x.shape[-1], weight.shape[-1], _ACTIVATIONS[activation])
+    return ttnn.linear(x, weight, bias=bias, program_config=program_config, **kwargs)
+
+
 class TTFFN:
     """The decoder's FFN, Linear-ReLU-Linear, into L1, without the residual: the layer adds it
     inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``."""

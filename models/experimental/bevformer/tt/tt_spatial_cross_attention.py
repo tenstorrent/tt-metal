@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
 
-from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
+from .tt_common import grid_linear, grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 from ..model_config import DeformableAttentionConfig
 
@@ -650,7 +650,7 @@ class TTSpatialCrossAttention:
 
         # Output projection
         if hasattr(self.params, "output_proj") and self.params.output_proj is not None:
-            projected = ttnn.linear(
+            projected = grid_linear(
                 slots,
                 self.params.output_proj.weight,
                 bias=self.params.output_proj.bias,

@@ -16,7 +16,7 @@ import torch
 from typing import Optional, List, Dict, Any, NamedTuple
 
 from .tt_spatial_cross_attention import SCARebatchPlan, SCARebatchPlanner, SCAVisibility, TTSpatialCrossAttention
-from .tt_common import grid_linear_kwargs, l1_if_fits, layer_norm, signpost
+from .tt_common import grid_linear, grid_linear_kwargs, l1_if_fits, layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention, shifted_reference_points
 from .tt_point_sampling_3d_2d import camera_rows, image_size, point_sampling_3d_to_2d_ttnn, world_points_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
@@ -262,7 +262,7 @@ class TTBEVFormerLayer:
 
         # First linear layer and its ReLU: [embed_dims] -> [feedforward_channels]
         # FFN has mixed structure: params.ffn.linear1 is a dict, not an object
-        x = ttnn.linear(
+        x = grid_linear(
             x,
             self.params.ffn.linear1["weight"],
             bias=self.params.ffn.linear1["bias"],
@@ -272,7 +272,7 @@ class TTBEVFormerLayer:
         )
 
         # Second linear layer: [feedforward_channels] -> [embed_dims]
-        x = ttnn.linear(
+        x = grid_linear(
             x,
             self.params.ffn.linear2["weight"],
             bias=self.params.ffn.linear2["bias"],

@@ -23,7 +23,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-from .tt_common import grid_linear_kwargs, l1_if_fits, reduced_grid, signpost
+from .tt_common import grid_linear, grid_linear_kwargs, l1_if_fits, reduced_grid, signpost
 
 from loguru import logger
 
@@ -440,7 +440,7 @@ class TTMSDeformableAttention:
         # Project value. It stays tiled (B, S, H*D); with a head-major layout,
         # untilize_and_split_heads turns it into that layout in one pass.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
+        value = grid_linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
 
         # Apply key padding mask if provided
         if key_padding_mask is not None:
@@ -472,7 +472,7 @@ class TTMSDeformableAttention:
         # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-            output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+            output = grid_linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
         if ENABLE_LOGGING:
             logger.info("MSDA Adding Residual")
@@ -515,7 +515,7 @@ class TTMSDeformableAttention:
         # Generate attention weights. The softmax is over (levels, points) jointly, so
         # (bs, Q, heads, levels*points) is both the natural shape here and exactly the
         # packed layout the op consumes -- it is never split into (levels, points).
-        attention_weights = ttnn.linear(
+        attention_weights = grid_linear(
             query,
             self.params.attention_weights.weight,
             bias=self.params.attention_weights.bias,
@@ -552,7 +552,7 @@ class TTMSDeformableAttention:
         # The Linear's channels are already (head, level, point, xy): the op reads each head's
         # offsets from the query's page when they fill whole alignment units of the buffer, else
         # the reshape below gives each head a page.
-        sampling_offsets = ttnn.linear(
+        sampling_offsets = grid_linear(
             query,
             self.params.sampling_offsets.weight,
             bias=getattr(self.params.sampling_offsets, "bias", None),

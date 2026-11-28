@@ -19,7 +19,7 @@ import warnings
 # Enable/disable logging output
 ENABLE_LOGGING = False
 
-from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
+from .tt_common import grid_linear, grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import (
     QueryCounts,
     grouped_softmax,
@@ -193,7 +193,7 @@ class TTTemporalSelfAttention:
             identity = query
 
         def linear(x, linear_params, memory_config=memory):
-            return ttnn.linear(
+            return grid_linear(
                 x, linear_params.weight, bias=linear_params.bias, memory_config=memory_config, **self.linear_kwargs
             )
 
@@ -204,13 +204,13 @@ class TTTemporalSelfAttention:
         # live buffer, so the value takes the top and the intermediates staged after it, all but the
         # op's own offsets and weights, are freed before the op runs.
         if value is None:
-            projected = ttnn.linear(query, params.value_proj.weight, bias=params.value_proj.bias)
+            projected = grid_linear(query, params.value_proj.weight, bias=params.value_proj.bias)
             maps = ttnn.concat([projected] * queue, dim=1)
             ttnn.deallocate(projected)
         else:
             # Upstream's (B * queue, nk, embed_dims) stack is each sample's maps one after another.
             maps = ttnn.reshape(
-                ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias),
+                grid_linear(value, params.value_proj.weight, bias=params.value_proj.bias),
                 (bs, queue * num_queries, embed_dims),
             )
         if self.value_layout == "head_major":
