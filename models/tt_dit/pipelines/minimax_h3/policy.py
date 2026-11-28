@@ -93,8 +93,9 @@ SOL_PRESETS = {
 
 #: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset, each with the longest clip (frames) it then runs sparse.
 #: 10Eros-Max: at 6 s the served audio is level with dense; at 10 s it stays about 2 LU under, with fewer sound events.
-#: LightX2V: at 6 s VBench, the side-by-side look and the served audio are level with dense, text and image jobs.
-SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6), "lightx2v": get_num_frames(6)}
+#: LightX2V: at 6 s and 10 s VBench, the side-by-side look and the served audio are level with dense, text and image
+#: jobs.
+SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6), "lightx2v": get_num_frames(10)}
 
 
 def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:

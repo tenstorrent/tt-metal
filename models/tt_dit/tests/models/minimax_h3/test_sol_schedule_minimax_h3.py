@@ -55,7 +55,7 @@ _LIGHTX2V = "/adapters/minimax_h3_fl2v_turbo_4step_v1.3_768p_bf16.safetensors"
 @pytest.mark.parametrize(
     ("lora", "task", "env", "expected"),
     [
-        (_LIGHTX2V, "t2va", {}, SolSchedule(max_frames=158)),  # with no switch set: clips up to 6 s
+        (_LIGHTX2V, "t2va", {}, SolSchedule(max_frames=243)),  # with no switch set: clips up to 10 s
         (_LIGHTX2V, "t2va", {"H3_SOL_ATTN": "0"}, None),
         (_LIGHTX2V, "ref2va", {}, None),
         ("/adapters/other.safetensors", "t2va", {}, None),
