@@ -364,7 +364,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: data_movement
@@ -395,7 +395,7 @@
       timeout: 70
     bh_p150b_civ2:
       timeout: 100
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: data_movement
@@ -410,7 +410,7 @@
   skus:
     wh_n300_civ2:
       timeout: 10
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: data_movement
@@ -422,7 +422,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: data_movement
@@ -439,7 +439,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: data_movement
@@ -470,7 +470,7 @@
   skus:
     wh_galaxy:
       timeout: 60
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: ccl
@@ -482,7 +482,7 @@
   skus:
     wh_galaxy:
       timeout: 60
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
   team: ttnn
   budget_type: unit
   category: ccl

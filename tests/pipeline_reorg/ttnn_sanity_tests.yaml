@@ -57,7 +57,7 @@
       timeout: 40
   team: ttnn
   budget_type: sanity
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U098J7VAM2R # Sheran Cardoza
 
 - name: "ttnn eltwise group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 1 -m "not disable_fast_runtime_mode"'
