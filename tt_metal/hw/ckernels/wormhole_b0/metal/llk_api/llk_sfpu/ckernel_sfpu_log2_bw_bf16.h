@@ -65,8 +65,15 @@ inline void calculate_log2_bw_bf16() {
             vFloat q = x + 0.0f;
             v_if(setsgn(q, 0) == 0.0f) {
                 vFloat infinity = sFloat16b(std::numeric_limits<float>::infinity());
+                // Only the exact -0.0 pattern (sign 15 set, exponent 7:0 and mantissa 14:8 zero)
+                // flips the pole. Negative subnormals flush to zero like +0 and keep its pole.
+                vUInt in_bits = dst_reg[d].mode<::sfpi::DataLayout::U16>();
                 result = copysgn(infinity, grad);
-                v_if(setsgn(grad, 0) == 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_if((in_bits & 0x8000) != 0 && (in_bits & 0x7fff) == 0) { result = -result; }
+                v_endif;
+                v_if(setsgn(grad, 0) == 0.0f || as<vInt>(setsgn(grad, 0)) > 0x7f800000) {
+                    result = std::numeric_limits<float>::quiet_NaN();
+                }
                 v_endif;
             }
             v_endif;
