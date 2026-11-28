@@ -13,10 +13,9 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.matmul_sweep import (
-    DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
+    dest_corner_mn,
     generate_tile_dims,
-    mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
@@ -41,15 +40,6 @@ from helpers.test_variant_parameters import (
 # Cold start, functional-max inner dim, and reuse/bandwidth.
 KT_DIMS = [1, 4, 32]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
-
-
-def dest_corner_mn(max_tiles: int) -> List[tuple]:
-    """1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit."""
-    square = int(max_tiles**0.5)
-    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
-    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
-    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
-    return list(dict.fromkeys(corners))
 
 
 def generate_dest_corner_combinations(max_tiles: int, kt_dims=KT_DIMS) -> List[tuple]:

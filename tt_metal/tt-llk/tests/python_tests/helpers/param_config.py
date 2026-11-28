@@ -125,7 +125,10 @@ def max_dest_tiles(
 
 
 def quasar_dest_sync_modes(*, is_perf: bool = False) -> List[DestSync]:
-    """Dest sync modes a Quasar test sweeps: Half only for perf runs, else Half and Full."""
+    """Dest sync modes a Quasar test sweeps: Half only for perf runs, else Half and Full.
+
+    Non-MX ``perf_matmul_quasar`` is the exception and also sweeps Full.
+    """
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
