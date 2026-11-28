@@ -26,7 +26,6 @@ from models.experimental.bevformer.model_config import (
     BOX_SIZE,
     BOX_VELOCITY,
     BOX_YAW,
-    CAMERA_GROUPS,
     CAMERA_IMAGE_SIZE,
     CAMERA_ORDER,
     CAN_BUS_DIMS,
@@ -66,6 +65,7 @@ from models.experimental.bevformer.model_config import (
     VARIANTS,
     fpn_spatial_shapes,
     padded_image_size,
+    tt_resnet_kwargs,
 )
 from models.experimental.bevformer.reference.bevformer import BEVFormer, relative_can_bus
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
@@ -360,11 +360,16 @@ BACKBONE_FPN_PCC = 0.985 if VARIANT == "small" else 0.99
 
 # Dtypes TTResNet emits for its outputs: C3-C5 for base, C5 for small and tiny.
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16] * len(RESNET_KWARGS["out_indices"])
-# Layouts TTResNet emits its outputs in, which follow its layers' camera groups.
-BACKBONE_OUTPUT_LAYOUTS = [
-    TTResLayer.group_output_layout(CAMERA_GROUPS.get(layer), h, w)
-    for layer, (h, w) in zip(RESNET_KWARGS["out_indices"], SPATIAL_SHAPES)
-]
+
+
+def backbone_output_layouts(reduced_grid=False):
+    """Layouts TTResNet emits its outputs in, which follow its layers' camera groups on the grid."""
+    camera_groups = tt_resnet_kwargs(reduced_grid)["camera_groups"]
+    return [
+        TTResLayer.group_output_layout(camera_groups.get(layer), h, w)
+        for layer, (h, w) in zip(RESNET_KWARGS["out_indices"], SPATIAL_SHAPES)
+    ]
+
 
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))

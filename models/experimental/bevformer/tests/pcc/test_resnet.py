@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS
+from models.experimental.bevformer.model_config import IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS, tt_resnet_kwargs
 from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_backbone,
@@ -14,25 +14,43 @@ from models.experimental.bevformer.tests.common import (
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_resnet_parameters
+from models.experimental.bevformer.tt.tt_common import reduced_grid
 from models.experimental.bevformer.tt.tt_resnet import TTBottleneck, TTResLayer, TTResNet
 
 
-# Every block test reads the same preprocessed backbone. Preprocessing traces a full
-# reference forward, so it runs once per module rather than once per test. Being module
-# scoped, it runs before the first test's device and reset_seeds fixtures. The trace only
-# records shapes, so its input is zeros rather than a draw from the unseeded generator.
-# It also brings up the UMD cluster (infer_ttnn_module_args does, even without a device)
-# before the device fixture opens the device.
 @pytest.fixture(scope="module")
-def reference_and_parameters():
-    reference_model = build_reference_backbone()
-    parameters = create_resnet_parameters(reference_model, torch.zeros(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
-    return reference_model, parameters
+def reference_model():
+    return build_reference_backbone()
+
+
+@pytest.fixture(scope="module")
+def parameters_by_grid():
+    return {}
+
+
+# Every block test reads the same preprocessed backbone for its grid. Preprocessing traces a full
+# reference forward, so it runs once per module and grid rather than once per test. The trace only
+# records shapes, so its input is zeros rather than a draw from the generator. On a reduced grid
+# TTResNet runs every layer on one camera at a time (tt_resnet_kwargs), so its convs are built for
+# one camera.
+@pytest.fixture
+def reference_and_parameters(device, reference_model, parameters_by_grid):
+    on_reduced_grid = reduced_grid(device)
+    if on_reduced_grid not in parameters_by_grid:
+        cameras = 1 if on_reduced_grid else NUM_CAMS
+        parameters_by_grid[on_reduced_grid] = create_resnet_parameters(
+            reference_model, torch.zeros(cameras, 3, IMAGE_HEIGHT, IMAGE_WIDTH), tt_resnet_kwargs(on_reduced_grid)
+        )
+    return reference_model, parameters_by_grid[on_reduced_grid]
+
+
+def _per_camera(parameters):
+    return parameters.tt_kwargs.get("per_camera", False)
 
 
 def _layer_kwargs(parameters, i):
     """The per-layer arguments TTResNet gives layer ``i`` for ``parameters``."""
-    config = {k: v for k, v in parameters.tt_kwargs.items() if not k.startswith("stem_")}
+    config = {k: v for k, v in parameters.tt_kwargs.items() if not k.startswith("stem_") and k != "per_camera"}
     return TTResNet.layer_kwargs(i, **config)
 
 
@@ -46,11 +64,17 @@ def _input_layout(parameters, i):
     return TTResLayer.group_output_layout(cameras, conv1.input_height, conv1.input_width)
 
 
-def _check(torch_output, ttnn_model, ttnn_output):
-    assert (
-        ttnn_output.dtype == ttnn_model.output_dtype
-    ), f"emits {ttnn_output.dtype}, declares {ttnn_model.output_dtype}"
-    assert_pcc(torch_output, from_conv_layout(ttnn_output, torch_output.shape), 0.99)
+def _run_and_check(ttnn_model, parameters, device, torch_input, torch_output, layout=ttnn.TILE_LAYOUT):
+    """Runs ``ttnn_model`` as TTResNet runs it on this grid, on the whole batch or one camera at a time."""
+    camera_inputs = torch_input.split(1) if _per_camera(parameters) else [torch_input]
+    outputs = []
+    for camera_input in camera_inputs:
+        ttnn_output = ttnn_model(to_conv_layout(camera_input, device, ttnn.bfloat16, layout))
+        assert (
+            ttnn_output.dtype == ttnn_model.output_dtype
+        ), f"emits {ttnn_output.dtype}, declares {ttnn_model.output_dtype}"
+        outputs.append(from_conv_layout(ttnn_output, (len(camera_input), *torch_output.shape[1:])))
+    assert_pcc(torch_output, torch.cat(outputs), 0.99)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -59,15 +83,14 @@ def test_bottleneck_layer1(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer1[0].eval()(torch_input)
 
-    # layer1's first block alone, run as TTResNet runs layer1: one camera at a time in L1.
+    # layer1's first block alone, run as TTResNet runs layer1.
     ttnn_model = TTResLayer(
         [parameters.conv_args.layer1[0]],
         [parameters["res_model"]["layer1"][0]],
         device,
         **_layer_kwargs(parameters, 0),
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
-    _check(torch_output, ttnn_model, ttnn_output)
+    _run_and_check(ttnn_model, parameters, device, torch_input, torch_output)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -86,8 +109,7 @@ def test_reslayer3_first_blocks(device, reset_seeds, reference_and_parameters):
         **_layer_kwargs(parameters, 2),
         input_layout=layout,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
-    _check(torch_output, ttnn_model, ttnn_output)
+    _run_and_check(ttnn_model, parameters, device, torch_input, torch_output, layout)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -99,7 +121,7 @@ def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
     torch_output = reference_model.layer4[0].eval()(torch_input)
 
     kwargs = _layer_kwargs(parameters, 3)
-    assert kwargs.pop("cameras") is None, "this test runs layer4's block on the whole batch, as TTResNet does"
+    assert kwargs.pop("cameras") is None, "TTResNet runs layer4's blocks without camera groups"
     layout = _input_layout(parameters, 3)
     ttnn_model = TTBottleneck(
         parameters.conv_args.layer4[0],
@@ -108,8 +130,7 @@ def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
         **kwargs,
         input_layout=layout,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
-    _check(torch_output, ttnn_model, ttnn_output)
+    _run_and_check(ttnn_model, parameters, device, torch_input, torch_output, layout)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -124,8 +145,7 @@ def test_reslayer1(device, reset_seeds, reference_and_parameters):
         device,
         **_layer_kwargs(parameters, 0),
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
-    _check(torch_output, ttnn_model, ttnn_output)
+    _run_and_check(ttnn_model, parameters, device, torch_input, torch_output)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -142,8 +162,7 @@ def test_reslayer2(device, reset_seeds, reference_and_parameters):
         **_layer_kwargs(parameters, 1),
         input_layout=layout,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
-    _check(torch_output, ttnn_model, ttnn_output)
+    _run_and_check(ttnn_model, parameters, device, torch_input, torch_output, layout)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -153,6 +172,8 @@ def test_stem_conv_ignores_hwc_padding(device, reset_seeds, reference_and_parame
     even Inf. Their zero weights must cancel them exactly: the output equals that of zero padding
     bit for bit. Not a PCC check, which zeroes NaN before correlating."""
     _, parameters = reference_and_parameters
+    if _per_camera(parameters):
+        pytest.skip("A reduced grid's stem pads the channels with zeros in DRAM, not with convert_to_hwc")
     conv = parameters.conv_args.conv1
     stem_kwargs = parameters.tt_kwargs
     stem = TTResNet.stem_conv(

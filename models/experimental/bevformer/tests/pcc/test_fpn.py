@@ -5,16 +5,17 @@
 import pytest
 import torch
 
-from models.experimental.bevformer.model_config import FPN_KWARGS, NUM_CAMS, SPATIAL_SHAPES
+from models.experimental.bevformer.model_config import FPN_KWARGS, NUM_CAMS, SPATIAL_SHAPES, tt_fpn_kwargs
 from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
-    BACKBONE_OUTPUT_LAYOUTS,
     assert_pcc,
+    backbone_output_layouts,
     build_reference_fpn,
     from_conv_layout,
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_fpn_parameters
+from models.experimental.bevformer.tt.tt_common import reduced_grid
 from models.experimental.bevformer.tt.tt_fpn import TTFPN
 
 
@@ -28,14 +29,19 @@ def test_fpn(device, reset_seeds):
         torch.randn(NUM_CAMS, channels, h, w)
         for channels, (h, w) in zip(FPN_KWARGS["in_channels"], SPATIAL_SHAPES, strict=False)
     ]
-    parameters = create_fpn_parameters(torch_model, input_tensors)
+    on_reduced_grid = reduced_grid(device)
+    parameters = create_fpn_parameters(
+        torch_model, input_tensors, tt_fpn_kwargs(len(torch_model.fpn_convs), on_reduced_grid)
+    )
     torch_outputs = torch_model(input_tensors)
 
     tt_model = TTFPN(parameters, device, input_dtypes=BACKBONE_OUTPUT_DTYPES)
     tt_outputs = tt_model(
         [
             to_conv_layout(tensor, device, dtype, layout)
-            for tensor, dtype, layout in zip(input_tensors, BACKBONE_OUTPUT_DTYPES, BACKBONE_OUTPUT_LAYOUTS)
+            for tensor, dtype, layout in zip(
+                input_tensors, BACKBONE_OUTPUT_DTYPES, backbone_output_layouts(on_reduced_grid)
+            )
         ]
     )
 
