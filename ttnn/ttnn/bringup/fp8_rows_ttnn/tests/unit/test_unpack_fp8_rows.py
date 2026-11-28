@@ -186,6 +186,49 @@ def test_unpack_fp8_rows_whole_grid(mesh):
     assert sum(1 for k in progs if k[6] == gx * gy) == 1, ("one whole-grid program", progs)
 
 
+def test_unpack_fp8_rows_common_values(mesh):
+    """common_values=True (deepseek_v41_flash_d_p PB.9X): the whole grid's per-run values as common runtime args
+    (prepare_program's common value slots): bytes equal to the default's at 1, 3, 37 and 300 bands, one prepared
+    program for every row count, and the warm host time of a call against the per-core value slots'."""
+    import time
+
+    chips = mesh.get_num_devices()
+    B, R, M = 2, 16384, 16384
+    rows = _encode(_keys(chips, B, R, seed=17))
+    dev = _rows_dev(mesh, rows, _nd(mesh))
+    grid = _grid(mesh)
+    for lo, n in ((0, 32), (96, 96), (512, 37 * 32), (1024, 300 * 32)):
+        a = _out_dev(mesh, chips, M, torch.full((chips, M, 128), 3.0))
+        b = _out_dev(mesh, chips, M, torch.full((chips, M, 128), 3.0))
+        ttnn.bringup.unpack_fp8_rows(dev, a, row_lo=lo, row_hi=lo + n, batch=1, max_grid=grid)
+        ttnn.bringup.unpack_fp8_rows(
+            dev, b, row_lo=lo, row_hi=lo + n, batch=1, max_grid=grid, whole_grid=True, common_values=True
+        )
+        assert torch.equal(_host(a, chips, M), _host(b, chips, M)), (lo, n)
+    from ttnn.bringup.fp8_rows_ttnn import fp8_rows as F
+
+    shape = tuple(int(x) for x in dev.shape)
+    mid = dev.device().id()
+    progs = [k for k in F._PREPARED if k[:4] == ("unpack", mid, shape, (1, 1, M, 128)) and k[-1] is True]
+    assert len(progs) == 1, ("one common-values program", progs)
+    out = _out_dev(mesh, chips, M, torch.zeros(chips, M, 128))
+    ms = {}
+    for cv in (False, True):
+        for _ in range(3):
+            ttnn.bringup.unpack_fp8_rows(
+                dev, out, row_lo=0, row_hi=64, max_grid=grid, whole_grid=True, common_values=cv
+            )
+        ttnn.synchronize_device(mesh)
+        t0 = time.perf_counter()
+        for _ in range(20):
+            ttnn.bringup.unpack_fp8_rows(
+                dev, out, row_lo=0, row_hi=64, max_grid=grid, whole_grid=True, common_values=cv
+            )
+        ms[cv] = (time.perf_counter() - t0) / 20 * 1e3
+        ttnn.synchronize_device(mesh)
+    print(f"unpack_fp8_rows whole grid, host ms a call: per-core values {ms[False]:.3f}, common values {ms[True]:.3f}")
+
+
 def test_unpack_fp8_rows_refusals(mesh, expect_error):
     chips = mesh.get_num_devices()
     rows = _rows_dev(mesh, torch.zeros(chips, 1, 64, ROW, dtype=torch.uint8), ttnn.DRAM_MEMORY_CONFIG)

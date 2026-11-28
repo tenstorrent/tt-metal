@@ -37,6 +37,12 @@ slice_write into the region, up to 4 x (ttnn.slice + ttnn.bringup.slice_write) i
                      over the NC cores
     send             as above, but the pages sent (and the last chip's kept tail) are read from ``rows``' last 128
                      rows (the same bytes the region gets), so the send does not wait for the copy
+
+NC.3 (OWNER 2026-11-27, native C++ port series): both programs run as the native C++ op ttnn.layer_send
+(ttnn/cpp/ttnn/operations/layer_send: the same kernels, moved verbatim to device/kernels; the routes and constants of
+this module, made once into a ttnn.layer_send_plan): no prepare_program / run_prepared on the call path. The Python
+prepared route stays reachable for the op test only (``WindowSend.route = "python"``,
+tests/native/test_native_sends.py).
 """
 
 from __future__ import annotations
@@ -222,6 +228,19 @@ void kernel_main() {
 }
 """
 
+# NC.3: ttnn.layer_send kinds (ttnn/cpp/ttnn/operations/layer_send/device/layer_send_device_operation_types.hpp)
+K_WINDOW, K_WINDOW_FUSED, K_SNAP_STATIC, K_SNAP_DYN, K_SNAP_MULTI, K_GLUED = range(6)
+
+
+def native_plan(mesh, kind: int, hops: list, consts: list, sems: list, pattern=(), wraps=(False, False)):
+    """NC.3: the ttnn.layer_send plan of one send instance (made once; its hash once)."""
+    R, C = tuple(mesh.shape)
+    return ttnn._ttnn.operations.layer_send.layer_send_plan(
+        kind, R, C, bool(wraps[0]), bool(wraps[1]), hops, [int(x) for x in consts], [int(x) for x in sems],
+        [int(x) for x in pattern],
+    )  # fmt: skip
+
+
 RING_PIECES = 4  # ATTN_FUSE=on: ring pieces a call (192 rows over stripes of >= 128 rows: <= 3, one split by the wrap)
 # ATTN_FUSE=on: copy cores a chip (one row from (0, 0)); P.64 probe on 8x4 (tests/test_window_write_fused.py), 1 / 2 /
 # 4 / 8 cores: host 74 / 81 / 96 / 123 us a call, device 54 / 62 / 75 / 54 us (the send dominates)
@@ -256,6 +275,7 @@ class WindowSend:
     bf16 region [1, 1, rows, 512], one row a page (page_bytes 1024, carry_pages 128): shapes checked in bytes."""
 
     CORE = (0, 0)
+    route = "native"  # NC.3: "python" = the prepared route (tests/native/test_native_sends.py only)
 
     def __init__(self, mesh, pages: int, page_bytes: int, carry_pages: int = PAGES, copy_cores: int = COPY_CORES):
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan
@@ -281,6 +301,8 @@ class WindowSend:
         v = mesh.worker_core_from_logical_core(cc)
         node = lambda ch: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))  # noqa: E731
         self._ct = [self.page_bytes, self.seg, self.nseg, carry_pages, self.p0, self.batch]
+        self._hops = []  # NC.3: chip q's hop to q + 1 (ttnn.layer_send_plan)
+        self._sem_addr = sem_addr
         self._chips = {}  # q: (program, runtime args without the io addresses, cores)
         self._links = {}  # q: ((src node, first hop node, link), the args before the connection's, L1 slot bytes)
         self.routes = {}
@@ -291,6 +313,7 @@ class WindowSend:
             first = hops[0][1]
             port = chips[src][first]
             self.routes[src] = (dst, [d for _, d in hops])
+            self._hops.append([(0, int(port["peer"][0]), int(port["peer"][1]), int(port["links"][0]), dst[0], dst[1])])
             prog = ttnn.ProgramDescriptor()
             prog.cbs = [
                 ttnn.CBDescriptor(
@@ -308,6 +331,10 @@ class WindowSend:
         self._pp = None
         self._fpp = None  # ATTN_FUSE=on (P.64): the fused window write, prepared at its first call
         self.copy_cores = int(copy_cores)
+        self._nplan = self._nfplan = None  # NC.3: the native plans (made at the first call of each)
+
+    def _consts(self) -> list:
+        return self._ct + [-(-self.seg // 64) * 64]
 
     def _build(self, region, tail):
         """The MeshProgramDescriptor with the io addresses in the runtime args (once: prepared after)."""
@@ -411,6 +438,16 @@ class WindowSend:
         assert self._geom(ring)[1] == self.page_bytes and self.carry == WINDOW_ROW0, (ring.shape, self.carry)
         assert len(pieces) <= RING_PIECES, pieces
         io = [region, tail, rows, ring]
+        vals = []
+        for src, dst, n in pieces:
+            vals += [int(src), int(dst), int(n)]
+        vals += [0] * (3 * RING_PIECES - len(vals))
+        if self.route == "native" and getattr(self, "_hops", None) is not None:  # (DS41-353)
+            if self._nfplan is None:
+                consts = self._consts() + [self.copy_cores, COPY_BATCH, RING_PIECES, WINDOW_ROW0]
+                self._nfplan = native_plan(self.mesh, K_WINDOW_FUSED, self._hops, consts, [self._sem_addr])
+            ttnn.layer_send(io, self._nfplan, vals)
+            return
         if self._fpp is None:
             slots = [(1, 7 + j) for j in range(3 * RING_PIECES)]
             self._fpp = ttnn.bringup.prepare_program(self._build_fused(region, tail, rows, ring), io, slots)
@@ -419,16 +456,17 @@ class WindowSend:
             assert (
                 self._fpp.patch_count == want
             ), f"window write: {self._fpp.patch_count} patched slots, {want} expected"
-        vals = []
-        for src, dst, n in pieces:
-            vals += [int(src), int(dst), int(n)]
-        vals += [0] * (3 * RING_PIECES - len(vals))
         ttnn.bringup.run_prepared(self._fpp, io, vals)
 
     def __call__(self, region: ttnn.Tensor, tail: ttnn.Tensor) -> None:
         assert self._geom(region) == [self.pages, self.page_bytes], (region.shape, self.pages)
         assert self._geom(tail) == [self.carry, self.page_bytes], tail.shape
         io = [region, tail]
+        if self.route == "native" and getattr(self, "_hops", None) is not None:  # (DS41-353)
+            if self._nplan is None:
+                self._nplan = native_plan(self.mesh, K_WINDOW, self._hops, self._consts(), [self._sem_addr])
+            ttnn.layer_send(io, self._nplan, [])
+            return
         if self._pp is None:
             self._pp = ttnn.bringup.prepare_program(self._build(region, tail), io)
             # one region slot and one tail slot a chip: anything else matched a frozen value

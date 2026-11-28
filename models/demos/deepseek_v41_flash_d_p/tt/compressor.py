@@ -143,13 +143,13 @@ class CompressRope:
         sp = self.mesh.shape[SP_AXIS]
         assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         from .page_copy import on as pos_dynamic
-        from .page_copy import pages_of
+        from .page_copy import pages_of_pair
 
-        if pos_dynamic():  # MB.2: each mesh row its natural block's rows (one prepared copy, g0 a value), tiled there
+        if pos_dynamic():  # MB.2: each mesh row its natural block's rows (one copy, g0 a value), tiled there
             m = n // sp
             out = []
-            for t in (self.cos, self.sin):
-                rm = pages_of(t, g0, m, [1, 1, m, self.width], sp_stride=m)
+            # MB.NC (NC.7): cos and sin in ONE native program (the same pages as two page copies)
+            for rm in pages_of_pair(self.cos, self.sin, g0, m, [1, 1, m, self.width], m):
                 tl = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rm))
                 if tl is not rm:
                     dealloc(rm)

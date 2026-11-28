@@ -3683,6 +3683,83 @@
   },
   "waiting": null
  },
+ "MB.NC": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "e5a55d31-05f2-4ccf-9a55-ca6ca133c5b5"
+  },
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 2.6,
+  "history": [
+   {
+    "s": 15.8,
+    "status": "FAIL",
+    "t": "2026-11-28T06:07:58"
+   },
+   {
+    "reused": [
+     "MB.NC#test_gmm_native_layer",
+     "MB.NC#test_native_reduce_scatter",
+     "MB.NC#test_native_sends",
+     "MB.NC#test_native_lowbit",
+     "MB.NC#test_native_block_select",
+     "MB.NC#test_native_chunk_programs"
+    ],
+    "s": 2.6,
+    "status": "PASS",
+    "t": "2026-11-28T06:28:06"
+   }
+  ],
+  "last_run": "2026-11-28T06:28:03",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/MB.NC.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "MB.NC#test_gmm_native_layer",
+    "MB.NC#test_native_reduce_scatter",
+    "MB.NC#test_native_sends",
+    "MB.NC#test_native_lowbit",
+    "MB.NC#test_native_block_select",
+    "MB.NC#test_native_chunk_programs"
+   ],
+   "units": {
+    "MB.NC#test_gmm_native_layer": "d204fa4311c7c70f",
+    "MB.NC#test_native_block_select": "681e55986231473e",
+    "MB.NC#test_native_chunk_programs": "5a6d25b218188aa3",
+    "MB.NC#test_native_lowbit": "87992bd40da4ee30",
+    "MB.NC#test_native_reduce_scatter": "b77bd3e305e656bc",
+    "MB.NC#test_native_sends": "31e8a3acd2a881cc"
+   }
+  },
+  "started": "2026-11-28T06:28:01",
+  "status": "PASS",
+  "units": {
+   "MB.NC#test_gmm_native_layer": "PASS",
+   "MB.NC#test_native_block_select": "PASS",
+   "MB.NC#test_native_chunk_programs": "PASS",
+   "MB.NC#test_native_lowbit": "PASS",
+   "MB.NC#test_native_reduce_scatter": "PASS",
+   "MB.NC#test_native_sends": "PASS"
+  },
+  "waiting": null
+ },
  "P.1": {
   "agent": {
    "defs": {

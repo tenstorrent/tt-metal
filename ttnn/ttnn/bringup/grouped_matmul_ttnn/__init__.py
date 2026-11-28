@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from . import bank
 from .grouped_matmul import grouped_matmul, supported
 
-__all__ = ["grouped_matmul", "supported"]
+__all__ = ["bank", "grouped_matmul", "supported"]

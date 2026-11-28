@@ -1404,6 +1404,8 @@ def batch_call_settings(env=None) -> tuple:
     # likewise, refreshed like POS_DYNAMIC
     # MM_TUNED160 (MB.9: the 5120 chunk's re-swept matmul configs, tt/mm_configs.py, read per call) likewise,
     # refreshed like POS_DYNAMIC
+    # WOA_BANK (WA.3: wo_a's per-bank weight copy, read per wo_a call) likewise, refreshed like POS_DYNAMIC; a held
+    # model lacking the copy it selects gets it in batch_call_apply (WOA_BANK_COPIES, OV-77)
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1413,6 +1415,7 @@ def batch_call_settings(env=None) -> tuple:
         "INDEXER_BLOCK_SELECT_MIN",
         "INDEXER_BMAX_COMPUTE",
         "MM_TUNED160",
+        "WOA_BANK",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
@@ -1430,6 +1433,17 @@ def batch_call_apply(model) -> None:
         _settings.snap["INDEXER_BLOCK_SELECT_MIN"] = _settings._read("INDEXER_BLOCK_SELECT_MIN")  # MB.6: likewise
         _settings.snap["INDEXER_BMAX_COMPUTE"] = _settings._read("INDEXER_BMAX_COMPUTE")  # MB.8: likewise
         _settings.snap["MM_TUNED160"] = _settings._read("MM_TUNED160")  # MB.9: likewise
+        _settings.snap["WOA_BANK"] = _settings._read("WOA_BANK")  # WA.3: likewise
+    # WA.3 (OV-77): a load uploads only WOA_BANK's wo_a copy (WOA_BANK_COPIES=selected); a held model put to the other
+    # value gets that copy now, between runs (re-read from the checkpoint), never on the request path
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import woa_ensure
+
+    kind = "bank" if _settings.get("WOA_BANK") == "on" else "interleaved"
+    got = woa_ensure(model, (kind,))
+    if got["layers"]:
+        print(
+            f"WA.3: WOA_BANK={_settings.get('WOA_BANK')}: the held model's {kind} wo_a copies added ({got})", flush=True
+        )
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

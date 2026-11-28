@@ -653,6 +653,19 @@ def gmm_knobs(x_shape, w_shape) -> tuple:
     return settings.get("WO_A_GMM_BLOCK_W"), settings.get("WO_A_GMM_DEPTH"), 1
 
 
+# WOA_BANK=on (WA.3): the bank path's (depth, w_inflight, x_ahead) of the attention's wo_a by its rows a chip (x shape
+# [1, G, rows, K]); block_w and rt stay gmm_knobs' (today's K order: off == on bit-identical). WA.2's per-chip sweep
+# (435 configs a row count, results/WA.2_probe.md), band 10; re-swept on the matmul-capped 11 x 10 grid with one kernel
+# group (WA.3, tests/woa/test_woa_layout_probe.py WOA_LP_SWEEP=1): 256 rows 130.3 us (best 130.3-131.0), 160 rows
+# 114.2 us (best 113.5, within noise)
+WOA_BANK_KNOBS: dict = {256: (4, 1, 1), 160: (4, 2, 1)}
+
+
+def woa_bank_knobs(x_shape) -> tuple:
+    """(depth, w_inflight, x_ahead) of the wo_a bank path (WOA_BANK_KNOBS; depth 4, 1, 1 for a row count not swept)."""
+    return WOA_BANK_KNOBS.get(int(x_shape[2]), (4, 1, 1))
+
+
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
 MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
 # at most this many row tiles: a wide-N bf16 projection on 1D multicast (P.9: the 160-row projections of ATTN_SP32_PROJ)

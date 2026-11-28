@@ -735,3 +735,5 @@
   checks per op, ONE end check. QUEUED MB.NC (agent: cherry-pick the wo_a bank layout WA.2-WA.4 / FIX.43 and the C++ ports
   NC.1-NC.3, NC.5-NC.7, not the packed-only programs; op-level gate) and MB.NCL (measurement only: the 5120 ladder +
   cold no-rebuild). validate: valid. (The batching ledger's held FIX.41 is the placeholder these replace.)
+- 06:25 orchestrator resume --until MB.NCL (tmux orch_mb).
+- 06:20 heartbeat (model_bringup): MB.NC agent active; RAM used 69 GB; / 99G free.

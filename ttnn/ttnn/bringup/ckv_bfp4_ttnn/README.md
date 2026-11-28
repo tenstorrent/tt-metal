@@ -1,6 +1,11 @@
 # ttnn.bringup.ckv_bfp4, ttnn.bringup.bfp_round (ckv_bfp4_ttnn)
 
 ## What it does
+`ckv_bfp4_rows` is since NC.5 (2026-11-28) the native C++ op `ttnn.ckv_bfp4_rows` (ttnn/cpp/ttnn/operations/
+ckv_bfp4_rows; same kernels, cores and arguments; program cache: host ~20 vs ~60 us a call on the 8x4,
+bit-identical, device equal; models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.5_layer.md); its pre-port Python route is kept for tests only in `generic/`.
+`ckv_bfp4` and `bfp_round` remain the Python fork below (kernels/ here).
+
 New op (Python ProgramDescriptor, no TTNN source). bf16 TILE rows `[1, 1, n, 512]` -> 320-byte bfloat4_b row records
 written in place into a row table `[1, 1, R, 320]` uint8 ROW_MAJOR at rows `[row0, row0 + n)`; optionally also the
 rounded values as a new bf16 TILE tensor (`rounded=True`).

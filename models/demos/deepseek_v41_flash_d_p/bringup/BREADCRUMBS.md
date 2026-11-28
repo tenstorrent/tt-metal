@@ -1726,3 +1726,55 @@
   mm160_tuned_hits_single off 0 / on 90; device ms off 66.68 / on 65.85; steady tok/s 51200 70.6k, 131072 67.7k,
   139264 68.5k, 262144 68.0k, 524288 65.8k, 786432 61.6k, 1024000 62.1k; determinism 0.0; builds after warm-up 0.
   Gotcha: a gate --check moves results/<task>* aside while it runs (the report reappears after it).
+
+## MB.NC (OWNER 2026-11-27): the batching branch's wo_a bank layout + C++ ports brought to model_bringup (one batch)
+
+Expected saving a 5120 chunk (written before the measurement; perf_guide: host-bound chunks gain from host us, device
+from wo_a only): device ~0.37 ms (wo_a bank layout, WA.3: 131.7 -> 114.2 us a call at 160 rows x 21 layers) + ~0.1-0.25
+ms (snapshot send device 59 -> 47 us, NC.3); host ~5-8 ms (NC.1-NC.7 per-call savings of 25-45 us on ~150-200 calls a
+chunk: page copies ~60 x 35 us, reduce scatters ~90 x 27 us, wo_a 21 x 40 us, sends 42 x 12 us, low-bit / block-select
+~1.5 ms). Needs no full load: op-level checks only (owner); the one model-wide check is MB.NCL.
+
+What was done (MB.NC): the allowed-path parts of the batching commits WA.1 d82eec2fe36 (design doc, tests), WA.2
+5cdc234a34d, WA.3 f39977aa64b, WA.4 628fc2263bc (WOA_BANK default on), FIX.43 ad677db52bb, NC.1 b10e845af78, NC.2
+8c26d3280e0, NC.3 b947498334e, NC.5 d9d05d50b5c, NC.6 660deda0edd, NC.7 8e8a55a77fc applied in order (`git show
+<c> -- <allowed paths>` | `git apply -3`; NC.6 by checkout of its new files: its renames had no blobs for -3). Ledger,
+supervision, knowledge_use and results files of those commits not brought. Rebuilt (cmake --build build --target
+install, rc 0). The C++ ops (ttnn/cpp/ttnn/operations/*, nanobind, CMake) are byte-identical to the batching branch.
+- Conflicts resolved for model_bringup's own code: hooks.py (MM_TUNED160 kept, WOA_BANK added to the call-time
+  settings and batch_call_apply's woa_ensure); attention._out_wo (MB.9's GMM160 comment, the batching wo_a_shape /
+  bank branch); snapshot_send (the PB.9G `multi` append dropped); page_copy (model_bringup's `sp_stride` kept,
+  GluedIdsReorder dropped); rope / compressor (the glued / lane branches dropped); fp8_rows.py taken from the batching
+  branch (its superset: whole_grid + common_values, default off; model_bringup's index_keys never passes
+  common_values); ckv_bfp4.py kept model_bringup's (no packed-only `dynamic_row0`).
+- Packed-only programs NOT brought (owner): GluedSend, SnapshotSend.multi, Derive, GluedIdsReorder, OwnedSend have no
+  Python call site here (packed_glued.py, glued_derive.py, owned_gather.py, lane_rows.py not brought). Their kinds stay
+  compiled inside ttnn.layer_send / ttnn.chunk_program (the C++ op taken as is, not edited: unreachable here).
+- GluedRows (cos + sin fused): on the batching branch the single path's RoPE rows are one glued piece (PB.MB dropped
+  sp_stride). model_bringup's RoPE / compressed-RoPE rows are two `pages_of(..., sp_stride)` copies, and the native
+  PAGE_COPY kernel has no per-mesh-row offset. New `tt/page_copy.pages_of_pair`: the same pages through the GLUED_ROWS
+  kind with two (table, out) pairs and one piece a mesh row (s0 + r sp_stride, n pages, PPU 1), 4 cores a chip (data
+  movement, not a matmul: rule 18 n/a). rope._rows and CompressRope._rows call it under POS_DYNAMIC=on.
+  A PageCopy with sp_stride != 0 keeps the Python prepared route (`not self.sp_stride` guard in PageCopy.__call__),
+  never the native kernel, which would ignore the offset (DS41-405).
+- Tests: the batching op tests at this branch's shapes (5120 only: 160 rows a chip, 640 a mesh row; 8192 / 4x2k /
+  packed cases dropped), BATCH_LAYERS = "none" added to test_gmm_native_layer; rope / crope compare pages_of_pair vs
+  model_bringup's two sp_stride page copies; sends: the static path via page_copy.on (model_bringup has no `dyn`);
+  lowbit: unpack without common_values (as index_keys calls it). One report, results/MB.NC_layer.md, assembled by
+  tests/native/mb_nc_report.py from per-test sections under generated/bringup/MB.NC_layer/ (a partial gate rerun
+  keeps the other sections, F292).
+- Not brought (cannot run here): tests/woa/test_woa_offon.py (packed model A/B), woa_ladder_report.py, wa4_notes.md,
+  test_woa_design.py + woa_roofline.py (read the batching ledger's PB.MM256 results).
+- Known issues brought with their batching ids (DS41-353, 391-395, 400, 402-404; ids above this file's 333, so no
+  collision; code comments cite 353 / 402 / 403).
+- Result (gate --check, all 6 units PASS): every native_mismatch / repeat / cache_growth 0. Host us a call before ->
+  after: wo_a bank160 69.3 -> 25.4 (device 127.1 interleaved -> 108.5 bank), reduce scatter ~73 -> ~47, sends 61 -> 46,
+  unpack_fp8_rows 336 -> 22 (model_bringup's per-core value slots on the whole grid), page copy 54 -> 19, rope pair
+  169 -> 71. Host ms a 5120 chunk saved (est. calls): see results/MB.NC_layer.md (~9.4 ms; the moe_block.py
+  _tp_rs_rows row is 0: not shipped, DS41-401).
+- Per-chunk values this change touches (rule 20): pages_of_pair's s0 / n (from the chunk start) -> the GLUED_ROWS
+  program's common runtime args (values, not in the plan hash); PageCopy (s0, d0, n, nb, ss, ds), IdsReorder (iu, cs,
+  valid), layer_send (page0, ring rows, block codes, ring pieces), unpack / ckv rows ranges -> runtime args of the
+  cached native programs; wo_a has none. Program-cache growth 0 on fresh buffers with new values (every case).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.NC --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (op level, ~3 min, no model).

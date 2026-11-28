@@ -16,7 +16,15 @@ source offset (s0 + r sp_stride: a chip row's natural block of a table's rows, m
 each chip's natural-order ids [1, W] for the embedding, ON THE DEVICE (one SP all_gather of the input + a one-core copy
 kernel whose start class is a value slot): positions at or past ``valid`` and ids past the vocabulary become vocab - 1
 (the host path's PAD clamp, tt/model._host_emb_ids). No second upload of the ids (the host keeps only its readback for
-the engram hash, owner decision)."""
+the engram hash, owner decision).
+
+NC.7 (OWNER 2026-11-27, native C++ port series; brought to model_bringup by MB.NC): PageCopy and IdsReorder run as
+the native C++ op ttnn.chunk_program (ttnn/cpp/ttnn/operations/chunk_program: the same kernels, moved verbatim to
+device/kernels; the constants of each instance made once into a plan): no prepare_program / run_prepared on the call
+path. The native PAGE_COPY has no per-mesh-row offset: an ``sp_stride`` copy (the RoPE / compressed RoPE rows) runs as
+``pages_of_pair`` (the GLUED_ROWS kind, cos and sin in one program), or on the Python route when called alone. The
+Python prepared route stays reachable for the op test only (``<class>.route = "python"``,
+tests/native/test_native_chunk_programs.py)."""
 
 from __future__ import annotations
 
@@ -25,6 +33,18 @@ import ttnn
 from .common import DRAM, SP_AXIS, TP_AXIS
 
 NCORES = 4  # cores a chip (data movement only; a [NCORES, 1] row from (0, 0))
+# NC.7: ttnn.chunk_program kinds (ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation_types.hpp)
+K_PAGE_COPY, K_GLUED_ROWS, K_IDS, K_GLUED_IDS, K_DERIVE, K_OWNED = range(6)
+
+
+def native_plan(mesh, kind: int, consts, groups=(), sems=()):
+    """NC.7: the ttnn.chunk_program plan of one program instance (made once; its hash once)."""
+    R, C = tuple(mesh.shape)
+    return ttnn._ttnn.operations.chunk_program.chunk_program_plan(
+        kind, int(R), int(C), [int(x) for x in consts], [[int(x) for x in g] for g in groups], [int(x) for x in sems]
+    )
+
+
 BATCH_BYTES = 16384  # L1 bytes of the pages read a NoC barrier
 
 
@@ -96,6 +116,8 @@ def _core_range():
 class PageCopy:
     """One (source geometry, destination geometry, sp_stride) triple's prepared program (``page_copy``)."""
 
+    route = "native"  # NC.7: "python" = the prepared route (tests/native/test_native_chunk_programs.py only)
+
     def __init__(self, mesh, src: ttnn.Tensor, dst: ttnn.Tensor, sp_stride: int = 0):
         self.mesh = mesh
         self.page = _page_bytes(src)
@@ -103,6 +125,7 @@ class PageCopy:
         self.batch = max(1, BATCH_BYTES // (-(-self.page // 64) * 64))
         self.sp_stride = int(sp_stride)
         self._pp = None
+        self._nplan = None  # NC.7: the native plan (made at the first call)
 
     def _build(self, src, dst):
         crs = _core_range()
@@ -145,6 +168,12 @@ class PageCopy:
         self, src: ttnn.Tensor, dst: ttnn.Tensor, s0: int, d0: int, n: int, nb: int = 1, ss: int = 0, ds: int = 0
     ) -> None:
         io = [src, dst]
+        if self.route == "native" and not self.sp_stride:  # (MB.NC: sp_stride copies: ``pages_of_pair``)
+            plan = getattr(self, "_nplan", None)  # (DS41-353: a held instance from before a reload has none)
+            if plan is None:
+                plan = self._nplan = native_plan(self.mesh, K_PAGE_COPY, [self.page, self.batch, NCORES])
+            ttnn.chunk_program(io, plan, [int(s0), int(d0), int(n), int(nb), int(ss), int(ds)])
+            return
         if self._pp is None:
             md, progs = self._build(src, dst)
             self._pp = ttnn.bringup.prepare_program(md, io, [(0, 3 + i) for i in range(6)])
@@ -196,6 +225,35 @@ def pages_of(src: ttnn.Tensor, s0: int, n: int, shape: list, sp_stride: int = 0)
     out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), src.dtype, src.layout, src.device(), DRAM)
     page_copy(src, out, s0, 0, n, sp_stride=sp_stride)
     return out
+
+
+GMAXP = 8  # ttnn.chunk_program GLUED_ROWS: pieces a mesh row (the batching branch's tt/lane_rows.GMAXP)
+GWORDS = 1 + 2 * GMAXP  # values a mesh row [pieces, (source unit, units | destination unit << 16) x GMAXP]
+_PAIR: dict = {}  # (id(mesh), table geometry) -> (mesh, the native GLUED_ROWS plan of two tables)
+
+
+def pages_of_pair(a: ttnn.Tensor, b: ttnn.Tensor, s0: int, n: int, shape: list, sp_stride: int):
+    """``(pages_of(a, s0, n, shape, sp_stride), pages_of(b, ...))`` (two tables of one geometry: the RoPE cos and sin)
+    in ONE native program (MB.NC: ttnn.chunk_program GLUED_ROWS with two pairs, the batching branch's NC.7 cos + sin
+    fusion; one piece a mesh row: its pages [s0 + r sp_stride, + n) to page 0). The same bytes as the two page copies
+    (tests/native/test_native_chunk_programs.py); ``PageCopy.route = "python"`` keeps the two prepared copies."""
+    if PageCopy.route != "native" or _geo(a) != _geo(b):
+        return pages_of(a, s0, n, shape, sp_stride), pages_of(b, s0, n, shape, sp_stride)
+    mesh = a.device()
+    sp = int(mesh.shape[SP_AXIS])
+    assert 0 < int(n) < 65536, n
+    key = (id(mesh), _geo(a))
+    hit = _PAIR.get(key)
+    if hit is None or hit[0] is not mesh:
+        page = _page_bytes(a)
+        batch = max(1, BATCH_BYTES // (-(-page // 64) * 64))
+        hit = _PAIR[key] = (mesh, native_plan(mesh, K_GLUED_ROWS, [page, 1, batch, NCORES, GWORDS, 2]))
+    vals = []
+    for r in range(sp):
+        vals += [1, int(s0) + r * int(sp_stride), int(n)] + [0] * (GWORDS - 3)
+    outs = [ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), t.dtype, t.layout, mesh, DRAM) for t in (a, b)]
+    ttnn.chunk_program([a, outs[0], b, outs[1]], hit[1], vals)
+    return outs[0], outs[1]
 
 
 # ------------------------------------------------------------------------------------- the engine's ids, reordered
@@ -255,6 +313,8 @@ class IdsReorder:
     """POS_DYNAMIC=on: the engine's device input -> each chip's natural-order embedding ids, on the device (module
     docstring). One gather output allocated at first use (load-time shaped), one prepared program for every start."""
 
+    route = "native"  # NC.7: "python" = the prepared route (tests/native/test_native_chunk_programs.py only)
+
     def __init__(self, mesh, chunk: int, vocab: int):
         self.mesh = mesh
         self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
@@ -263,6 +323,7 @@ class IdsReorder:
         self.vmax = int(vocab) - 1
         self._gat = None
         self._pp = None
+        self._nplan = None  # NC.7: the native plan (made at the first call)
 
     def _gather(self, inp: ttnn.Tensor) -> ttnn.Tensor:
         from . import ccl
@@ -321,13 +382,22 @@ class IdsReorder:
             ttnn.Shape([1, self.w]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
         )
         io = [src, out]
-        if self._pp is None:
-            self._pp = ttnn.bringup.prepare_program(self._build(src, out), io, [(0, 2), (0, 3), (0, 4)])
-            want = self.sp * 5  # (src, dst and the 3 values, a core a mesh row)
-            assert self._pp.patch_count == want, f"IdsReorder: {self._pp.patch_count} patched slots, {want} expected"
         s = int(start)
         iu, cs = (s % self.w) // 32, (s // self.w) % self.sp
-        ttnn.bringup.run_prepared(self._pp, io, [iu, cs, max(0, min(int(valid), self.chunk))])
+        vals = [iu, cs, max(0, min(int(valid), self.chunk))]
+        if self.route == "native":
+            plan = getattr(self, "_nplan", None)  # (DS41-353: a held instance from before a reload has none)
+            if plan is None:
+                plan = self._nplan = native_plan(self.mesh, K_IDS, [self.w // 32, self.sp, self.vmax])
+            ttnn.chunk_program(io, plan, vals)
+        else:
+            if self._pp is None:
+                self._pp = ttnn.bringup.prepare_program(self._build(src, out), io, [(0, 2), (0, 3), (0, 4)])
+                want = self.sp * 5  # (src, dst and the 3 values, a core a mesh row)
+                assert (
+                    self._pp.patch_count == want
+                ), f"IdsReorder: {self._pp.patch_count} patched slots, {want} expected"
+            ttnn.bringup.run_prepared(self._pp, io, vals)
         if src is not self._gat and src is not inp:
             ttnn.deallocate(src)
         return out

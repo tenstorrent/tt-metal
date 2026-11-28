@@ -1,6 +1,12 @@
 # ttnn.bringup.block_gather / block_keys / block_max_bf16 (block_select_ttnn)
 
 ## What it does
+Since NC.6 (2026-11-28) the three entries are native C++ ops `ttnn.block_gather`, `ttnn.block_keys`,
+`ttnn.block_max_bf16` (ttnn/cpp/ttnn/operations/<op>; same kernels, cores and arguments; program cache on shapes /
+memory configs / grid, a hit rewrites the addresses and n; bit-identical, device equal; host a warm call at the model's
+shapes on the 8x4: gather 122 -> 30 us, keys 87 -> 31 us, strip transpose 63 -> 21 us, fold 152 -> 32 us;
+models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.6_layer.md). The pre-port Python prepared
+route is kept for tests only in `generic/` (with its kernels); "prepared program" below describes it.
 The data-movement steps of an EXACT block pre-selected top-k (deepseek_v41_flash_d_p PB.BM, INDEXER_BLOCK_SELECT):
 per row, the top-K blocks of B adjacent scores by block max, then the top-k keys over only those blocks' scores. The
 two top-k's are `ttnn.bringup.topk_large_indices`; these ops do the rest:

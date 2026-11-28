@@ -1,6 +1,10 @@
 # ttnn.bringup.pair_pool (pair_pool_ttnn)
 
 ## What it does
+Since NC.5 (2026-11-28) the native C++ op `ttnn.pair_pool` (ttnn/cpp/ttnn/operations/pair_pool; same kernels, cores and
+arguments; program cache, host 24 vs 73 us a call at 1024 rows on the 8x4, bit-identical, device equal; models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.5_layer.md).
+The pre-port Python prepared route is kept for tests only in `generic/`.
+
 New op (no TTNN source; deepseek_v41_flash_d_p P.24, TINY_KERNELS). The softmax-gated pooling of row pairs of a
 `[kv | gate]` tensor in one program:
 

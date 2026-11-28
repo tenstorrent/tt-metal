@@ -66,7 +66,10 @@ init_kvpe_cache); a (slot, layer) slab of the serving engine's 0_window_kv tenso
 
 from __future__ import annotations
 
+import time
+
 import torch
+from ttnn.bringup.grouped_matmul_ttnn import bank as gmm_bank
 from ttnn.bringup.grouped_matmul_ttnn import supported as gmm_supported
 
 import ttnn
@@ -140,6 +143,66 @@ def region_geometry() -> tuple[int, int, int]:
 
 SENTINEL = -1  # uploaded as int32 -1, read through uint32: 0xFFFFFFFF, sparse_sdpa's "no key"
 SDPA_K_CHUNK = 128
+
+
+class _ShapeOf:
+    """A weight's logical shape where only ``.shape`` is read (host_alloc.mm_out), whichever wo_a copy is loaded."""
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+
+def woa_load_kinds() -> tuple:
+    """The wo_a copies a load uploads (WOA_BANK_COPIES, OV-77): only WOA_BANK's (shipped) or both (the A/B, tests)."""
+    if settings.get("WOA_BANK_COPIES") == "both":
+        return ("interleaved", "bank")
+    return ("bank",) if settings.get("WOA_BANK") == "on" else ("interleaved",)
+
+
+_WOA_LAYOUTS: dict = {}
+
+
+def woa_layout(mesh, shape) -> "gmm_bank.BankLayout":
+    """The wo_a bank layout of the mesh's chip (WOA_BANK_SHAPE / _CORES, the matmul core cap), one a mesh and shape;
+    a shape or grid with no layout raises (no padding, no fallback)."""
+    from .cores import max_grid as _mg
+
+    shape = tuple(int(v) for v in shape)
+    cap = _mg(mesh)
+    cap = 10**9 if cap is None else cap.x * cap.y  # (MAX_WORKER_CORES: 110 on a Galaxy, agent rule 18)
+    key = (id(mesh), shape, settings.get("WOA_BANK_SHAPE"), settings.get("WOA_BANK_CORES"), cap)
+    hit = _WOA_LAYOUTS.get(key)
+    if hit is not None and hit[0] is mesh:
+        return hit[1]
+    _, G, K, N = shape
+    # (grid: the matmul-capped compute grid, max_grid: inside a gather-hide region only it is the compute sub-device;
+    # a core in the gather column fails "Programs must be executed on a single sub-device", DS41-382)
+    lay = gmm_bank.plan(
+        mesh, G, K, N, cap, settings.get("WOA_BANK_CORES"), shape=settings.get("WOA_BANK_SHAPE"), grid=_mg(mesh)
+    )
+    if lay is None:
+        raise RuntimeError(
+            f"WOA_BANK=on: no bank layout for wo_a {shape} on this chip (WOA_BANK_SHAPE {settings.get('WOA_BANK_SHAPE')}"
+            f", WOA_BANK_CORES {settings.get('WOA_BANK_CORES')}, cap {cap})"
+        )
+    _WOA_LAYOUTS[key] = (mesh, lay)
+    return lay
+
+
+def woa_ensure(model, kinds) -> dict:
+    """Tests / the A/B only (OV-77): every attention of the model (and of its decoder tail) holds the wo_a copies of
+    ``kinds``; the missing ones re-read from the checkpoint and uploaded. Returns {kind: seconds, "layers": n}."""
+    out = {"layers": 0}
+    for m in (model, getattr(model, "tail", None)):
+        for blk in (getattr(m, "blocks", None) or {}).values():
+            att = getattr(blk, "attention", None)
+            if att is None or not hasattr(att, "woa_ensure"):
+                continue
+            got = att.woa_ensure(kinds)
+            out["layers"] += 1 if got else 0
+            for k, v in got.items():
+                out[k] = out.get(k, 0.0) + v
+    return out
 
 
 def _mapper(mesh, dims):
@@ -1508,14 +1571,17 @@ class TtWindowAttention:
         # DENSE_WEIGHTS (P.13): bf16 (exact fp8 values) or bfloat8_b (the checkpoint's 8-bit width)
         self.wq_b = _upload(mesh, wq_b_t, dense_dtype(wq_b_t, "attn.wq_b"), ttnn.TILE_LAYOUT, wdim((None, 3)))
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
-        wo_a = w["wo_a"].float().view(self.groups, self.rank, -1)
-        assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
-        if (
-            self.glue and not self.stock
-        ):  # each head's input columns in the order the bf16 output writes: [nope | re | ro]
-            wo_a = wo_a.view(self.groups, self.rank, self.hpg, self.d)[..., perm].reshape(self.groups, self.rank, -1)
-        wo_a_t = wo_a.transpose(1, 2).unsqueeze(0).contiguous()
-        self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, wdim((None, 1)))
+        self._woa_perm = perm
+        wo_a_t = self._woa_host(w["wo_a"])
+        self.wo_a_shape = tuple(int(v) for v in wo_a_t.shape)  # (the logical [1, G, K, N], whichever copy is loaded)
+        self.wo_a_dtype = dense_dtype(wo_a_t, "attn.wo_a")
+        self._woa_out_spec = _ShapeOf(self.wo_a_shape)  # (host_alloc.mm_out reads .shape)
+        # WOA_BANK (WA.3): the interleaved copy (wo_a, today's) and / or the per-bank copy (wo_a_bank, its layout
+        # woa_layout); WOA_BANK_COPIES=selected (shipped): only WOA_BANK's, both: both (the A/B, tests; OV-77)
+        self.wo_a = self.wo_a_bank = self.woa_layout = None
+        self.woa_src = None  # (tt/model.py: a zero-argument re-read of the checkpoint's wo_a, woa_ensure)
+        for kind in woa_load_kinds():
+            self._woa_attach(kind, wo_a_t)
         # wo_b [H, groups * rank] -> [groups * rank, H], K (the chip's groups) split over TP
         wo_b = w["wo_b"].float()
         assert torch.equal(wo_b.bfloat16().float(), wo_b), "wo_b must be bf16-exact"
@@ -1525,6 +1591,58 @@ class TtWindowAttention:
         # the sink in sparse_sdpa's units (it multiplies by the op's scale, 1 here): every head on every chip
         sink = w["attn_sink"].float().reshape(1, 1, 1, self.heads)
         self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+
+    # ------------------------------------------------------------------ wo_a copies (WOA_BANK, WA.3)
+    def _woa_host(self, raw: torch.Tensor) -> torch.Tensor:
+        """The checkpoint's wo_a [groups * rank, hpg * 512] -> the uploaded [1, groups, hpg * 512, rank] (host)."""
+        wo_a = raw.float().view(self.groups, self.rank, -1)
+        assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
+        if (
+            self.glue and not self.stock
+        ):  # each head's input columns in the order the bf16 output writes: [nope | re | ro]
+            perm = self._woa_perm
+            wo_a = wo_a.view(self.groups, self.rank, self.hpg, self.d)[..., perm].reshape(self.groups, self.rank, -1)
+        return wo_a.transpose(1, 2).unsqueeze(0).contiguous()
+
+    def _woa_attach(self, kind: str, wo_a_t: torch.Tensor) -> None:
+        """Upload one wo_a copy: "interleaved" (today's: DRAM interleaved, groups split over TP unless sp32) or "bank"
+        (WOA_BANK=on: grouped_matmul_ttnn/bank.py's WIDTH_SHARDED per-bank copy, replicated: needs ATTN_SP32_PROJ)."""
+        if kind == "interleaved":
+            dims = None if self.sp32 else (None, 1)
+            self.wo_a = _upload(self.mesh, wo_a_t, self.wo_a_dtype, ttnn.TILE_LAYOUT, dims)
+            return
+        assert kind == "bank", kind
+        if not self.sp32:
+            raise RuntimeError("WOA_BANK=on needs ATTN_SP32_PROJ=on (every wo_a group on every chip, replicated)")
+        lay = woa_layout(self.mesh, self.wo_a_shape)
+        # (bank.upload: the plain host TILE conversion, then the sharded placement: today's bfp8 bytes, DS41-392)
+        self.wo_a_bank = gmm_bank.upload(wo_a_t, lay, self.mesh, self.wo_a_dtype)
+        self.woa_layout = lay
+
+    def woa_has(self, kind: str) -> bool:
+        return (self.wo_a if kind == "interleaved" else self.wo_a_bank) is not None
+
+    def woa_ensure(self, kinds) -> dict:
+        """Tests / the A/B only (WOA_BANK_COPIES, OV-77): upload the copies of ``kinds`` this load lacks, re-read from
+        the checkpoint (``woa_src``). Returns {kind: host + upload seconds}."""
+        out = {}
+        for kind in kinds:
+            if self.woa_has(kind):
+                continue
+            assert self.woa_src is not None, "woa_ensure: no checkpoint re-read (woa_src) on this attention"
+            t0 = time.perf_counter()
+            self._woa_attach(kind, self._woa_host(self.woa_src()))
+            out[kind] = time.perf_counter() - t0
+        return out
+
+    def woa_drop(self, kind: str) -> None:
+        """Tests only: free one copy (a held model put back to its load's copies)."""
+        if kind == "interleaved" and self.wo_a is not None:
+            ttnn.deallocate(self.wo_a)
+            self.wo_a = None
+        elif kind == "bank" and self.wo_a_bank is not None:
+            ttnn.deallocate(self.wo_a_bank)
+            self.wo_a_bank = self.woa_layout = None
 
     # ------------------------------------------------------------------ parts
     def _reshard(self, t, in_dim, out_dim):
@@ -2216,12 +2334,44 @@ class TtWindowAttention:
         # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it; GEMM_INPUTS=bfp8
         # (FIX.7): it writes wo_b's input as bfloat8_b (the reference's fp8 act quant of wo_b's input) directly
         ydt = gemm_dtype() if (self.glue and bf16_activations()) else ttnn.float32
-        out = host_alloc.mm_out(self.mesh, "attn.wo_a", oa, self.wo_a, ydt)
+        out = host_alloc.mm_out(self.mesh, "attn.wo_a", oa, self._woa_out_spec, ydt)
         grid = max_grid()
-        bw, depth, rt = mm.gmm_knobs(oa.shape, self.wo_a.shape)  # (MB.9: GMM160 under MM_TUNED160=on)
-        if settings.get("ATTN_ROOFLINE") and gmm_supported(
-            tuple(oa.shape), tuple(self.wo_a.shape), oa.dtype, self.wo_a.dtype, ydt, self.mesh, grid, bw
-        ):
+        bw, depth, rt = mm.gmm_knobs(oa.shape, self.wo_a_shape)  # (MB.9: GMM160 under MM_TUNED160=on)
+        roof = settings.get("ATTN_ROOFLINE") and gmm_supported(
+            tuple(oa.shape), self.wo_a_shape, oa.dtype, self.wo_a_dtype, ydt, self.mesh, grid, bw
+        )
+        if settings.get("WOA_BANK") == "on":
+            # WOA_BANK=on (WA.3): the per-bank copy, every core reading only its own DRAM bank; today's block_w / rt
+            # (the same K order: bit-identical), the bank path's depth / w_inflight / x_ahead (mm.WOA_BANK_KNOBS)
+            if self.wo_a_bank is None:
+                raise RuntimeError(
+                    "WOA_BANK=on but this load holds no bank copy of wo_a (loaded with WOA_BANK=off and "
+                    "WOA_BANK_COPIES=selected): load with WOA_BANK=on or WOA_BANK_COPIES=both"
+                )
+            if not roof:
+                raise RuntimeError(f"WOA_BANK=on needs ATTN_ROOFLINE's grouped_matmul at {tuple(oa.shape)}")
+            bd, wi, xa = mm.woa_bank_knobs(oa.shape)
+            y = ttnn.bringup.grouped_matmul(
+                oa,
+                self.wo_a_bank,
+                w_layout=self.woa_layout,
+                dtype=ydt,
+                compute_kernel_config=self.ckc,
+                output_tensor=out,
+                max_grid=grid,
+                block_w=bw,
+                depth=bd,
+                rt=rt,
+                w_inflight=wi,
+                x_ahead=xa,
+                one_group=bool(settings.get("WOA_BANK_ONE_GROUP")),
+            )
+        elif self.wo_a is None:
+            raise RuntimeError(
+                "WOA_BANK=off but this load holds no interleaved copy of wo_a (loaded with WOA_BANK=on and "
+                "WOA_BANK_COPIES=selected): load with WOA_BANK=off or WOA_BANK_COPIES=both"
+            )
+        elif roof:
             # ATTN_ROOFLINE (P.81): one grid row a group, each core its own weight columns (ttnn.bringup.grouped_matmul)
             y = ttnn.bringup.grouped_matmul(
                 oa,

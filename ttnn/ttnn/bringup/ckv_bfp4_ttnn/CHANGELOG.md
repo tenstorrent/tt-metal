@@ -129,3 +129,28 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
 - Needed by: deepseek_v41_flash_d_p MB.4
 - Files: ckv_bfp4.py, __init__.py, kernels/ckv_bfp4_rows_reader.cpp, kernels/ckv_bfp4_compute.cpp,
   kernels/ckv_bfp4_writer.cpp, tests/unit/test_ckv_bfp4_rows.py, README.md; ttnn/ttnn/bringup/__init__.py (PYTHON_OPS)
+
+### ckv_bfp4_rows as a native C++ op (2026-11-28, deepseek_v41_flash_d_p NC.5)
+- What: ttnn.bringup.ckv_bfp4_rows is now the native C++ device op ttnn.ckv_bfp4_rows
+  (ttnn/cpp/ttnn/operations/ckv_bfp4_rows; its reader / writer / compute and the shared headers copied to its
+  device/kernels with an args header). Same kernels, cores, common runtime args and signature; one cached program per
+  (src geometry, rows geometry, grid), a hit rewrites the addresses and src_row0 / n / row0. ckv_bfp4 and bfp_round
+  stay the Python fork with their kernels in kernels/ (unchanged; kernels/ckv_round_bfp4.hpp is also included by
+  rotary_embedding_indexed and unpack_fp8_rows). The pre-port Python route kept for tests only in generic/.
+- Why: OWNER 2026-11-27 C++ port series; the history pack (deepseek tt/history_gather._pack_rows, POS_DYNAMIC=on) is
+  the program the shipped path runs (OV-82: the plain ckv_bfp4 runs only in fixed-lane packed chunks and on the
+  non-default bfp8 window / bfp4_rows table formats, so it was not ported).
+- How: tt_ops_code_gen native_migrate (22.9 min, ported). It moved the whole kernels dir; kernels/ put back from
+  8c35cf154d7 for the Python entries (DS41-402) and the C++ op's unused copies (bfp_round_*, ckv_bfp4_reader) dropped.
+- Measured (8x4, tests/native/test_native_lowbit.py, models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.5_layer.md): bit-identical to the Python route, 0 cache growth on fresh
+  buffers with new rows / batch; host a call 58.7-62.7 -> 20.0-20.2 us; device equal (25.2 / 20.5 us).
+- Files: ckv_bfp4.py, ttnn/cpp/ttnn/operations/ckv_bfp4_rows, generic/ (new, test only), README.md; ../INDEX.md;
+  ttnn/cpp/ttnn-nanobind/__init__.cpp, ttnn/cpp/ttnn/operations/CMakeLists.txt.
+
+### Brought to model_bringup (2026-11-28, deepseek_v41_flash_d_p MB.NC)
+- What: the native C++ ttnn.ckv_bfp4_rows (NC.5); the batching branch's packed-only ckv_bfp4 `dynamic_row0` (PB.9X) not brought, taken as is from dnijemcevic/model_bringup_batching (the entries above); the pre-port Python route stays
+  in `generic/` for the op test only.
+- Why: OWNER 2026-11-27, one batch of the batching branch's C++ ports on model_bringup (no packed path here).
+- Measured (8x4, 5120 chunk shapes, models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.NC_layer.md):
+  native == the Python prepared route bit for bit, repeats 0, no program-cache growth on fresh buffers.
+- Files: as the entries above; tests models/demos/deepseek_v41_flash_d_p/tests/native/, tests/woa/test_gmm_native_layer.py.

@@ -775,6 +775,54 @@ TABLE = {
         "ms a call, output bit-identical. Where the layout does not apply (more groups than grid rows) the stock call "
         "stays. False = the stock batched matmul (mm_configs WO_A)",
     ),
+    "WOA_BANK": Setting(
+        "on",
+        ("off", "on"),
+        "WA.3 (OWNER 2026-11-27, wo_a bank-local reads; WOA_BANK_DESIGN.md, results/WA.2_probe.md, WA.3_offon.md), "
+        "read per call (CALL-TIME, bringup/hooks.py batch_call_settings / batch_call_apply). on = the attention's grouped "
+        "wo_a (ATTN_ROOFLINE's ttnn.bringup.grouped_matmul) reads its weight from the per-bank copy (option w_layout, "
+        "grouped_matmul_ttnn/bank.py: bank b = group b, each core's columns K-major in its own DRAM bank, one contiguous "
+        "read a K block; WOA_BANK_SHAPE / _CORES / _ONE_GROUP, the per-row-count knobs mm_configs.WOA_BANK_KNOBS); the "
+        "same tiles, K order (today's block_w, mm.gmm_knobs) and fidelity: off == on bit-identical. Op level (8x4, the "
+        "matmul-capped 11 x 10 grid the bank cores must stay in: a packed chunk's wo_a runs in the gather-hide region's "
+        "compute sub-device, DS41-382): 151.1 -> 130.3 us a call at 256 rows, 131.7 -> 114.2 at 160 rows, host a call = "
+        "today's within noise (one kernel group, tests/woa/test_woa_layout_probe.py). off = today's interleaved weight. A layout this load did not upload "
+        "(WOA_BANK_COPIES) raises, never a fallback. Default off until the owner accepts (brief)",
+    ),
+    "WOA_BANK_COPIES": Setting(
+        "selected",
+        ("selected", "both"),
+        "WA.3 (OV-77, OWNER 2026-11-27), read at load. selected = upload only the wo_a copy of the layout WOA_BANK "
+        "selects at load (serving, the shipped default: one copy, 35.65 MB a layer a chip); both = the interleaved AND "
+        "the bank copy (+35.65 MB a layer a chip: 0.70 GiB for layers 0-20, 1.33 GiB for 40; fits the 1M packed budget, "
+        "WOA_BANK_DESIGN.md section 4) so WOA_BANK switches per call in one load: only for the off / on A/B and tests. A "
+        "held model switched to a layout it lacks gets that copy added between runs (bringup/hooks.batch_call_apply, "
+        "tt/attention.woa_ensure: re-read from the checkpoint), never on the request path",
+    ),
+    "WOA_BANK_SHAPE": Setting(
+        "band",
+        ("band", "row", "rect"),
+        "WA.3, WOA_BANK=on: the cores of each DRAM bank (bank.plan shape). band = a WOA_BANK_CORES / 2 x 2 rectangle "
+        "on the bank's anchor side in the 2-row band nearest its anchor (WA.2's best); rect = today's interleaved "
+        "path's core set (one 8 x WOA_BANK_CORES rectangle from (0, 0), grid row g = bank g; OV-79: 147.7 us at 256 rows "
+        "and 121.2 at 160 vs band's 130.3 / 114.2, today 151.1 / 131.7: not within noise of band); row = one grid row a "
+        "bank on its anchor side. Inside the matmul-capped grid (max_grid, 11 x 10 on a Galaxy)",
+    ),
+    "WOA_BANK_CORES": Setting(
+        10,
+        None,
+        "WA.3, WOA_BANK=on: cores a DRAM bank (bank.plan cores_per_bank; 8 banks x 10 = 80 matmul cores <= "
+        "MAX_WORKER_CORES). WA.2 sweep: band 10 beat band 12 (124.1 vs 128.8 us at 256 rows), 8 no better, 6 far worse",
+    ),
+    "WOA_BANK_ONE_GROUP": Setting(
+        True,
+        (True, False),
+        "WA.3 (OV-78), WOA_BANK=on: one kernel group for every core width (grouped_matmul one_group: the core's column "
+        "tiles a runtime arg) instead of one a width. The 3- and 4-column cores of the 8 bands as two kernel groups "
+        "were 24 core ranges against today's 2: run_prepared +23-45 us host a call; one group: 4 ranges, host a call "
+        "= today's within noise (84.3 vs 80.2 us at 256 rows, 53.9 vs 51.2 at 160; two groups 113.1 / 73.7), device "
+        "130.3 / 114.2 us (two groups 130.0 / 113.6)",
+    ),
     "WO_A_GMM_BLOCK_W": Setting(
         4,
         (1, 2, 4, 8, 16, 32),
