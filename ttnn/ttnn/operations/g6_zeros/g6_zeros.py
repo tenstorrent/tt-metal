@@ -134,12 +134,25 @@ def _num_banks(device):
     return ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
 
 
+def _bank_seeds(device):
+    # The writer runs on BRISC with NoC1 (WriterConfigDescriptor), so the seeds are NoC1-optimal.
+    # On a mesh this is the first local chip's map; the same program runs on every chip, and a
+    # differently harvested chip stays correct, only possibly farther from its banks.
+    return tuple(ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1))
+
+
 def _plan_for(shape, dtype, device):
     """The one plan derivation, shared by describe_plan() and the dispatch path."""
     num_pages = int(shape[0]) * int(shape[1]) * -(-int(shape[2]) // 32) * -(-int(shape[3]) // 32)
     dram_alignment = ttnn.get_dram_alignment()
     aligned_page_size = -(-ttnn.tile_size(dtype) // dram_alignment) * dram_alignment
-    return plan_bank_runs(num_pages, _num_banks(device), aligned_page_size, device.compute_with_storage_grid_size())
+    return plan_bank_runs(
+        num_pages,
+        _num_banks(device),
+        aligned_page_size,
+        device.compute_with_storage_grid_size(),
+        bank_seeds=_bank_seeds(device),
+    )
 
 
 def describe_plan(shape, *, dtype, device) -> dict:
@@ -163,6 +176,7 @@ def describe_plan(shape, *, dtype, device) -> dict:
         "N": plan.num_banks,
         "aligned_page_size": plan.aligned_page_size,
         "writers_per_bank": plan.writers_per_bank,
+        "placement": plan.placement,
         "zero_source_bytes": plan.zero_source_bytes,
         "zero_source_regions": plan.zero_source_regions,
         "core_ranges": str(plan.core_ranges),

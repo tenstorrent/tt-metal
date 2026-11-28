@@ -29,37 +29,25 @@ CASES = [
 _TORCH = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16, ttnn.bfloat8_b: torch.bfloat16}
 
 
-def _bank_affine_plan(output, device):
+def _plan(output, device, variant):
     num_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
     grid = device.compute_with_storage_grid_size()
-    optimal = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1)
-    cores = tuple(optimal[b] for b in range(num_banks))
     num_pages = output.buffer_num_pages()
-    blocks = tuple((pdm.BankRun(b, b, pdm.bank_slots(num_pages, num_banks, b)),) for b in range(num_banks))
-    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
-    print(f"\nBANK_AFFINE cores={[(c.x, c.y) for c in cores]} ranges={core_ranges}")
-    return pdm.WriterPlan(
-        num_pages=num_pages,
-        num_banks=num_banks,
-        aligned_page_size=output.buffer_aligned_page_size(),
-        writers_per_bank=1,
-        zero_source_bytes=pdm.ZERO_SOURCE_BYTES,
-        zero_source_regions=pdm.ZERO_SOURCE_REGIONS,
-        grid=(grid.x, grid.y),
-        core_ranges=core_ranges,
-        cores=cores,
-        blocks=blocks,
-    )
-
-
-def _default_plan(output, device):
-    num_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
-    return pdm.plan_bank_runs(
-        output.buffer_num_pages(),
+    if variant == "default":
+        knobs = dict(placement="row_wise", writers_per_bank=pdm.grid_fill_writers_per_bank(num_pages, num_banks, grid.x * grid.y))
+    else:
+        knobs = dict(placement="bank_affine", writers_per_bank=1)
+    plan = pdm.plan_bank_runs(
+        num_pages,
         num_banks,
         output.buffer_aligned_page_size(),
-        device.compute_with_storage_grid_size(),
+        grid,
+        bank_seeds=ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1),
+        zero_source_bytes=16384,
+        **knobs,
     )
+    print(f"\n{variant} cores={[(c.x, c.y) for c in plan.cores][:16]} ranges={plan.core_ranges}")
+    return plan
 
 
 def _poisoned_output(shape, dtype, device):
@@ -76,7 +64,7 @@ def _poisoned_output(shape, dtype, device):
 def test_placement(shape, dtype, variant, device):
     for _ in range(REPEATS):
         output = _poisoned_output(shape, dtype, device)
-        plan = _default_plan(output, device) if variant == "default" else _bank_affine_plan(output, device)
+        plan = _plan(output, device, variant)
         ttnn.generic_op([output], pdm.create_program_descriptor(output, plan))
         ttnn.synchronize_device(device)
         readback = ttnn.to_torch(output).to(torch.float32)

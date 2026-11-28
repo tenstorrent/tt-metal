@@ -26,8 +26,15 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 ZERO_SOURCE_BYTES = 16384
 # Depth of cb_zero_source. The source never changes, so a second region has nothing to overlap.
 ZERO_SOURCE_REGIONS = 1
-# Writers per DRAM bank. None selects the Phase 0 rule in phase0_writers_per_bank().
-WRITERS_PER_BANK = None
+# Writers per DRAM bank. None selects the grid-filling rule in grid_fill_writers_per_bank().
+# One stream per bank keeps every bank at its write peak; extra streams converge on the same bank
+# endpoint and only add NoC contention.
+WRITERS_PER_BANK = 1
+# Which cores write which bank:
+#   "bank_affine": bank b's writers are the cores nearest its NoC1-optimal worker core.
+#   "row_wise":    writer w (row-wise rank over the grid) serves bank w mod N.
+CORE_PLACEMENT = "bank_affine"
+CORE_PLACEMENTS = ("bank_affine", "row_wise")
 
 # The L1 the model leaves to the op on every core (BB-05).
 MODEL_L1_SHARE_BYTES = 1_347_776
@@ -51,15 +58,16 @@ class WriterPlan:
     num_banks: int
     aligned_page_size: int
     writers_per_bank: int
+    placement: str
     zero_source_bytes: int
     zero_source_regions: int
     grid: tuple  # (x, y)
     core_ranges: ttnn.CoreRangeSet
-    cores: tuple  # row-wise ordered ttnn.CoreCoord, rank w = index
+    cores: tuple  # ttnn.CoreCoord per writer rank w; writer w serves bank w mod N
     blocks: tuple  # per core: tuple[BankRun, ...]
 
 
-def phase0_writers_per_bank(num_pages: int, num_banks: int, grid_cores: int) -> int:
+def grid_fill_writers_per_bank(num_pages: int, num_banks: int, grid_cores: int) -> int:
     return max(1, min(grid_cores // num_banks, -(-num_pages // num_banks)))
 
 
@@ -69,7 +77,21 @@ def bank_slots(num_pages: int, num_banks: int, bank: int) -> int:
 
 def knob_values() -> tuple:
     """The module knobs as they stand now. Part of the host plan-cache key: a turned knob changes the plan."""
-    return (WRITERS_PER_BANK, ZERO_SOURCE_BYTES, ZERO_SOURCE_REGIONS)
+    return (WRITERS_PER_BANK, CORE_PLACEMENT, ZERO_SOURCE_BYTES, ZERO_SOURCE_REGIONS)
+
+
+def bank_affine_cores(bank_seeds, writers_per_bank: int, grid) -> tuple:
+    """Writer cores in rank order w = k * N + b: the k-th writer of bank b is the free core nearest
+    bank b's seed. Banks take turns per k, so no bank's cluster crowds out another's nearest cores.
+    A seed already taken (two banks sharing one optimal core) falls through to its nearest free core."""
+    free = {(x, y) for x in range(grid.x) for y in range(grid.y)}
+    cores = []
+    for _ in range(writers_per_bank):
+        for seed in bank_seeds:
+            x, y = min(free, key=lambda c: (abs(c[0] - seed.x) + abs(c[1] - seed.y), c[1], c[0]))
+            free.remove((x, y))
+            cores.append(ttnn.CoreCoord(x, y))
+    return tuple(cores)
 
 
 def plan_bank_runs(
@@ -79,13 +101,18 @@ def plan_bank_runs(
     grid,
     *,
     writers_per_bank=None,
+    placement=None,
+    bank_seeds=None,
     zero_source_bytes=None,
     zero_source_regions=None,
 ) -> WriterPlan:
+    """bank_seeds: one logical core per bank, the bank's NoC1-optimal worker. Required by "bank_affine"."""
     # Knobs left as None resolve from the module constants at call time, not at import, so the
     # constants stay the single source even when a harness turns them after import.
     if writers_per_bank is None:
         writers_per_bank = WRITERS_PER_BANK
+    if placement is None:
+        placement = CORE_PLACEMENT
     if zero_source_bytes is None:
         zero_source_bytes = ZERO_SOURCE_BYTES
     if zero_source_regions is None:
@@ -99,12 +126,18 @@ def plan_bank_runs(
     assert zero_source_regions * zero_source_bytes <= MODEL_L1_SHARE_BYTES, "g6_zeros: zero source exceeds L1 share"
 
     if writers_per_bank is None:
-        writers_per_bank = phase0_writers_per_bank(num_pages, num_banks, grid_cores)
+        writers_per_bank = grid_fill_writers_per_bank(num_pages, num_banks, grid_cores)
     assert 1 <= writers_per_bank * num_banks <= grid_cores, "g6_zeros: writers do not fit the grid"
+    assert placement in CORE_PLACEMENTS, f"g6_zeros: unknown core placement {placement!r}"
 
     num_writers = writers_per_bank * num_banks
-    core_ranges = ttnn.num_cores_to_corerangeset(num_writers, grid, True)
-    cores = tuple(ttnn.corerange_to_cores(core_ranges, None, True))
+    if placement == "bank_affine":
+        assert bank_seeds is not None and len(bank_seeds) == num_banks, "g6_zeros: bank_affine needs one seed per bank"
+        cores = bank_affine_cores(bank_seeds, writers_per_bank, grid)
+        core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    else:
+        core_ranges = ttnn.num_cores_to_corerangeset(num_writers, grid, True)
+        cores = tuple(ttnn.corerange_to_cores(core_ranges, None, True))
     assert len(cores) == num_writers
 
     blocks = []
@@ -122,6 +155,7 @@ def plan_bank_runs(
         num_banks=num_banks,
         aligned_page_size=aligned_page_size,
         writers_per_bank=writers_per_bank,
+        placement=placement,
         zero_source_bytes=zero_source_bytes,
         zero_source_regions=zero_source_regions,
         grid=(grid.x, grid.y),

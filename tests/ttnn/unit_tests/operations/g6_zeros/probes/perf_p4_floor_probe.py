@@ -21,14 +21,22 @@ REPEATS = 3
 SHAPE, DTYPE = (1, 4, 256, 128), ttnn.bfloat16
 
 
-def _phase0_plan(output, device, zero_source_bytes, empty):
+def _plan(output, device, placement, zero_source_bytes, empty):
     num_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
+    grid = device.compute_with_storage_grid_size()
+    num_pages = output.buffer_num_pages()
+    if placement == "phase0_104":
+        knobs = dict(placement="row_wise", writers_per_bank=pdm.grid_fill_writers_per_bank(num_pages, num_banks, grid.x * grid.y))
+    else:
+        knobs = dict(placement="bank_affine", writers_per_bank=1)
     plan = pdm.plan_bank_runs(
-        output.buffer_num_pages(),
+        num_pages,
         num_banks,
         output.buffer_aligned_page_size(),
-        device.compute_with_storage_grid_size(),
+        grid,
+        bank_seeds=ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1),
         zero_source_bytes=zero_source_bytes,
+        **knobs,
     )
     if empty:
         # Keep the runtime-arg count per core: generic_op's cache hashes structure only, and a cache
@@ -40,39 +48,15 @@ def _phase0_plan(output, device, zero_source_bytes, empty):
     return plan
 
 
-def _bank_affine_plan(output, device, zero_source_bytes, empty):
-    num_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
-    grid = device.compute_with_storage_grid_size()
-    optimal = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1)
-    cores = tuple(optimal[b] for b in range(num_banks))
-    num_pages = output.buffer_num_pages()
-    blocks = tuple(
-        (pdm.BankRun(b, b, 0 if empty else pdm.bank_slots(num_pages, num_banks, b)),) for b in range(num_banks)
-    )
-    return pdm.WriterPlan(
-        num_pages=num_pages,
-        num_banks=num_banks,
-        aligned_page_size=output.buffer_aligned_page_size(),
-        writers_per_bank=1,
-        zero_source_bytes=zero_source_bytes,
-        zero_source_regions=1,
-        grid=(grid.x, grid.y),
-        core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
-        cores=cores,
-        blocks=blocks,
-    )
-
-
 @pytest.mark.parametrize("empty", [False, True], ids=["write", "empty"])
-@pytest.mark.parametrize("zero_source_bytes", [16384, 4096], ids=["z16k", "z4k"])
+@pytest.mark.parametrize("zero_source_bytes", [16384, 4096, 2048], ids=["z16k", "z4k", "z2k"])
 @pytest.mark.parametrize("placement", ["phase0_104", "bank_affine_8"])
 def test_p4_floor(placement, zero_source_bytes, empty, device):
-    make = _phase0_plan if placement == "phase0_104" else _bank_affine_plan
     for _ in range(REPEATS):
         output = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(SHAPE)), DTYPE, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
         )
-        plan = make(output, device, zero_source_bytes, empty)
+        plan = _plan(output, device, placement, zero_source_bytes, empty)
         ttnn.generic_op([output], pdm.create_program_descriptor(output, plan))
         ttnn.synchronize_device(device)
         ttnn.deallocate(output)
