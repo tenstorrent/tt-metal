@@ -17,6 +17,9 @@ from helpers.llk_params import (
     MathOperation,
 )
 
+# The only binary op whose production kernel reads APPROX (perf_eltwise_binary_sfpu_quasar.py _perf_approx_modes).
+_APPROX_MATHOPS = (MathOperation.SfpuAtan2,)
+
 
 class BinarySfpu(Sfpu):
     granularity = InvocationGranularity.TILE
@@ -41,6 +44,12 @@ class BinarySfpu(Sfpu):
         self.dst_rounding_mode = dst_rounding_mode
         self.sign_magnitude = sign_magnitude
 
+    @property
+    def kernel_approx_mode(self) -> str:
+        if self.operation in _APPROX_MATHOPS:
+            return self.approx_mode.cpp_enum_value
+        return ApproximationMode.No.cpp_enum_value
+
     def get_headers(self) -> List[str]:
         return [
             "llk_math_common.h",
@@ -58,7 +67,7 @@ class BinarySfpu(Sfpu):
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        approx_mode = self.approx_mode.cpp_enum_value
+        approx_mode = self.kernel_approx_mode
         sign_magnitude = str(self.sign_magnitude).lower()
 
         return (
@@ -78,7 +87,7 @@ class BinarySfpu(Sfpu):
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        approx_mode = self.approx_mode.cpp_enum_value
+        approx_mode = self.kernel_approx_mode
         quasar_iterations = self.iterations // 4
         sign_magnitude = str(self.sign_magnitude).lower()
         src1 = block.dest_src0

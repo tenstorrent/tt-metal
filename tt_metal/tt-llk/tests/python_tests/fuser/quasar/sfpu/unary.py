@@ -22,6 +22,20 @@ from helpers.sfpu_dispatch_constants import (
     DROPOUT_SEED,
 )
 
+# The ops whose production kernel reads APPROX (test_eltwise_unary_sfpu_quasar.py _APPROX_MATHOPS); every other op
+# runs its exact kernel in production, whatever the case's approximation mode.
+_APPROX_MATHOPS = (
+    MathOperation.Erf,
+    MathOperation.Exp,
+    MathOperation.Gelu,
+    MathOperation.Log,
+    MathOperation.LogWithBase,
+    MathOperation.Log10,
+    MathOperation.Reciprocal,
+    MathOperation.Rsqrt,
+    MathOperation.Softsign,
+)
+
 
 class UnarySfpu(Sfpu):
     granularity = InvocationGranularity.TILE
@@ -57,6 +71,12 @@ class UnarySfpu(Sfpu):
         """fp32 bit pattern of the scale, as calculate_dropout takes it."""
         return struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
 
+    @property
+    def kernel_approx_mode(self) -> str:
+        if self.operation in _APPROX_MATHOPS:
+            return self.approx_mode.cpp_enum_value
+        return ApproximationMode.No.cpp_enum_value
+
     def get_headers(self) -> List[str]:
         return [
             "llk_math_common.h",
@@ -74,14 +94,16 @@ class UnarySfpu(Sfpu):
         stage = operation.stage_id
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        approx_mode = self.approx_mode.cpp_enum_value
+        approx_mode = self.kernel_approx_mode
         if self.operation == MathOperation.Dropout:
             op_init = f"test_utils::init_dropout_quasar<{approx_mode}>({self.dropout_seed:#x} /* seed */);\n"
         else:
             op_init = f"test_utils::init_unary_sfpu_operation_quasar<{op}, {en_32bit_dest}, {approx_mode}>();\n"
+        # Some op inits are the whole Compute API init, which runs _llk_math_eltwise_sfpu_init_ itself.
         return (
             f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"_llk_math_eltwise_sfpu_init_();\n" + op_init
+            f"if constexpr (!test_utils::unary_sfpu_init_runs_sfpu_init({op}))\n"
+            f"{{\n_llk_math_eltwise_sfpu_init_();\n}}\n" + op_init
         )
 
     def calculate(
@@ -95,7 +117,7 @@ class UnarySfpu(Sfpu):
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         sfpu_format = config.sentinel._sfpu_format.cpp_enum_value
-        approx_mode = self.approx_mode.cpp_enum_value
+        approx_mode = self.kernel_approx_mode
         dst_tile_shape = operation.tile_shape.dst_tile_shape
         vector_mode = self._vector_mode(operation)
         quasar_iterations = self.iterations // operation.tile_shape.total_num_faces()

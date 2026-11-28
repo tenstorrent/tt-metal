@@ -5,7 +5,7 @@
 from typing import TYPE_CHECKING
 
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestSync, PerfRunType
+from helpers.llk_params import PerfRunType
 
 if TYPE_CHECKING:
     from fuser.fpu_node import FpuNode
@@ -83,23 +83,24 @@ def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
 
 
 def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.uses_unpack_to_dest_sync:
-        code = ""
-        if config.uses_unpack_to_dest_pack_sync:
-            code += "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
-        if operation.dest_sync == DestSync.Half:
-            code += (
-                "_llk_sync_advance_dest_section_<ckernel::TRISC_ID, "
-                f"{config.dest_acc.cpp_enum_value}, p_stall::WAIT_SFPU, p_stall::MATH>();\n"
-            )
-        return code
-    if config.skip_sync:
-        return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
     if config.quasar_use_dvalid:
+        if config.skip_sync:
+            return ""
         return f"_llk_math_set_dvalid_<p_cleardvalid::FPU, {dest_sync}>();\n"
-    return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+    if config.perf_run_type == PerfRunType.PACK_ISOLATE or (
+        config.perf_run_type == PerfRunType.UNPACK_ISOLATE
+        and not config.uses_unpack_to_dest_sync
+    ):
+        return ""
+    code = f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+    if config.skip_sync:
+        # Stands in for the idle pack's release, so MATH_PACK never fills up.
+        code += (
+            "ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);\n"
+        )
+    return code
 
 
 def math_dest_remap_config(required: bool) -> str:

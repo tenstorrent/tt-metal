@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
+from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import (
     DestSync,
     GoldenType,
@@ -96,6 +97,24 @@ class L1Operation:
 
         return len({signature(op) for op in ops}) <= 1
 
+    @staticmethod
+    def _same_per_block(blocks, emit) -> Optional[str]:
+        """emit(planned) when every block emits the same code, else None."""
+        codes = {emit(planned) for planned in blocks}
+        return codes.pop() if len(codes) == 1 else None
+
+    def _hoisted_block_init(
+        self, config: "GlobalConfig", blocks, init, uninit
+    ) -> Optional[Tuple[str, str]]:
+        """(init, uninit) of a per-block init that is the same for every block: Quasar production runs it once."""
+        if config.architecture != ChipArchitecture.QUASAR:
+            return None
+        init_code = self._same_per_block(blocks, init)
+        uninit_code = self._same_per_block(blocks, uninit)
+        if init_code is None or uninit_code is None:
+            return None
+        return init_code, uninit_code
+
     def _batch_loop(self, blocks, body_fn, init_fn=None, uninit_fn=None) -> str:
         code = ""
         for planned in blocks:
@@ -150,21 +169,26 @@ class L1Operation:
         if unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(config, self, unpack_ops[0])
         init_code += unpack_common.unpack_to_dest_sync_init(config, self)
-        if hoist and not unpack_ops[0].unpacker.per_block_init:
-            init_code += unpack_ops[0].unpack_init(self, config, None)
-        code = self._zone(config, "INIT", init_code)
-
-        code += unpack_common.sync_with_packer(config, self)
-
         init_fn = None
         uninit_fn = None
-        if hoist and unpack_ops[0].unpacker.per_block_init:
+        hoisted_uninit = ""
+        if hoist and not unpack_ops[0].unpacker.per_block_init:
+            init_code += unpack_ops[0].unpack_init(self, config, None)
+        elif hoist:
             init_fn = lambda planned: unpack_ops[0].unpack_init(
                 self, config, planned.block_for(unpack_ops[0])
             )
             uninit_fn = lambda planned: unpack_ops[0].unpack_uninit(
                 self, config, planned.block_for(unpack_ops[0])
             )
+            once = self._hoisted_block_init(config, blocks, init_fn, uninit_fn)
+            if once is not None:
+                init_code += once[0]
+                hoisted_uninit = once[1]
+                init_fn = uninit_fn = None
+        code = self._zone(config, "INIT", init_code)
+
+        code += unpack_common.sync_with_packer(config, self)
 
         def batch_body(planned: PlannedBlock, constants):
             body = unpack_common.unpack_to_dest_wait_for_dest_available(config)
@@ -208,7 +232,7 @@ class L1Operation:
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
-        uninit_code = ""
+        uninit_code = hoisted_uninit
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(self, config, None)
         code += self._zone(config, "UNINIT", uninit_code)
@@ -229,19 +253,44 @@ class L1Operation:
         )
         if fpu_ops and not config.skip_math_init:
             init_code += config.sentinel.configure_math(config, self, fpu_ops[0])
-        if hoist and not fpu_ops[0].fpu.per_block_init:
-            init_code += fpu_ops[0].fpu_init(self, config, None)
-        code += self._zone(config, "INIT", init_code)
-
         init_fn = None
         uninit_fn = None
-        if hoist and fpu_ops[0].fpu.per_block_init:
+        hoisted_uninit = ""
+        if hoist and not fpu_ops[0].fpu.per_block_init:
+            init_code += fpu_ops[0].fpu_init(self, config, None)
+        elif hoist:
             init_fn = lambda planned: fpu_ops[0].fpu_init(
                 self, config, planned.block_for(fpu_ops[0])
             )
             uninit_fn = lambda planned: fpu_ops[0].fpu_uninit(
                 self, config, planned.block_for(fpu_ops[0])
             )
+            once = self._hoisted_block_init(config, blocks, init_fn, uninit_fn)
+            if once is not None:
+                init_code += once[0]
+                hoisted_uninit = once[1]
+                init_fn = uninit_fn = None
+
+        # With every FPU init out of the loop, the stage's only SFPU op inits once after it, as production does.
+        sfpu_ops = [cu for cu in self.math_nodes if isinstance(cu, SfpuNode)]
+        hoisted_sfpu = None
+        if (
+            len(sfpu_ops) == 1
+            and (not fpu_ops or (hoist and init_fn is None))
+            and not config.skip_math_init
+        ):
+            sfpu = sfpu_ops[0]
+            once = self._hoisted_block_init(
+                config,
+                blocks,
+                lambda planned: sfpu.sfpu_init(self, config, planned.block_for(sfpu)),
+                lambda planned: sfpu.sfpu_uninit(self, config, planned.block_for(sfpu)),
+            )
+            if once is not None and not config.sentinel.sfpu_math_reconfig(config):
+                hoisted_sfpu = sfpu
+                init_code += once[0]
+                hoisted_uninit = once[1] + hoisted_uninit
+        code += self._zone(config, "INIT", init_code)
 
         def batch_body(planned: PlannedBlock, constants):
             body = fpu_common.math_wait_for_dest(config, self)
@@ -258,6 +307,11 @@ class L1Operation:
                     )
                     if not hoist:
                         body += cu.fpu_uninit(self, config, block)
+                elif cu is hoisted_sfpu:
+                    body += planned.plan(cu, "sfpu").emit_calls(
+                        constants,
+                        partial(cu.sfpu_call, self, config, block),
+                    )
                 elif isinstance(cu, SfpuNode):
                     init = cu.sfpu_init(self, config, block)
                     body += config.sentinel.sfpu_math_reconfig(config)
@@ -279,7 +333,7 @@ class L1Operation:
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
-        uninit_code = ""
+        uninit_code = hoisted_uninit
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(self, config, None)
         code += self._zone(config, "UNINIT", uninit_code)
@@ -305,17 +359,22 @@ class L1Operation:
             init_code += config.sentinel.configure_pack(config, self, pack_only[0])
         init_code += pack_common.pack_reduce_mask_config(self)
         init_code += pack_common.pack_dest_init(config, self, pack_only[0])
-        if hoist and not pack_only[0].packer.per_block_init:
-            init_code += pack_only[0].init(self, config, None)
-        code += self._zone(config, "INIT", init_code)
-
         init_fn = None
         uninit_fn = None
-        if hoist and pack_only[0].packer.per_block_init:
+        hoisted_uninit = ""
+        if hoist and not pack_only[0].packer.per_block_init:
+            init_code += pack_only[0].init(self, config, None)
+        elif hoist:
             init_fn = lambda planned: pack_only[0].init(
                 self, config, planned.block_for(pack_only[0])
             )
             uninit_fn = lambda planned: pack_only[0].uninit(self, config)
+            once = self._hoisted_block_init(config, blocks, init_fn, uninit_fn)
+            if once is not None:
+                init_code += once[0]
+                hoisted_uninit = once[1]
+                init_fn = uninit_fn = None
+        code += self._zone(config, "INIT", init_code)
 
         def batch_body(planned: PlannedBlock, constants):
             body = pack_common.packer_wait_for_math(config, self)
@@ -356,6 +415,7 @@ class L1Operation:
         )
 
         uninit_code = pack_common.packer_sync_with_unpacker(config, self)
+        uninit_code += hoisted_uninit
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(self, config)
         uninit_code += pack_common.pack_reduce_mask_clear(self)

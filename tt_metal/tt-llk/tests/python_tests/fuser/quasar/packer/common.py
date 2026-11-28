@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from fuser.operand import Operand
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackGolden
-from helpers.llk_params import DestSync, PerfRunType
+from helpers.llk_params import PerfRunType
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -75,22 +75,24 @@ def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> st
 
 
 def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.uses_unpack_to_dest_pack_sync:
-        code = "_llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);\n"
-        if operation.dest_sync == DestSync.Half:
-            code += (
-                f"_update_dest_register_offset_<{config.dest_acc.cpp_enum_value}>();\n"
-                "_llk_stall_cfg_on_<p_stall::PACK0>();\n"
-                f"_set_packer_dest_registers_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
-            )
-        return code
-    if config.skip_sync:
-        return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
     if config.quasar_use_dvalid:
+        if config.skip_sync:
+            return ""
         return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
-    return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
+    if config.perf_run_type in (PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE):
+        return ""
+    code = ""
+    if config.perf_run_type == PerfRunType.PACK_ISOLATE:
+        # Stands in for the idle math's post, so the section done's SEMGET never underflows.
+        code += (
+            "ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);\n"
+        )
+    return (
+        code
+        + f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
+    )
 
 
 def packer_sync_with_unpacker(config: "GlobalConfig", operation: "L1Operation") -> str:
