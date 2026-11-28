@@ -362,13 +362,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    // Drain this bank's dest-waited pack before issuing the next.
-                    // Queuing all LOOP_FACTOR packs into one tensix_sync makes the
-                    // TILE_LOOP ZONE_END wall-clock read return 0 on long SFPU ops.
-                    ckernel::wait_pack_idle();
-                }
             }
         }
         PROFILER_SYNC();
