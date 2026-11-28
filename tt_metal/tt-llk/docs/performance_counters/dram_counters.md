@@ -18,6 +18,8 @@ The counters of a DRAM tile are the slave side NoC interface counters of [noc_co
 
 The runtime reads three of them on every tile and NoC: `SLV_RD_DATA_WORD_SENT` and the two write data word counters. The headers are in `tools/include/perf_counters/dram_counters_*.h` (namespace `llk::perf::dram`): `Layout` says where the host reads the registers of a tile on each architecture (`niu_address(arch, noc, tile_noc0_y, reg)`), and `dram_counters_types.h` holds the file names and flag bits of the capture. The READMEs there list the rest.
 
+The LLK perf harness is not a consumer of this family: the DRAM tile counters are read by the host, and the harness issues no DRAM traffic, so there is nothing for it to capture.
+
 ## 3. Capture
 
 `TT_METAL_PROFILE_DRAM_COUNTERS=1` makes the runtime read the counters of every DRAM tile before a program is launched and after it is done, and write the differences. `raw` does the same without the idle calibration. The option does not need the device profiler, nothing is compiled into firmware, and with the option unset no code of the feature runs.

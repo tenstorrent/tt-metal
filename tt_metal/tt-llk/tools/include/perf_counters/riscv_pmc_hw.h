@@ -66,4 +66,47 @@ inline void zero_counters_upper()
     write_csr<CSR_MHPMCOUNTER6>(0);
 }
 
+// Start of a window: mcycle and minstret free-run, so a window is a difference.
+struct Reference
+{
+    std::uint32_t cycles;
+    std::uint32_t instret;
+};
+
+// Selects the events and zeroes their counters.
+__attribute__((always_inline)) inline void arm(std::uint32_t event3, std::uint32_t event4)
+{
+    select(event3, event4);
+    zero_counters();
+}
+
+__attribute__((always_inline)) inline void arm_upper(std::uint32_t event5, std::uint32_t event6)
+{
+    select_upper(event5, event6);
+    zero_counters_upper();
+}
+
+__attribute__((always_inline)) inline Reference reference()
+{
+    return Reference {read_csr<CSR_MCYCLE>(), read_csr<CSR_MINSTRET>()};
+}
+
+// The two counters and the mcycle and minstret deltas (modulo 2^32), read last so the window ends late. Out parameters
+// because a struct result stays in memory in the firmware build.
+__attribute__((always_inline)) inline void sample(
+    const Reference& start, std::uint32_t& pmc3, std::uint32_t& pmc4, std::uint32_t& cycles, std::uint32_t& instret)
+{
+    pmc3    = read_csr<CSR_MHPMCOUNTER3>();
+    pmc4    = read_csr<CSR_MHPMCOUNTER4>();
+    cycles  = read_csr<CSR_MCYCLE>() - start.cycles;
+    instret = read_csr<CSR_MINSTRET>() - start.instret;
+}
+
+// Counters 5 and 6 of a window, Quasar data-movement cores.
+__attribute__((always_inline)) inline void sample_upper(std::uint32_t& pmc5, std::uint32_t& pmc6)
+{
+    pmc5 = read_csr<CSR_MHPMCOUNTER5>();
+    pmc6 = read_csr<CSR_MHPMCOUNTER6>();
+}
+
 } // namespace llk::perf::riscv

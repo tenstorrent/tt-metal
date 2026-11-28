@@ -36,7 +36,6 @@ namespace router_counters {
 constexpr uint32_t kOption = PROFILE_ROUTER_COUNTERS;
 constexpr auto kBanks = llk::perf::router::selected_bank_offsets<kOption>();
 constexpr uint32_t kVcMask = kOption & llk::perf::router::VC_MASK_ALL;
-constexpr bool kPerVc = (kOption & llk::perf::router::PER_VC) != 0;
 constexpr uint32_t kTotal = llk::perf::router::value_count(kOption);
 constexpr uint32_t kPairs = (kTotal + 1) / 2;
 constexpr uint32_t kReservedWords = (1 + kPairs) * TS_DATA_MARKER_WORDS;
@@ -59,37 +58,8 @@ extern uint32_t router_counters_values[kernel_profiler::router_counters::kTotal]
 namespace kernel_profiler {
 namespace router_counters {
 
-// The first call stores the readings, the second turns them into deltas.
-__attribute__((noinline)) void scan(bool delta) {
-    uint32_t i = 0;
-    for (uint32_t noc = 0; noc < llk::perf::router::ROUTER_NOCS; noc++) {
-        for (uint32_t b = 0; b < kBanks.size(); b++) {
-            const uint32_t base =
-                llk::perf::router::ROUTER_REGS_BASE + noc * llk::perf::router::ROUTER_NOC_STRIDE + kBanks[b];
-            uint32_t sum = 0;
-            for (uint32_t vc = 0; vc < llk::perf::router::NUM_VCS; vc++) {
-                if (((kVcMask >> vc) & 1u) == 0) {
-                    continue;
-                }
-                const uint32_t v =
-                    *reinterpret_cast<volatile uint32_t*>(base + vc * llk::perf::router::ROUTER_VC_STRIDE);
-                if (kPerVc) {
-                    router_counters_values[i] = delta ? v - router_counters_values[i] : v;
-                    i++;
-                } else {
-                    sum += v;
-                }
-            }
-            if (!kPerVc) {
-                router_counters_values[i] = delta ? sum - router_counters_values[i] : sum;
-                i++;
-            }
-        }
-    }
-}
-
 #if defined(ROUTER_COUNTERS_OPEN)
-inline __attribute__((always_inline)) void begin() { scan(false); }
+inline __attribute__((always_inline)) void begin() { llk::perf::router::capture<kOption>(router_counters_values, false); }
 #endif
 
 #if defined(ROUTER_COUNTERS_CLOSE)
@@ -103,7 +73,7 @@ __attribute__((noinline)) void end() {
     if (get_profiler_zone_invalid() || !bufferHasRoom(kReservedWords - 1)) {
         return;
     }
-    scan(true);
+    llk::perf::router::capture<kOption>(router_counters_values, true);
     const TsDataStamp stamp = ts_data_stamp();
     uint32_t w = wIndex;
     put_ts_data(w, stamp, ROUTER_COUNTERS_HEADER_PROFILER_ID, llk::perf::router::ROUTER_NOCS, kOption);

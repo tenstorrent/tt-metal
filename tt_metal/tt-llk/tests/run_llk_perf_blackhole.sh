@@ -86,3 +86,9 @@ if [[ -f "$COMPILE_XML" ]]; then
 else
   cp "$RUN_XML" "${REPORT}.xml"
 fi
+
+# One short launch per check of the harness counters; the merge gate legs have no time for it.
+if [[ "$GROUP" == 1 && "$PHASE" != compile && "${PIPELINE:-}" != merge_baseline ]]; then
+  pytest $PYTEST_RUN_EXTRA --perf-riscv-pmc=EX_INST_RET --perf-noc-counters=ALL --perf-router-counters=ALL --timeout=300 \
+    --junitxml="${REPORT}-counters-run.xml" test_riscv_pmc_count.py test_tile_counters_count.py
+fi

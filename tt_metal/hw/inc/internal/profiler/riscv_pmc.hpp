@@ -85,27 +85,23 @@ constexpr uint32_t reserved_words = marker_count * TS_DATA_MARKER_WORDS;
 // Holds back room for the markers so a kernel that fills the buffer does not drop them.
 inline __attribute__((always_inline)) void begin() {
     stackSize += reserved_words;
-    llk::perf::riscv::select(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
-    llk::perf::riscv::zero_counters();
+    llk::perf::riscv::arm(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
 #if defined(RISCV_PMC_UPPER)
-    llk::perf::riscv::select_upper(PROFILE_RISCV_PMC_DM_EV5, PROFILE_RISCV_PMC_DM_EV6);
-    llk::perf::riscv::zero_counters_upper();
+    llk::perf::riscv::arm_upper(PROFILE_RISCV_PMC_DM_EV5, PROFILE_RISCV_PMC_DM_EV6);
 #endif
-    cycle_begin = llk::perf::riscv::read_csr<llk::perf::riscv::CSR_MCYCLE>();
-    instret_begin = llk::perf::riscv::read_csr<llk::perf::riscv::CSR_MINSTRET>();
+    const auto start = llk::perf::riscv::reference();
+    cycle_begin = start.cycles;
+    instret_begin = start.instret;
 }
 
 // The selects are re-emitted so each capture is self-describing. No flush here: it needs noc_index.
 inline __attribute__((always_inline)) void end() {
-    using namespace llk::perf::riscv;
-    const uint32_t pmc3 = read_csr<CSR_MHPMCOUNTER3>();
-    const uint32_t pmc4 = read_csr<CSR_MHPMCOUNTER4>();
 #if defined(RISCV_PMC_UPPER)
-    const uint32_t pmc5 = read_csr<CSR_MHPMCOUNTER5>();
-    const uint32_t pmc6 = read_csr<CSR_MHPMCOUNTER6>();
+    uint32_t pmc5, pmc6;
+    llk::perf::riscv::sample_upper(pmc5, pmc6);
 #endif
-    const uint32_t mcycle = read_csr<CSR_MCYCLE>();
-    const uint32_t minstret = read_csr<CSR_MINSTRET>();
+    uint32_t pmc3, pmc4, cycles, instret;
+    llk::perf::riscv::sample({cycle_begin, instret_begin}, pmc3, pmc4, cycles, instret);
 
     stackSize -= reserved_words;
     if (!bufferHasRoom(reserved_words - 1)) {
@@ -115,7 +111,7 @@ inline __attribute__((always_inline)) void end() {
     const TsDataStamp stamp = ts_data_stamp();
     uint32_t w = wIndex;
     put_ts_data(w, stamp, RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
-    put_ts_data(w, stamp, RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
+    put_ts_data(w, stamp, RISCV_PMC_CYCLES_PROFILER_ID, instret, cycles);
     put_ts_data(w, stamp, RISCV_PMC_EVENTS_PROFILER_ID, RISCV_PMC_SEL4, RISCV_PMC_SEL3);
 #if defined(RISCV_PMC_UPPER)
     put_ts_data(w, stamp, RISCV_PMC_COUNTS_UPPER_PROFILER_ID, pmc6, pmc5);
