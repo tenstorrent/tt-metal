@@ -1,0 +1,60 @@
+{
+  "_doc": "Gate floors per <shape>/<precision> (*/<precision> applies to every shape), read by tests/gates.py. Range floors are [lo, hi]; median_err, flat_max_err, inactive_max_err, abs_err_max, spread_ratio_p99 and spread_ratio_max are upper bounds. accuracy is the shipping precision; performance is timing only.",
+  "floors": {
+    "*/accuracy": {
+      "pcc_normalized": 0.998,
+      "pcc_spread": 0.999,
+      "pcc_row_p01_active": 0.99,
+      "pcc_row_min_active": 0.98,
+      "spread_ratio_p01": 0.93,
+      "spread_ratio_p99": 1.08,
+      "pcc_final": 0.99,
+      "pcc_final_spread": 0.999,
+      "median_err": 0.15,
+      "flat_max_err": 0.05,
+      "spread_ratio_min": 0.7,
+      "spread_ratio_max": 1.43,
+      "spread_ratio_p50": [
+        0.98,
+        1.02
+      ]
+    },
+    "*/performance": {
+      "pcc_normalized": 0.998,
+      "pcc_spread": 0.997,
+      "pcc_row_p01_active": 0.98,
+      "pcc_row_min_active": 0.93,
+      "spread_ratio_p01": 0.9,
+      "spread_ratio_p99": 1.25,
+      "spread_ratio_min": 0.6,
+      "spread_ratio_max": 1.67,
+      "spread_ratio_p50": [
+        0.96,
+        1.04
+      ],
+      "pcc_final": 0.99,
+      "pcc_final_spread": 0.998,
+      "median_err": 0.3,
+      "flat_max_err": 0.1
+    },
+    "multivariate/accuracy": {
+      "median_err": 0.18,
+      "inactive_max_err": 0.06
+    },
+    "paper/accuracy": {
+      "inactive_max_err": 0.05
+    },
+    "paper/performance": {
+      "inactive_max_err": 0.2
+    },
+    "long_context/accuracy": {
+      "inactive_max_err": 0.05
+    },
+    "long_context/performance": {
+      "inactive_max_err": 0.1
+    },
+    "multivariate/performance": {
+      "inactive_max_err": 0.15
+    }
+  }
+}
