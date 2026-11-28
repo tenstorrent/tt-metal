@@ -1,15 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Accurate exp on a bf16 Dest between two K steps of one matmul.
+"""Accurate exp / exp2 / exp with base on a bf16 Dest between two K steps of one matmul.
 
 The matmul replays its MVMUL sequence from the FPU half of the replay buffer, recorded once in
 its init. Exp records its body into the replay buffer on every call; a record longer than the
 SFPU half overwrites the start of the matmul sequence, and the second K step then computes
-garbage. Exp writes a spare Dest tile, so the packed result is the plain matmul.
+garbage. Each exp call runs on its own spare Dest tile, seeded with an A tile; those tiles are
+packed after the matmul result and checked against torch.
+
+A throttled matmul (THROTTLE_LEVEL > 0, built with MM_THROTTLE as ttnn does) programs ADDR_MOD_6,
+which selects the exp body's MM_THROTTLE dest-advance path.
 """
 
+from dataclasses import dataclass
+
+import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
@@ -21,6 +29,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_dispatch_constants import EXP_WITH_BASE_SCALE
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -34,9 +43,41 @@ from helpers.test_variant_parameters import (
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    TemplateParameter,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+
+@dataclass
+class EXP_VARIANT(TemplateParameter):
+    """SfpuType run between the K steps, and its CLAMP_NEGATIVE."""
+
+    exp_op: str = "exponential"
+    exp_clamp_negative: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr SfpuType EXP_OP = SfpuType::{self.exp_op};\n"
+            f"constexpr bool EXP_CLAMP_NEGATIVE = {str(self.exp_clamp_negative).lower()};"
+        )
+
+
+EXP_GOLDEN = {
+    "exponential": torch.exp,
+    "exp2": torch.exp2,
+    "exp_with_base": lambda x: torch.exp(EXP_WITH_BASE_SCALE * x),
+}
+
+
+@dataclass
+class MM_THROTTLE_DEFINE(TemplateParameter):
+    """MM_THROTTLE as ttnn defines it for a throttled matmul kernel."""
+
+    level: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MM_THROTTLE {self.level}" if self.level else ""
 
 
 @parametrize(
@@ -44,8 +85,24 @@ from helpers.utils import passed_test
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
     # (A, B) dimensions: K of two and four tiles, so exp runs between K steps.
     dims=[([32, 64], [64, 32]), ([64, 128], [128, 64])],
+    variant=[
+        ("exponential", True),
+        ("exponential", False),
+        ("exp2", True),
+        ("exp_with_base", True),
+    ],
+    throttle=[0, 3, 5],
 )
-def test_exp_between_matmul(formats, math_fidelity, dims):
+def test_exp_between_matmul(formats, math_fidelity, dims, variant, throttle):
+    # Blackhole's bf16 exp body with the scale is 17 instructions; its record overruns the
+    # SFPU replay slots [0, 16) into the matmul's MVMUL sequence.
+    if (
+        variant[0] == "exp_with_base"
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            "Blackhole exp_with_base bf16 record overruns the SFPU replay slots"
+        )
     input_A_dimensions, input_B_dimensions = dims
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -75,6 +132,15 @@ def test_exp_between_matmul(formats, math_fidelity, dims):
     tilized_B = tilize_block(
         src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
     )
+    # K steps 1..kt-1 run exp on A tiles 0..kt-2, packed after the matmul result.
+    exp_tile_cnt = matmul_dims.kt_dim - 1
+    exp_input = tilized_A.flatten()[: exp_tile_cnt * 1024].to(torch.float32)
+    golden_tensor = torch.cat(
+        [
+            golden_tensor.flatten(),
+            EXP_GOLDEN[variant[0]](exp_input).to(format_dict[formats.output_format]),
+        ]
+    )
 
     configuration = TestConfig(
         "sources/exp_between_matmul_test.cpp",
@@ -83,7 +149,9 @@ def test_exp_between_matmul(formats, math_fidelity, dims):
             MATH_FIDELITY(math_fidelity),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(),
-            THROTTLE_LEVEL(),
+            THROTTLE_LEVEL(throttle),
+            MM_THROTTLE_DEFINE(throttle),
+            EXP_VARIANT(*variant),
         ],
         runtimes=[
             NUM_FACES(),
@@ -100,7 +168,7 @@ def test_exp_between_matmul(formats, math_fidelity, dims):
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
+            tile_count_res=matmul_dims.output_tile_cnt + exp_tile_cnt,
         ),
         dest_acc=DestAccumulation.No,
     )
