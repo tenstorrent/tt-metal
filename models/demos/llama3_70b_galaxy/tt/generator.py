@@ -22,6 +22,9 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.warmup import WarmupForwardMixin
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import PREFILL_SUPPORT_SEQLENS
+from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import QWEN_OPT_MAX_SEQ_LEN, set_prefill_total_len
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,
@@ -71,11 +74,21 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
     return replace(params, **updates)
 
 
-def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
+def get_prefill_warmup_sequence_lengths(max_seq_len: int, pad_multiple: int | None = None) -> list[int]:
     """
-    Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    Returns the prefill lengths the warmup compiles, ascending, all <= max_seq_len:
+    128 and the powers of 2 from 1024 up to max_seq_len (inclusive). With pad_multiple
+    (model_args.prefill_pad_multiple), also every multiple of pad_multiple above
+    MAX_TRACED_PREFILL_LEN up to min(max_seq_len, QWEN_OPT_MAX_SEQ_LEN), which are the lengths
+    get_padded_prefill_len returns for prompts longer than the traced buckets (above the cap it pads
+    to powers of 2 again, as main). None returns the powers of 2 only.
     """
-    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    lengths = [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    if pad_multiple:
+        first_bucket = (MAX_TRACED_PREFILL_LEN // pad_multiple + 1) * pad_multiple
+        last_bucket = min(max_seq_len, QWEN_OPT_MAX_SEQ_LEN)
+        lengths = sorted(set(lengths).union(range(first_bucket, last_bucket + 1, pad_multiple)))
+    return lengths
 
 
 def _acknowledge_trace_io_corruptible(tensors):
@@ -90,23 +103,51 @@ def _acknowledge_trace_io_corruptible(tensors):
             trace_allocation_tracker.acknowledge_corruptible(tensor)
 
 
-def get_padded_prefill_len(seq_len: int) -> int:
+# Largest traced prefill bucket. Lengths up to here keep power-of-2 padding.
+MAX_TRACED_PREFILL_LEN = max(PREFILL_SUPPORT_SEQLENS)
+
+
+def get_padded_prefill_len(seq_len: int, pad_multiple: int | None = None) -> int:
     """
-    Get the padded prefill length for a given sequence length.
-    This is used to pad the sequence length to the nearest power of 2.
+    Get the padded prefill length for a given sequence length: 128, 1024, then the next power of 2.
+
+    pad_multiple (model_args.prefill_pad_multiple, None by default): above the traced buckets
+    (> MAX_TRACED_PREFILL_LEN), pad to the next multiple of pad_multiple instead of the next power
+    of 2. pad_multiple must divide 2 * MAX_TRACED_PREFILL_LEN, so the result is never above the
+    power of 2. Only while that multiple is <= QWEN_OPT_MAX_SEQ_LEN: longer prompts pad to the next
+    power of 2 (main's rule). None keeps power-of-2 padding for every length.
     """
     if seq_len <= 128:
         return 128
     if seq_len <= 1024:
         return 1024
-    else:
-        # return next power of 2 greater than seq_len
-        return 2 ** (seq_len - 1).bit_length()
+    # next power of 2 greater than or equal to seq_len
+    pow2_len = 2 ** (seq_len - 1).bit_length()
+    if pad_multiple and pow2_len > MAX_TRACED_PREFILL_LEN:
+        assert (
+            2 * MAX_TRACED_PREFILL_LEN
+        ) % pad_multiple == 0, f"pad_multiple {pad_multiple} must divide {2 * MAX_TRACED_PREFILL_LEN}"
+        padded = -(-seq_len // pad_multiple) * pad_multiple
+        if padded <= QWEN_OPT_MAX_SEQ_LEN:
+            return padded
+    return pow2_len
+
+
+def prefill_pad_multiple_for(seq_len: int, pad_multiple: int | None, num_cached: int = 0) -> int | None:
+    """pad_multiple for a request of seq_len total tokens of which num_cached are cached: pad_multiple while the
+    prefill's total context (num_cached + the new tokens padded with it, the KV extent the model gates on) is
+    <= QWEN_OPT_MAX_SEQ_LEN, else None (main's power-of-2 padding). A request beyond the cap then pads exactly as
+    main and its prefix-cached (sp1) buckets stay powers of 2. num_cached 0: same as get_padded_prefill_len's cap."""
+    if pad_multiple is None:
+        return None
+    padded_new = get_padded_prefill_len(seq_len - num_cached, pad_multiple)
+    return pad_multiple if num_cached + padded_new <= QWEN_OPT_MAX_SEQ_LEN else None
 
 
 def _should_skip_prefix_caching(
     seq_len: int,  # Full sequence length: cached+new tokens
     num_cached: int,  # Number of cached tokens
+    pad_multiple: int | None = None,  # model_args.prefill_pad_multiple, passed to get_padded_prefill_len
 ) -> bool:
     """Decide whether prefix-caching overhead exceeds compute savings.
 
@@ -133,8 +174,9 @@ def _should_skip_prefix_caching(
         return False
 
     new_tokens = seq_len - num_cached
-    padded_new = get_padded_prefill_len(new_tokens)
-    padded_total = get_padded_prefill_len(seq_len)
+    pad_multiple = prefill_pad_multiple_for(seq_len, pad_multiple, num_cached)
+    padded_new = get_padded_prefill_len(new_tokens, pad_multiple)
+    padded_total = get_padded_prefill_len(seq_len, pad_multiple)
 
     # If padding erases the compute savings, always skip caching.
     if padded_new >= padded_total:
@@ -321,7 +363,10 @@ class Generator(WarmupForwardMixin):
 
         self.model.switch_mode("prefill")
         logger.info("Warming up prefill for all supported sequence lengths up to max sequence length")
-        warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
+        # Phase 1 compiles every bucket get_padded_prefill_len can return, including the multiples of
+        # model_args.prefill_pad_multiple (Qwen) above the traced buckets. None (Llama): powers of 2 only.
+        prefill_pad_multiple = getattr(self.model_args, "prefill_pad_multiple", None)
+        warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len, prefill_pad_multiple)
         block_size = get_block_size(kv_cache[0]) if kv_cache else 64
         # Phase 1: sp0 traces (no prefix caching) - batch 1 and 32
         for warmup_sequence_length in warmup_sequence_lengths:
@@ -411,15 +456,21 @@ class Generator(WarmupForwardMixin):
 
         # Phase 2: sp1 traces (prefix caching): batch 1 only, one per supported length.
         # Uses a fixed cached prefix aligned to both SDPA chunk size and page block size.
+        # Powers of 2 only, as before pad_multiple. A non-power-of-2 bucket (24576 or 40960 for Qwen's 8192)
+        # only exists while cached + padded new tokens <= QWEN_OPT_MAX_SEQ_LEN (prefill_pad_multiple_for), and
+        # the heuristic never keeps a cached prefix there (it needs a padded total >= 8 * 24576,
+        # _should_skip_prefix_caching), so no prefix-cached prefill needs a non-power-of-2 sp1 trace at any
+        # max_seq_len (test_generator_prefill_padding.py test_qwen_sp1_pow2_warmup_guard).
+        prefix_warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
         num_cached = SDPA_CHUNK_ALIGN
         num_blocks_for_prefix_cache = max(
-            num_blocks_in_seq(num_cached + sl, block_size) for sl in warmup_sequence_lengths
+            num_blocks_in_seq(num_cached + sl, block_size) for sl in prefix_warmup_sequence_lengths
         )
 
         # Use all-zero block IDs for phase-2 warmup page table.
         page_table_phase2 = torch.zeros(1, num_blocks_for_prefix_cache, dtype=torch.int32)
 
-        for supported_length in warmup_sequence_lengths:
+        for supported_length in prefix_warmup_sequence_lengths:
             # Warmup records all sp1 traces regardless of the inference heuristic.
             # _should_skip_prefix_caching is for inference-time only.
             total_seq_len = num_cached + supported_length
@@ -514,18 +565,25 @@ class Generator(WarmupForwardMixin):
         # replication).  Overwriting cached KV blocks with identical data is
         # harmless, so this is functionally safe.
         # Skip during warmup so we record all sp1 traces regardless.
+        # None (Llama) keeps power-of-2 prefill padding; Qwen sets a multiple for untraced lengths.
+        prefill_pad_multiple = getattr(self.model_args, "prefill_pad_multiple", None)
         if not self.warming_up_prefill:
             for idx, seq_len in enumerate(prompt_lens):
-                if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx]):
+                if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx], prefill_pad_multiple):
                     logger.info(
                         f"Prefix-caching heuristic: skipping cache for user {idx} "
                         f"(seq_len={int(seq_len)}, cached={num_cached_tokens_list[idx]})"
                     )
                     num_cached_tokens_list[idx] = 0
 
-        # Calculate and pad prefill_seq_lens excluding cached tokens
+        # Calculate and pad prefill_seq_lens excluding cached tokens (main's padding when the request's total
+        # context is above QWEN_OPT_MAX_SEQ_LEN, prefill_pad_multiple_for)
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached_tokens_list[idx]) for idx, seq_len in enumerate(prompt_lens)
+            get_padded_prefill_len(
+                seq_len - num_cached_tokens_list[idx],
+                prefill_pad_multiple_for(int(seq_len), prefill_pad_multiple, num_cached_tokens_list[idx]),
+            )
+            for idx, seq_len in enumerate(prompt_lens)
         ]
         if page_table is not None:
             assert isinstance(
@@ -636,6 +694,21 @@ class Generator(WarmupForwardMixin):
 
         if do_device_sampling and use_batched_prefill:
             self.tt_logits_accumulated_batched = []
+
+        # Qwen context-parallel long prefill (tt/qwen_cp_prefill.py; QWEN_CP_LAYER_MAJOR=0 disables): every user of
+        # this call is one CP prefill of the same padded length; run them layer-major (each layer's weights gathered
+        # once for all users) and fill the sampling buffers from a last-token window instead of the full-S output.
+        if (
+            not use_batched_prefill
+            and not group_mixed_128_prefill
+            and qwen_cp_prefill.layer_major_applies(
+                self.model, batch, prefill_seq_lens, num_cached_tokens_list, page_table, do_device_sampling
+            )
+        ):
+            self._qwen_cp_layer_major_prefill(
+                tokens, page_table, kv_cache, prompt_lens, prefill_seq_lens[0], empty_slots[:batch]
+            )
+            prefill_work_items = []
 
         for work_use_batched_prefill, request_indices, request_slots in prefill_work_items:
             request_idx = request_indices[0]
@@ -1157,6 +1230,13 @@ class Generator(WarmupForwardMixin):
             )
         else:
             last_token_idx_relative = last_token_idx - num_cached_tokens if use_prefix_caching else last_token_idx
+
+        # A trace replay (and a deferred warmup variant already staged) runs no TtTransformer.forward, so record this
+        # prefill's total context and cached prefix here: the output norm in process_output_prefill*, which runs
+        # outside the trace, picks its eps from them (qwen_opt_limits.prefill_norm).
+        set_prefill_total_len(
+            self.model.model_config, num_cached_tokens + prefill_seq_len, num_cached=num_cached_tokens
+        )
 
         if self.trace_id_prefill[trace_key] is None:
             if self._defer_trace_recording:
@@ -2075,6 +2155,53 @@ class Generator(WarmupForwardMixin):
         generation = self.tokenizer.decode(tokens)
 
         return CompletionPrediction(generation=generation)
+
+    def _qwen_cp_layer_major_prefill(self, tokens, page_table, kv_cache, prompt_lens, prefill_seq_len, slots):
+        """Layer-major CP prefill of len(slots) users (qwen_cp_prefill.layer_major_prefill), then each user's
+        last-token logits into self.tt_logits_accumulated[slot] for the on-device sampling that follows."""
+        model = self.model
+        # Total context of these prefills (no cached prefix): read by the gates, the ring CCL overrides and the
+        # output norm below (qwen_opt_limits), as TtTransformer.forward records it for the per-user path.
+        set_prefill_total_len(model.model_config, prefill_seq_len)
+        users = []
+        for request_idx, slot in enumerate(slots):
+            user_id = int(slot)
+            seq_len = int(prompt_lens[request_idx])
+            logger.info(
+                f"Prefilling User {user_id}, use_batched_prefill: False, prompt_lens: {seq_len}, "
+                f"prefill_seq_len: {prefill_seq_len}, num_cached_tokens: 0 (Qwen CP layer-major)"
+            )
+            prefill_ids = torch.cat(
+                [tokens[request_idx : request_idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()],
+                dim=-1,
+            )
+            page_table_user = self._get_prefill_user_page_table(
+                page_table[[request_idx], :], kv_cache, prefill_seq_len, user_id, False, real_seq_lens=[seq_len]
+            )
+            # Fresh device inputs per user (prepare_inputs_prefill reuses one cached set, and every user's page
+            # table must stay alive until the last layer).
+            host_inputs = model.prepare_prefill_inputs_host(
+                prefill_ids, user_id=user_id, page_table=page_table_user[user_id : user_id + 1, :]
+            )
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+            x, tt_user_id, tt_page_table = model.transform_prefill_inputs_device(*device_inputs)[:3]
+            users.append(
+                dict(
+                    h=qwen_cp_prefill.model_entry(model, x),
+                    user_id=tt_user_id,
+                    page_table=tt_page_table,
+                    last_idx=seq_len - 1,
+                    slot=user_id,
+                )
+            )
+        windows = qwen_cp_prefill.layer_major_prefill(model, users, model.get_or_create_prefill_rot_mats(), kv_cache)
+        for u, window in zip(users, windows):
+            tt_logits_list = model.process_output_prefill_logits(
+                window, last_token_idx=u["last_idx"] % qwen_cp_prefill.EXIT_WINDOW
+            )
+            ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[u["slot"]])
+            del tt_logits_list
+            ttnn.deallocate(window)
 
     def _get_prefill_user_page_table(
         self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False, real_seq_lens=None
