@@ -1357,6 +1357,7 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
     std::string op_name;
     switch (op.type()) {
         case UnaryOpType::QUICK_GELU: op_name = arch == tt::ARCH::BLACKHOLE ? "quick_gelu" : ""; break;
+        case UnaryOpType::LOGSIGMOID: op_name = "log_sigmoid"; break;
         default: return std::nullopt;
     }
     if (op_name.empty()) {
