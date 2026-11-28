@@ -973,7 +973,9 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 32 # text_demo 7.2 min + DFlash test 9-12 min + batched DFlash ~3 min plus its model load (the load from the shared cache varies)
+      # text_demo 6-21 min (its weight load from the shared cache takes 2-18 min, by runner) + DFlash test 10-13 min
+      # + batched DFlash 32 and 128 users ~14 min with its model load
+      timeout: 50
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
