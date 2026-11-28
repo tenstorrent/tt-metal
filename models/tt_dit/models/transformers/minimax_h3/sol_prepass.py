@@ -190,7 +190,6 @@ def build_route_constants(
       the threshold.
     valid_blocks [1,1,nb_pad,n_blocks_pad]: 1 where the row is a real Q block and the column a full K block. The
       route kernel multiplies the mask by it, so partial and padding K blocks and padding Q rows end up 0.
-    ones [1,1,32,32]: row 0 = 1.
     """
     c = build_constants(
         geo,
@@ -202,16 +201,7 @@ def build_route_constants(
     )
     const_or = ((c["band"] + c["sink_row"] + c["force_row"]) > 0.5).float() * c["full_row"]  # [S,1,nbp,nbg]
     valid_blocks = c["q_row"] * c["full_row"]  # [1,1,nbp,nbg]
-    ones, shsel = _route_selectors(geo.shards)
-    return {
-        "const_or": const_or,
-        "valid_blocks": valid_blocks,
-        "ones": ones,
-        "shsel": shsel,
-        "n_valid_blocks": c["n_valid_blocks"],
-        "valid_row": c["valid_row"],
-        "len_bias_row": c["len_bias_row"],
-    }
+    return {"const_or": const_or, "valid_blocks": valid_blocks, "n_valid_blocks": c["n_valid_blocks"]}
 
 
 def _route_selectors(S: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -358,12 +348,6 @@ class SolRouteConstants:
             self._vectors = vectors
         self._request = request
 
-    def release(self) -> None:
-        for t in self.tensors.values():
-            ttnn.deallocate(t)
-        self.tensors = {}
-        self._request = None
-
 
 # ----------------------------------------------------------------------------- device pre-pass
 
@@ -429,50 +413,27 @@ class SolPrepass(Module):
 
     # ------------------------------------------------------------------ constants / descriptors
 
-    def prepare(
-        self, geo: SolGeometry, sink_tokens: int, scale: float, constants: SolRouteConstants | None = None
-    ) -> None:
-        """Bind the route constants of a geometry.
+    def prepare(self, geo: SolGeometry, scale: float, constants: SolRouteConstants) -> None:
+        """Bind the route constants of a geometry: the set the layers share, which its owner has set to this request.
 
-        `constants`: the set the layers share, which its owner has set to this request; None keeps a private set and
-        sets it here. Programs and pool outputs are kept while the constants and the scale stay the same, so a new
-        packed length or sink inside a padded geometry changes no address a captured trace holds.
+        Programs and pool outputs are kept while the constants and the scale stay the same, so a new packed length or
+        sink inside a padded geometry changes no address a captured trace holds.
         """
-        st = self._state
-        own = constants is None
-        if own:
-            keep = st is not None and st["own"] and st["scale"] == scale
-            keep = keep and st["constants"].padded == (geo.shards, geo.rows, geo.block)
-            constants = (
-                st["constants"]
-                if keep
-                else SolRouteConstants(
-                    self.mesh_device,
-                    self.sp_axis,
-                    geo,
-                    band=self.band,
-                    force_first_block=self.force_first_block,
-                    dense_prefix_queries=self.dense_prefix_queries,
-                )
-            )
         assert constants.rule == (self.band, self.force_first_block, self.dense_prefix_queries), constants.rule
+        st = self._state
         if st is None or st["constants"] is not constants or st["scale"] != scale:
             self._release_state()
-            self._state = {"constants": constants, "own": own, "scale": scale}
+            self._state = {"constants": constants, "scale": scale}
             self._state.update(pool_prog=None, route_prog=None, pool_outs=None)
-        if own:
-            constants.set(geo, sink_tokens)
         self._state.update(constants.tensors)
         self.geo = geo
         self.reset_mask_reuse()  # a held mask belongs to the previous request
 
     def _release_state(self) -> None:
-        """Free the persistent pool outputs of the current geometry, and its constants when they are private."""
+        """Free the persistent pool outputs of the current geometry."""
         st = self._state
         if st is None:
             return
-        if st["own"]:
-            st["constants"].release()
         for t in st["pool_outs"] or []:
             ttnn.deallocate(t)
         self._state = None
@@ -623,11 +584,10 @@ class SolPrepass(Module):
             head_dim_tiles,  # 3 HEAD_DIM_TILES
             _f32_bits(self.tau),  # 4 TAU
             _f32_bits(VAR_EPS / (log2_scale * log2_scale)),  # 5 VARIANCE_EPSILON
-            0,  # 6 unused: 1 / valid K blocks is read at run time from the geo page (word 1)
-            grid_x,  # 7 GRID_X
-            grid_y,  # 8 GRID_Y
-            num_units,  # 9 NUM_UNITS
-            units_per_shard,  # 10 UNITS_PER_SHARD; kernels derive their unit range per core
+            grid_x,  # 6 GRID_X
+            grid_y,  # 7 GRID_Y
+            num_units,  # 8 NUM_UNITS
+            units_per_shard,  # 9 UNITS_PER_SHARD; kernels derive their unit range per core
         ]
         ins = [q_bar, kc, st["const_or"], st["valid_blocks"], st["ones"]]
         acc_in = [a for t in ins for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]

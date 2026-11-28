@@ -16,7 +16,6 @@ from ....pipelines.minimax_h3.packing import video_latent_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import SolSchedule, sol_schedule
-from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 
 _SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS", "H3_SOL_POOLED")
 
@@ -62,36 +61,9 @@ def _pipeline(monkeypatch, env, cls=MiniMaxH3Pipeline):
     pipeline = cls.__new__(cls)
     pipeline.task, pipeline.transformer_file = "t2va", None
     pipeline.dynamic_length = False
-    pipeline.bucket_denoise = True
     pipeline._sol_schedule = None
     pipeline._warming = False
     return pipeline
-
-
-@pytest.mark.parametrize(
-    "file, env, dense",
-    [
-        (None, {}, [False]),
-        (None, {"H3_SOL_ATTN": "1"}, [True, False]),
-        # On by default, a clip over the preset's length runs dense: warm-up captures that trace too, even for a
-        # schedule with no dense step.
-        ("/models/v1/v1t.safetensors", {"H3_SOL_DENSE_STEPS": "0"}, [True, False]),
-    ],
-)
-def test_warmup_runs_a_dense_and_a_sparse_step(monkeypatch, file, env, dense):
-    """The dense flag of each forward of a warm-up generation. `num_inference_steps` counts the schedule's points,
-    one more than its forwards."""
-    pipeline, calls = _pipeline(monkeypatch, env), []
-    pipeline.transformer_file = file and Path(file)
-    pipeline._warming = True
-    monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: calls.append(kwargs))
-    pipeline._run_forced(76800, "a prompt", {"num_frames": 158})
-    assert pipeline._force_bucket is None
-    assert calls == [{"num_inference_steps": len(dense) + 1, "num_frames": 158}]
-    scheduler = MiniMaxH3Scheduler(shift=6.0)
-    scheduler.set_timesteps(len(dense) + 1)
-    pipeline._sol_schedule = pipeline._requested_sol_schedule()
-    assert [pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(len(scheduler.timesteps))] == dense
 
 
 @pytest.mark.parametrize(
@@ -102,6 +74,8 @@ def test_warmup_runs_a_dense_and_a_sparse_step(monkeypatch, file, env, dense):
         ({}, False, 243, [True] * 8),
         ({"H3_SOL_ATTN": "1"}, False, 243, [True] * 3 + [False] * 5),
         ({}, True, 243, [True] + [False] * 7),  # a rung's warm-up clip still captures the sparse trace
+        # and the dense one, which a clip over the default's length replays, for a schedule with no dense step too
+        ({"H3_SOL_DENSE_STEPS": "0"}, True, 158, [True] + [False] * 7),
     ],
 )
 def test_the_default_runs_a_clip_over_its_length_dense(monkeypatch, env, warming, num_frames, dense):

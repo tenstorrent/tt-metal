@@ -15,7 +15,7 @@
 // NUM_SHARDS - 1 every shard's rows have arrived. With Q_SHARED the shard-0 core reads the pooled Q and sends it to
 // the other cores (semaphore 1).
 //
-// Compile-time args: 0..10 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of q_pooled,
+// Compile-time args: 0..9 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of q_pooled,
 // k_pooled, const_or, valid_blocks, ones, shard_select (host name shsel), geo, then Q_SHARED.
 // Common runtime args: 0..6 the buffer addresses in that order, 7.. the NoC coordinates of every logical core
 // (x | y << 8). Semaphores: 0 moment exchange, 1 Q hand-off.
@@ -44,17 +44,17 @@ void kernel_main() {
     constexpr uint32_t NUM_SHARDS = get_compile_time_arg_val(1);
     constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(2);
     constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(3);
-    constexpr uint32_t GRID_X = get_compile_time_arg_val(7);
-    constexpr uint32_t GRID_Y = get_compile_time_arg_val(8);
-    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(9);
-    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(10);  // 1: (head, shard); 0: (head, Q-block tile)
+    constexpr uint32_t GRID_X = get_compile_time_arg_val(6);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(7);
+    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(8);
+    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(9);  // 1: (head, shard); 0: (head, Q-block tile)
 
     constexpr uint32_t ALL_BLOCK_TILES = NUM_SHARDS * SHARD_BLOCK_TILES;
     // Pooled-K block tiles a unit reads: its own shard's, or every shard's.
     constexpr uint32_t K_BLOCK_TILES_PER_UNIT = UNITS_PER_SHARD ? SHARD_BLOCK_TILES : ALL_BLOCK_TILES;
     constexpr uint32_t K_TILES_PER_UNIT = K_BLOCK_TILES_PER_UNIT * HEAD_DIM_TILES;
     constexpr uint32_t Q_TILES_PER_HEAD = SHARD_BLOCK_TILES * HEAD_DIM_TILES;
-    constexpr auto q_pooled_args = TensorAccessorArgs<11>();
+    constexpr auto q_pooled_args = TensorAccessorArgs<10>();
     constexpr auto k_pooled_args = TensorAccessorArgs<q_pooled_args.next_compile_time_args_offset()>();
     constexpr auto const_or_args = TensorAccessorArgs<k_pooled_args.next_compile_time_args_offset()>();
     constexpr auto valid_blocks_args = TensorAccessorArgs<const_or_args.next_compile_time_args_offset()>();

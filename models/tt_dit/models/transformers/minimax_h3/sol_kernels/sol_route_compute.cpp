@@ -27,10 +27,9 @@
 //    3 HEAD_DIM_TILES          head dim / 32
 //    4 TAU                     selection threshold in standard deviations (fp32 bits)
 //    5 VARIANCE_EPSILON        added to the variance term before the sqrt (fp32 bits)
-//    6 (unused)                1 / number of non-padding K blocks is read at run time, see cb_geo
-//    7 GRID_X, 8 GRID_Y        core grid
-//    9 NUM_UNITS               total units of work
-//   10 UNITS_PER_SHARD         unit kind, see above
+//    6 GRID_X, 7 GRID_Y        core grid
+//    8 NUM_UNITS               total units of work
+//    9 UNITS_PER_SHARD         unit kind, see above
 
 #include <cstdint>
 
@@ -73,10 +72,10 @@ void kernel_main() {
     constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(3);
     constexpr uint32_t TAU = get_compile_time_arg_val(4);
     constexpr uint32_t VARIANCE_EPSILON = get_compile_time_arg_val(5);
-    constexpr uint32_t GRID_X = get_compile_time_arg_val(7);
-    constexpr uint32_t GRID_Y = get_compile_time_arg_val(8);
-    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(9);
-    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(10);  // 1: (head, shard); 0: (head, Q-block tile)
+    constexpr uint32_t GRID_X = get_compile_time_arg_val(6);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(7);
+    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(8);
+    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(9);  // 1: (head, shard); 0: (head, Q-block tile)
 
     constexpr uint32_t ALL_BLOCK_TILES = NUM_SHARDS * SHARD_BLOCK_TILES;
     // Pooled-K block tiles a unit reads: its own shard's, or every shard's.

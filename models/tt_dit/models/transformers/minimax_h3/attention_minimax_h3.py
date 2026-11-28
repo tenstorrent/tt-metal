@@ -319,23 +319,23 @@ class MiniMaxH3Attention(Module):
         request: tuple[int, int, int] | None,
         *,
         tau: float = 1.0,
-        constants: SolRouteConstants | None = None,
+        constants: SolRouteConstants | None,
         pooled: bool = True,
     ) -> None:
         """Route this request's ring attention through Sol-Attn, or (None) through the dense ring op.
 
         `request` is (rows per device, logical_n, sink_tokens): the padded per-device length the forward will see,
         the logical packed length and the length of the always-dense prefix (text and audio rows in front of the
-        video). `constants` is the transformer's shared set for that padded length, already set to the request (None:
-        the pre-pass keeps its own). Each padded length keeps its pre-pass, and the packed length reaches the
-        programs as data, so a captured trace stays valid across requests; only a new tau rebuilds the pre-passes,
-        and the caller releases its traces for that. `pooled=False` runs the kept blocks only, without the pooled
-        K/V correction (another program of the sparse op: the caller releases its traces for that too).
+        video). `constants` is the transformer's shared set for that padded length, already set to the request (None
+        with no request). Each padded length keeps its pre-pass, and the packed length reaches the programs as data,
+        so a captured trace stays valid across requests; only a new tau rebuilds the pre-passes, and the caller
+        releases its traces for that. `pooled=False` runs the kept blocks only, without the pooled K/V correction
+        (another program of the sparse op: the caller releases its traces for that too).
         """
         if request is None or not self.use_ring or self.dynamic_length:
             self._sol["on"] = False
             return
-        rows, logical_n, sink_tokens = request
+        rows, logical_n, _ = request
         held = self._sol["prepass"]
         if any(prepass.tau != float(tau) for prepass in held.values()):
             for prepass in held.values():
@@ -349,7 +349,7 @@ class MiniMaxH3Attention(Module):
                 tau=tau,
             )
         geo = SolGeometry(shards=self.parallel_config.sequence_parallel.factor, rows=rows, logical_n=logical_n)
-        held[rows].prepare(geo, sink_tokens, self.sdpa_scale, constants)
+        held[rows].prepare(geo, self.sdpa_scale, constants)
         self._sol["pooled"] = pooled
         self._sol["on"] = True
 
