@@ -20,6 +20,7 @@ from models.demos.qwen25_vl.tt.common import (
     merge_vision_tokens,
     multimodal_rope_from_hf,
     preprocess_inputs_prefill,
+    reject_video_inputs,
     sample_host,
 )
 from models.demos.qwen25_vl.tt.generator import Generator
@@ -504,6 +505,7 @@ def test_demo(
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
+        reject_video_inputs(video_inputs)
         inputs = processor(
             text=text,
             images=image_inputs,

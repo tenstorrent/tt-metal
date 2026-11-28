@@ -12,6 +12,15 @@ import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 
+def reject_video_inputs(video_inputs):
+    """Raise if the processor was given videos: only image inputs reach the TT vision tower."""
+    if video_inputs:
+        raise ValueError(
+            "video inputs are not supported by the TT Qwen2.5-VL demo: only image inputs reach the vision tower, "
+            "so video placeholder tokens would be treated as text. Use image or text prompts."
+        )
+
+
 def get_hf_visual(model):
     """Return the HF vision tower.
 
@@ -32,6 +41,11 @@ def merge_vision_tokens(
     input_embeds are torch embedded text tokens
     image_embeds are torch embedded vision tokens
     """
+    video_token_id = getattr(hf_config, "video_token_id", None)
+    if video_token_id is not None and (input_ids == video_token_id).any():
+        raise ValueError(
+            "Video placeholder tokens found in input_ids, but video inputs are not supported by the TT Qwen2.5-VL demo"
+        )
     n_image_tokens = (input_ids == hf_config.image_token_id).sum().item()
     n_image_features = image_embeds.shape[0]
     if n_image_tokens != n_image_features:

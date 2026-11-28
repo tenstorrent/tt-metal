@@ -13,6 +13,24 @@ import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 
+def reject_video_inputs(video_inputs):
+    """Raise if the processor was given videos: only image inputs reach the TT vision tower."""
+    if video_inputs:
+        raise ValueError(
+            "video inputs are not supported by the TT Qwen3-VL demo: only image inputs reach the vision tower, "
+            "so video placeholder tokens would be treated as text. Use image or text prompts."
+        )
+
+
+def reject_video_placeholders(input_ids, hf_config):
+    """Raise if input_ids hold video placeholder tokens, which the merge functions would leave unmerged."""
+    video_token_id = getattr(hf_config, "video_token_id", None)
+    if video_token_id is not None and (input_ids == video_token_id).any():
+        raise ValueError(
+            "Video placeholder tokens found in input_ids, but video inputs are not supported by the TT Qwen3-VL demo"
+        )
+
+
 def get_hf_visual(model):
     """Return the HF vision tower.
 
@@ -34,6 +52,7 @@ def merge_vision_tokens(
     input_embeds are torch embedded text tokens
     image_embeds are torch embedded vision tokens
     """
+    reject_video_placeholders(input_ids, hf_config)
     n_image_tokens = (input_ids == hf_config.image_token_id).sum().item()
     n_image_features = image_embeds.shape[0]
     if n_image_tokens != n_image_features:
@@ -70,6 +89,7 @@ def merge_vision_tokens_ttnn(
     image_embeds are ttnn embedded vision tokens
     """
 
+    reject_video_placeholders(input_ids, hf_config)
     B, S, H = input_embeds.shape
     input_ids = input_ids.view(-1)
     mask_indices = torch.where(input_ids == hf_config.image_token_id)[0]
@@ -113,6 +133,7 @@ def merge_vision_tokens_single_user_ttnn(
     Returns:
         Tuple of (merged_embeds, deepstack_visual_embeds) both for single user
     """
+    reject_video_placeholders(input_ids, hf_config)
     S, H = input_embeds.shape
     input_ids_flat = input_ids.view(-1)
     mask_indices = torch.where(input_ids_flat == hf_config.image_token_id)[0]

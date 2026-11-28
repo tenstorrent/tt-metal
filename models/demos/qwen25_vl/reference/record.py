@@ -8,6 +8,7 @@ from transformers import AutoProcessor
 
 from models.demos.qwen25_vl.reference.instrument import instrument
 from models.demos.qwen25_vl.reference.model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
+from models.demos.qwen25_vl.tt.common import reject_video_inputs
 
 # Instrument the vision MLP
 Qwen2_5_VLMLP.forward = instrument("Qwen2_5_VLMLP")(Qwen2_5_VLMLP.forward)
@@ -41,6 +42,7 @@ messages = [
 # Process inputs
 text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 image_inputs, video_inputs = process_vision_info(messages)
+reject_video_inputs(video_inputs)
 inputs = processor(
     text=[text],
     images=image_inputs,
