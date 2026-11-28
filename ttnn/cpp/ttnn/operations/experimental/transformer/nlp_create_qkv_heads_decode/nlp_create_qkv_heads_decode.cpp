@@ -14,11 +14,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
     const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,
-    std::optional<std::array<Tensor, 3>>& /*optional_output_tensors*/,
+    std::optional<std::array<Tensor, 3>>& optional_output_tensors,
     const std::optional<const bool> overlap_qk_coregrid,
     const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& memory_config) {
+    // The op always allocates its three outputs; accepting caller tensors and returning new ones
+    // would silently ignore them.
+    TT_FATAL(
+        !optional_output_tensors.has_value(),
+        "nlp_create_qkv_heads_decode does not support preallocated output_tensors; omit output_tensors");
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     const bool overlap_qk_coregrid_val = input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true;
     // Check if input is on subcoregrids
