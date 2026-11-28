@@ -215,6 +215,15 @@ class TestVerdict(unittest.TestCase):
         dram = check("dram_status", WARN, "ch3", ip="gddr", parts=[CHIP])
         self.assertIn("Repair: re-run", verdict_lines(report(phase("snapshot", dram)))[2])
 
+    def test_a_test_that_did_not_run_names_no_fault_or_part(self):
+        for status in (FAIL, WARN):
+            c = check("gddr_full", status, "not run: skipped: no DRAM filter=x passed=0 failed=0 skipped=1", ip="gddr")
+            lines = verdict_lines(report(phase("tests", c)))
+            fault = (
+                f"Fault 1: {status} gddr_full: not run: skipped: no DRAM filter=x passed=0 failed=0 skipped=1 | host"
+            )
+            self.assertEqual(lines[:2], [fault, "  Repair: see the check's details and its log"])
+
     def test_one_chip_below_the_raised_vdd_min_still_gets_the_raise(self):
         c = check("busbar_numeric", data={"vdd_min_mv": {CHIP: 760, "0000:c3:00.0 (UBB3/U3)": 700}}, parts=[CHIP])
         self.assertIn("F19", verdict_lines(report(phase("busbar", c)))[0])

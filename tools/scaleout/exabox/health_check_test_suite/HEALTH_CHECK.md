@@ -149,10 +149,10 @@ removed, and under fast dispatch each eth test skips itself and exits 0. Gtests
 get the single-Galaxy `TT_MESH_GRAPH_DESC_PATH` unless set: without it every test skips.
 
 A gtest check passes only if at least one of its test cases passed, as a pytest
-check does. A gtest run whose tests all skipped is a FAIL; one that passed and failed
-nothing otherwise (no match, suite setup or conftest failed) is a WARN `not run: <reason>`
-with the counts. A test
-that started and never ended counts as failed.
+check does. A run that passed and failed nothing (no match, all skipped, suite
+setup or conftest failed) is `not run: <reason>` with the counts: a WARN, but a FAIL
+for a gtest run whose tests all skipped. The verdict names no fault or part for it.
+A test that started and never ended counts as failed.
 
 `weekly`/`full` add `eth_data_integrity` (DRAM data sent over every link, compared
 on the far side) and `noc_integrity` (the same over each chip's NOC). `pcie_read` /

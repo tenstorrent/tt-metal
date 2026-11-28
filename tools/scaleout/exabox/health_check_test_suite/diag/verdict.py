@@ -234,7 +234,7 @@ ROWS: dict[str, Row] = {
     "F29": Row("NOC data errors", _tests(NOC_INTEGRITY), "CHIP/BOARD", _BOARD),
 }
 
-# Known faults with no row: why. Such a failure gets its IP block's repair (DO_BY_IP).
+# Known fault ids with no row of their own, and why.
 NOT_DETECTED = {
     "F12": "in-box Ethernet link hang under load: not detected yet",
     "F15": "Ethernet core open timeout while the QSFP peer is down: not detected yet",
@@ -259,7 +259,10 @@ def _named(names: tuple[str, ...], name: str) -> bool:
 
 
 def row_of(check: dict) -> tuple[str, Row | None]:
-    """(id, row) of the fault a WARN/FAIL check reports, else ("", None); rows with a test go first."""
+    """(id, row) of the fault a WARN/FAIL check reports, else ("", None); rows with a test go first.
+    A test that did not run reports no fault."""
+    if check.get("details", "").startswith("not run:"):
+        return "", None
     for tested in (True, False):
         for rid, row in ROWS.items():
             if (row.when is not None) == tested and _named(row.checks, check["name"]):
@@ -282,7 +285,8 @@ def attribute_power(report: dict, causes: dict[int, TrayCause]) -> None:
 
 def _repair(check: dict, row: Row | None) -> str:
     """The repair, with 'that tray' made the tray when every chip at fault is on one."""
-    do = row.do if row else DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
+    not_run = check.get("details", "").startswith("not run:")
+    do = row.do if row else DEFAULT_DO if not_run else DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
     trays = _trays(check)
     return do.replace("that tray", f"UBB{next(iter(trays))}") if len(trays) == 1 else do
 

@@ -88,7 +88,7 @@ class TestGtestGrading(unittest.TestCase):
         # gtest exits 0, having tested nothing.
         with mock.patch.dict(TESTS, {"eth_link_up": {"filter": "*TensixDeploymentEthernet*LinkUp", "ip": "eth"}}):
             check = self.run_fake(["eth_link_up"])["eth_link_up"]
-        self.assertEqual((check.status, check.ip, check.parts), (FAIL, "other", []))
+        self.assertEqual((check.status, check.parts), (FAIL, []))
         self.assertTrue(check.details.startswith("not run: skipped: fast dispatch to active ethernet"), check.details)
         self.assertIn("passed=0 failed=0 skipped=1", check.details)
 
