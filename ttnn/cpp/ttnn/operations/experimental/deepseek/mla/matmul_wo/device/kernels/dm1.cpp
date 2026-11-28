@@ -28,17 +28,13 @@ void kernel_main() {
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out_id = tt::CBIndex::c_2;
     constexpr auto cb_s2c_in2_id = tt::CBIndex::c_3;
 
     CircularBuffer cb_c2w_out(cb_c2w_out_id);
     CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
 
-    // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
-    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w_id);
+    // Tile size
     constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out_id);
 
     // Constants for the kernel
