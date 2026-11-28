@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import math
 import os
 from typing import NamedTuple
@@ -482,10 +483,15 @@ _BH_GALAXY_MIN_DEVICES = 32
 _BH_GALAXY_MAX_CORE_GRID = (11, 10)
 
 
+@functools.cache
+def _is_blackhole() -> bool:
+    return ttnn.device.is_blackhole()
+
+
 def get_matmul_core_grid(mesh_device):
     """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
     core_grid = mesh_device.compute_with_storage_grid_size()
-    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
+    if _is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
         core_grid = ttnn.CoreCoord(
             min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
             min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
@@ -602,6 +608,13 @@ grid_12_8_configs = {
     (128, 6144, 768): (4, 12, 4, (2, 2)),  # 87.4 µs, −2.2% vs 12×9 — attn to_out prompt
 }
 
+# Swept at one exact per-device shape, matched only at that shape (no nearest / same-M-per-core borrowing), and winning
+# over every other resolution, an explicit core_grid included; every other shape resolves as before.
+# all_gather_minimal_matmul_async: (M, K, N, cluster_size) -> ((grid_x, grid_y), blocking, num_buffers_per_channel)
+agmm_shape_configs: dict[tuple[int, int, int, int], tuple] = {}
+# minimal_matmul: (M, K, N, grid_x, grid_y) -> blocking
+matmul_shape_configs: dict[tuple[int, int, int, int, int], tuple] = {}
+
 _grid_config_lookup = {
     (8, 8): grid_88_configs,
     (8, 9): grid_89_configs,
@@ -665,6 +678,14 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
+def _copy_matmul_config(config, **changes):
+    fields = ("M_block_size", "K_block_size", "N_block_size", "subblock_h", "subblock_w")
+    return ttnn.MinimalMatmulConfig(
+        **{f: changes.get(f, getattr(config, f)) for f in fields},
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
+
+
 def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
     """Get the matmul config for the given shape and core grid.
 
@@ -685,6 +706,14 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     Returns:
         The matmul config.
     """
+    if default_block_size is not None:
+        default_block_size = tuple(default_block_size)
+    config = _resolve_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic, num_k_shards)
+    return _copy_matmul_config(config)
+
+
+@functools.cache
+def _resolve_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic, num_k_shards):
     # Default to 8x8x8 with subblock 2x2 when unknown
     subblock_h = 2
     subblock_w = 2
@@ -697,7 +726,9 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
-    if grid_dict is not None:
+    if (M, K, N, grid_x, grid_y) in matmul_shape_configs:
+        config_tuple = matmul_shape_configs[(M, K, N, grid_x, grid_y)]
+    elif grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
         if config_tuple is None:
             near = _same_m_per_core_match(grid_dict, M, K, N, grid_x)
@@ -790,17 +821,15 @@ def _ring_safe_k_block(config, M, K, N, cluster_size):
             f"shape with sweep_mm_block_sizes.py and add a table entry to replace this."
         )
         _logged_ring_safe_k_block_signatures.add(signature)
-    return ttnn.MinimalMatmulConfig(
-        M_block_size=config.M_block_size,
-        K_block_size=safe,
-        N_block_size=config.N_block_size,
-        subblock_h=config.subblock_h,
-        subblock_w=config.subblock_w,
-        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
-    )
+    return _copy_matmul_config(config, K_block_size=safe)
 
 
 _logged_agmm_v3_signatures = set()
+
+
+def agmm_shape_buffers(M, K, N, cluster_size) -> int | None:
+    entry = agmm_shape_configs.get((M, K, N, cluster_size))
+    return entry[2] if entry else None
 
 
 def get_agmm_config(
@@ -821,6 +850,8 @@ def get_agmm_config(
     `all_gather_minimal_matmul_async`.
 
     Precedence -- anything measured or explicit wins, bit-for-bit identical to the legacy path:
+      0. An exact-shape entry (`agmm_shape_configs`, keyed `(M, K, N, cluster_size)`): it overrides an
+         explicit `core_grid` too.
       1. An explicit `core_grid` or `default_block_size` from the caller.
       2. A swept `(M, K, N)` table entry for the legacy grid (`_grid_config_lookup`, i.e.
          `grid_12_9_configs` and entries added via `register_matmul_configs`).
@@ -839,9 +870,58 @@ def get_agmm_config(
     `sweep_mm_block_sizes.py` and paste the winner into `grid_12_9_configs` (or a model table)
     to override the rules permanently.
     """
+    if default_block_size is not None:
+        default_block_size = tuple(default_block_size)
+    grid, config, workers = _resolve_agmm_config(
+        M,
+        K,
+        N,
+        full_grid,
+        cluster_size,
+        num_links,
+        core_grid,
+        default_block_size,
+        use_heuristic,
+        fuse_swiglu,
+        use_addcmul,
+        force_transpose,
+    )
+    return ttnn.CoreCoord(grid.x, grid.y), _copy_matmul_config(config), workers
+
+
+@functools.cache
+def _resolve_agmm_config(
+    M,
+    K,
+    N,
+    full_grid,
+    cluster_size,
+    num_links,
+    core_grid,
+    default_block_size,
+    use_heuristic,
+    fuse_swiglu,
+    use_addcmul,
+    force_transpose,
+):
     # The op transposes when the caller forces it or the output is wide, and places its in0 muxes
     # on the axis the worker grid leaves free -- reserve a row when transposed, a column when not.
     transpose_core_grid = force_transpose or M > N
+    if (M, K, N, cluster_size) in agmm_shape_configs:
+        (grid_x, grid_y), (m_blk, k_blk, n_blk, (sub_h, sub_w)), _ = agmm_shape_configs[(M, K, N, cluster_size)]
+        config = ttnn.MinimalMatmulConfig(
+            M_block_size=m_blk,
+            K_block_size=k_blk,
+            N_block_size=n_blk,
+            subblock_h=sub_h,
+            subblock_w=sub_w,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        )
+        return (
+            config.compute_with_storage_grid_size,
+            config,
+            math.ceil((grid_x if transpose_core_grid else grid_y) / num_links),
+        )
     legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not); split it into
     # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
@@ -851,7 +931,7 @@ def get_agmm_config(
     m_cores = legacy_grid.x if transpose_core_grid else legacy_grid.y
     table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
-        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        config = _resolve_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic, -1)
         return legacy_grid, config, legacy_workers
 
     v3 = None
@@ -868,7 +948,7 @@ def get_agmm_config(
             use_addcmul=use_addcmul,
         )
     if v3 is None:
-        config = get_matmul_config(M, K, N, legacy_grid)  # legacy warned generic fallback
+        config = _resolve_matmul_config(M, K, N, legacy_grid, None, False, -1)  # legacy warned generic fallback
         config = _ring_safe_k_block(config, M, K, N, cluster_size)
         return legacy_grid, config, legacy_workers
 
@@ -1130,6 +1210,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     return config.get_params(device_core_grid, num_links, M=M)
 
 
+@functools.cache
 def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
     """Precedences 1 and 2 of `get_fused_mmrs_config` -- a swept table entry, then the rule engine.
 
@@ -1180,6 +1261,19 @@ def resolves_fused_mmrs_config(M, K, N, device_core_grid) -> bool:
     return _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=False) is not None
 
 
+def _clear_config_caches() -> None:
+    for resolve in (_resolve_matmul_config, _resolve_agmm_config, _resolve_fused_mmrs_config):
+        resolve.cache_clear()
+
+
+def register_shape_configs(agmm: dict | None = None, matmul: dict | None = None) -> None:
+    """Register exact-shape entries: `agmm_shape_configs` (all-gather matmul) and `matmul_shape_configs`
+    (minimal_matmul)."""
+    agmm_shape_configs.update(agmm or {})
+    matmul_shape_configs.update(matmul or {})
+    _clear_config_caches()
+
+
 def register_matmul_configs(configs: dict) -> None:
     """Register additional matmul block-size configs from external models.
 
@@ -1213,6 +1307,7 @@ def register_matmul_configs(configs: dict) -> None:
             msg = f"Unknown grid key {grid_key!r}, expected one of {list(grid_map)}"
             raise ValueError(msg)
         target.update(entries)
+    _clear_config_caches()
 
 
 def register_fused_mmrs_configs(configs: dict) -> None:
@@ -1234,6 +1329,7 @@ def register_fused_mmrs_configs(configs: dict) -> None:
     """
     for core_grid, entries in configs.items():
         fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
+    _clear_config_caches()
 
 
 # ===================================================================== Fabric-bound all-gather-matmul

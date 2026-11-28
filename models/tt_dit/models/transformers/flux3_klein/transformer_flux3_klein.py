@@ -19,7 +19,15 @@ from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
-from ....utils.matmul import register_matmul_configs
+from ....utils.matmul import (
+    FusedMMRSConfig,
+    _compute_heuristic_blocking,
+    _same_m_per_core_match,
+    grid_12_9_configs,
+    register_fused_mmrs_configs,
+    register_matmul_configs,
+    register_shape_configs,
+)
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
 
@@ -67,24 +75,184 @@ STATE_PREFIXES = (
 )
 
 
+# proj_out at 4096x4096 (rows per device: no text / 1024 / 2048 text bucket): N block 8 = the core's whole 8 N tiles,
+# a 1x4 subblock and a 3-block L1 window (the K order is unchanged: bit-identical to 2x2 with the default window)
+PROJ_OUT_4096_CONFIG = FusedMMRSConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(12, 8),
+    M_block_size=6,
+    K_block_size=8,
+    N_block_size=8,
+    subblock_h=1,
+    subblock_w=4,
+    num_buffers_per_channel=None,
+    chunk_width_in_mm_blocks=1,
+    mm_window_blocks=3,
+)
+register_fused_mmrs_configs(
+    {ttnn.CoreCoord(12, 10): {(m, 3072, 3072): PROJ_OUT_4096_CONFIG for m in (8192, 8320, 8960)}}
+)
+
+
+DP4_MLP_ROWS = (
+    2048,
+    2304,
+    2560,
+    3072,
+    4096,
+    4352,
+    4608,
+    5120,
+    5376,
+    5632,
+    6144,
+    8448,
+    8704,
+    9216,
+    16384,
+    16640,
+    16896,
+    17408,
+    17920,
+    18432,
+    20736,
+    20992,
+    21504,
+)
+# SP8 x TP4 MLP shapes (M, 3072, N) whose heuristic blocking overflows L1 on the 12x9 worker grid of a Galaxy. M is the
+# single stage's rows per device: (image + reference bucket + text bucket) / 8, e.g. 4608 = 2048 output + a 4 MP
+# reference bucket + 4096 text rows, 10368 = 4096 output + a 4 MP reference bucket + 1024 text rows; the blockings
+# follow the neighbouring shapes
+SP8_MLP_BLOCKINGS = {
+    (2560, 3072, 4608): (4, 8, 16, (1, 4)),
+    (3072, 3072, 4608): (4, 8, 16, (1, 4)),
+    (4224, 3072, 2304): (4, 8, 8, (1, 4)),
+    (4224, 3072, 4608): (4, 8, 16, (1, 4)),
+    (4352, 3072, 2304): (4, 8, 8, (1, 4)),
+    (4352, 3072, 4608): (4, 8, 16, (1, 4)),
+    (4608, 3072, 2304): (4, 8, 8, (1, 4)),
+    (4608, 3072, 4608): (4, 8, 16, (1, 4)),
+    (8192, 3072, 2304): (11, 8, 8, (1, 4)),
+    (8192, 3072, 4608): (6, 8, 16, (1, 4)),
+    (8448, 3072, 2304): (8, 8, 8, (1, 4)),
+    (8448, 3072, 4608): (6, 8, 16, (1, 4)),
+    (8704, 3072, 2304): (8, 8, 8, (1, 4)),
+    (8704, 3072, 4608): (6, 8, 16, (1, 4)),
+    (9216, 3072, 2304): (8, 8, 8, (1, 4)),
+    (9216, 3072, 4608): (6, 8, 16, (1, 4)),
+    (10368, 3072, 2304): (8, 8, 8, (1, 4)),
+    (10368, 3072, 4608): (6, 8, 16, (1, 4)),
+    (10496, 3072, 2304): (8, 8, 8, (1, 4)),
+    (10496, 3072, 4608): (6, 8, 16, (1, 4)),
+    (10752, 3072, 2304): (8, 8, 8, (1, 4)),
+    (10752, 3072, 4608): (6, 8, 16, (1, 4)),
+}
+register_matmul_configs({"12x9": SP8_MLP_BLOCKINGS})
+# SP4 x TP2 (DP4 groups, (4, 2) submeshes): M_block 6 at the single-stage row counts of the served sizes, reference and
+# text buckets, and at the 4096 / 16384 image rows, where SP8 x TP4 has no entry of the same shape; N 4608 leaves the
+# rows 2048 / 2304 on the heuristic. Registered for SP4 x TP2 only (register_layout_shape_configs): DP4's QKV shares
+# N 4608 with SP8 x TP4's MLP-in.
+DP4_MLP_BLOCKINGS = {
+    (m, 3072, n): (6, 8, 16, (1, 4))
+    for m in DP4_MLP_ROWS
+    for n in (4608, 9216)
+    if (n == 9216 or m not in (2048, 2304)) and (m, 3072, n) not in SP8_MLP_BLOCKINGS
+}
+
+
+# Untabled (M, 3072, N) shapes whose heuristic blocking overflows L1 on the 12x9 grid: the 10-reference early stage
+# (image_cond alone, 40960 / 8 = 5120 rows at every output size) got 14x8x8, 2048 / 4096 + 2 references 9x8x16 /
+# 16x8x16. Block tiles M*K + K*N + M*N: 6x8x16 (272) runs, 14x8x8 (288) clashes. Past 272 the heuristic's
+# M_block is cut to the table's 240 (11x8x8, 4x8x16); every shape with an entry or within 272 keeps its blocking.
+L1_FIT_BLOCK_TILES = 272
+L1_CUT_BLOCK_TILES = 240
+
+
+def fitting_blocking(m: int, k: int, n: int) -> tuple | None:
+    mb, kb, nb, (_, sub_w) = _compute_heuristic_blocking(m, k, n, 12, 9)
+    if mb * kb + kb * nb + mb * nb <= L1_FIT_BLOCK_TILES:
+        return None
+    return (L1_CUT_BLOCK_TILES - kb * nb) // (kb + nb), kb, nb, (1, sub_w)
+
+
 register_matmul_configs(
     {
         "12x9": {
-            (2560, 3072, 4608): (4, 8, 16, (1, 4)),
-            (3072, 3072, 4608): (4, 8, 16, (1, 4)),
-            (4608, 3072, 2304): (4, 8, 8, (1, 4)),
-            (4608, 3072, 4608): (4, 8, 16, (1, 4)),
-            (8192, 3072, 2304): (11, 8, 8, (1, 4)),
-            (8192, 3072, 4608): (6, 8, 16, (1, 4)),
-            (8704, 3072, 2304): (8, 8, 8, (1, 4)),
-            (8704, 3072, 4608): (6, 8, 16, (1, 4)),
-            (9216, 3072, 2304): (8, 8, 8, (1, 4)),
-            (9216, 3072, 4608): (6, 8, 16, (1, 4)),
-            (10752, 3072, 2304): (8, 8, 8, (1, 4)),
-            (10752, 3072, 4608): (6, 8, 16, (1, 4)),
+            (m, 3072, n): blocking
+            for m in range(128, 32768 + 1, 128)
+            for n in (2304, 4608, 9216)
+            if (m, 3072, n) not in grid_12_9_configs
+            and _same_m_per_core_match(grid_12_9_configs, m, 3072, n, 12) is None
+            and (blocking := fitting_blocking(m, 3072, n)) is not None
         }
     }
 )
+# SP8 x TP4 only (keyed by TP, so the transformer registers them for that layout): all-gather matmul configs swept at
+# the exact per-device shape, same output as today's config (same K block). QKV (N 2304) and MLP-in (N 4608) at the
+# text, reference and image rows of 1024 / 2048 / 4096, mostly 10 of the 12 M cores with N block 8 on QKV, and linear1
+# (N 6912) at 13440 rows.
+SP8_AGMM_SHAPE_CONFIGS = {
+    (128, 3072, 2304, 4): ((12, 9), (1, 8, 8, (1, 2)), 16),
+    (512, 3072, 2304, 4): ((10, 9), (2, 8, 8, (2, 1)), 24),
+    (640, 3072, 2304, 4): ((12, 8), (2, 8, 9, (2, 1)), 8),
+    (2048, 3072, 2304, 4): ((10, 9), (7, 8, 8, (1, 2)), 24),
+    (2176, 3072, 2304, 4): ((10, 9), (7, 8, 8, (1, 4)), 8),
+    (2688, 3072, 2304, 4): ((10, 9), (6, 8, 8, (1, 4)), 8),
+    (2688, 3072, 4608, 4): ((12, 9), (7, 8, 16, (1, 4)), 16),
+    (3200, 3072, 2304, 4): ((10, 9), (5, 8, 8, (1, 2)), 16),
+    (3200, 3072, 4608, 4): ((10, 9), (5, 8, 16, (1, 4)), 24),
+    (4224, 3072, 2304, 4): ((10, 9), (7, 8, 8, (1, 4)), 16),
+    (4224, 3072, 4608, 4): ((12, 9), (6, 8, 16, (1, 4)), 16),
+    (5120, 3072, 2304, 4): ((10, 9), (6, 8, 8, (2, 1)), 16),
+    (5760, 3072, 2304, 4): ((10, 9), (6, 8, 8, (1, 4)), 24),
+    (5760, 3072, 4608, 4): ((12, 9), (5, 8, 16, (1, 4)), 24),
+    (13440, 3072, 6912, 4): ((12, 9), (6, 8, 8, (1, 4)), 24),
+}
+
+
+# SP4 x TP2 only (the keys hold the TP size or the grid, not the layout, so the transformer registers them for DP4
+# groups): swept at the exact shape, same output as today's config (same K block). QKV (N 4608) and MLP-in (N 9216) at
+# the text, reference and single-stage rows of 1024 / 2048 with 0-10 references and 4096 with 1-4, mostly N block 8 on
+# the narrow rows (10 or 11 of the 12 M cores) and M block 6 or 7 where the L1 cut gave 4; proj_out's matmul (K 6144)
+# a larger M block.
+DP4_AGMM_SHAPE_CONFIGS = {
+    (256, 3072, 4608, 2): ((10, 9), (1, 8, 8, (1, 4)), 24),
+    (256, 3072, 9216, 2): ((10, 9), (1, 8, 8, (1, 4)), 8),
+    (512, 3072, 4608, 2): ((10, 9), (2, 8, 8, (1, 4)), 24),
+    (512, 3072, 9216, 2): ((10, 9), (2, 8, 8, (1, 4)), 24),
+    (1024, 3072, 4608, 2): ((12, 9), (3, 8, 8, (1, 4)), 24),
+    (1024, 3072, 9216, 2): ((11, 9), (3, 8, 8, (1, 2)), 16),
+    (1280, 3072, 4608, 2): ((10, 9), (4, 8, 8, (1, 2)), 8),
+    (1280, 3072, 9216, 2): ((10, 9), (4, 8, 8, (4, 1)), 24),
+    (2048, 3072, 9216, 2): ((11, 9), (6, 8, 16, (1, 4)), 24),
+    (3328, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 2)), 24),
+    (3328, 3072, 9216, 2): ((11, 9), (5, 8, 16, (1, 4)), 24),
+    (4352, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+    (5376, 3072, 9216, 2): ((12, 9), (7, 8, 16, (1, 4)), 8),
+    (6400, 3072, 4608, 2): ((10, 9), (5, 8, 16, (1, 4)), 16),
+    (6400, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 2)), 8),
+    (10240, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 4)), 16),
+    (11520, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+    (11520, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 4)), 8),
+    (14592, 3072, 4608, 2): ((11, 9), (6, 8, 16, (2, 2)), 24),
+    (14592, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+}
+DP4_MATMUL_SHAPE_CONFIGS = {
+    (2048, 6144, 3072, 12, 10): (4, 8, 8, (4, 1)),
+    (3328, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+    (4096, 6144, 3072, 12, 10): (6, 8, 8, (1, 4)),
+    (4352, 6144, 3072, 12, 10): (6, 8, 8, (2, 2)),
+    (6400, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+    (10240, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+    (18688, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+}
+
+
+def register_layout_shape_configs(sp_factor: int, tp_factor: int) -> None:
+    if (sp_factor, tp_factor) == (8, 4):
+        register_shape_configs(agmm=SP8_AGMM_SHAPE_CONFIGS)
+    elif (sp_factor, tp_factor) == (4, 2):
+        register_matmul_configs({"12x9": DP4_MLP_BLOCKINGS})
+        register_shape_configs(agmm=DP4_AGMM_SHAPE_CONFIGS, matmul=DP4_MATMUL_SHAPE_CONFIGS)
 
 
 @dataclass(frozen=True)
@@ -287,17 +455,27 @@ class Flux3KleinEarlyStacks(Module):
     """The per-mode blocks that run before the modes are joined."""
 
     def __init__(
-        self, *, device: ttnn.MeshDevice, ccl_manager: CCLManager, parallel_config: DiTParallelConfig, is_fsdp: bool
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        linear1: bool,
     ) -> None:
         super().__init__()
-        self._ring = ccl_manager.topology == ttnn.Topology.Ring
+        self._ring = ccl_manager.axis_topology(parallel_config.tensor_parallel.mesh_axis) == ttnn.Topology.Ring
         for mode in MODES:
             setattr(
                 self,
                 mode,
                 ModuleList(
                     Flux3KleinTransformerBlock(
-                        device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                        device=device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                        is_fsdp=is_fsdp,
+                        linear1=linear1,
                     )
                     for _ in range(EARLY_DEPTH)
                 ),
@@ -365,11 +543,13 @@ class Flux3KleinTransformer(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        linear1: bool = False,
     ) -> None:
         super().__init__()
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         self.flow_map = flow_map
         self.sp_factor = parallel_config.sequence_parallel.factor
+        register_layout_shape_configs(self.sp_factor, parallel_config.tensor_parallel.factor)
         self._device = device
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
@@ -388,11 +568,15 @@ class Flux3KleinTransformer(Module):
             flow_map=flow_map, device=device, ccl_manager=ccl_manager, parallel_config=parallel_config
         )
         self.early = Flux3KleinEarlyStacks(
-            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp, linear1=linear1
         )
         self.single_blocks = ModuleList(
             Flux3KleinTransformerBlock(
-                device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                device=device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+                linear1=linear1,
             )
             for _ in range(SINGLE_DEPTH)
         )
@@ -431,6 +615,14 @@ class Flux3KleinTransformer(Module):
         buffer = self._logical_n[sample][stage]
         ttnn.copy_host_to_device_tensor(self._logical_n_tensor(n, on_host=True), buffer)
         return buffer
+
+    def write_logical_n(self, plan: Flux3KleinPlan, *, sample: int) -> None:
+        """Write ``plan``'s attended lengths into the logical_n buffers it refers to. A plan reused across requests
+        keeps the buffers, not their values: another request with other lengths may have written them since."""
+        layout = plan.layout
+        for mode in plan.early_logical_n:
+            self._write_logical_n(sample, mode, layout.attended(mode))
+        self._write_logical_n(sample, "single", layout.attended())
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in STATE_PREFIXES:

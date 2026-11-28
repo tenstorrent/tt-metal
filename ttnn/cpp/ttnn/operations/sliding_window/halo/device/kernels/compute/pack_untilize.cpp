@@ -15,6 +15,9 @@
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#ifdef PROLOGUE_AFFINE
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_affine_helpers.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
@@ -26,6 +29,16 @@ void kernel_main() {
     const uint32_t total_blocks = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
+#ifdef PROLOGUE_AFFINE
+    compute_kernel_lib::untilize_affine_silu<
+        tiles_per_row,
+        block_size,
+        src_cb_id,
+        get_compile_time_arg_val(5),
+        get_compile_time_arg_val(6),
+        out_cb_id0,
+        out_cb_id1>(total_blocks);
+#else
 
     // Initialize once before the loop
     compute_kernel_lib::untilize_init<tiles_per_row, src_cb_id, out_cb_id0>();
@@ -53,4 +66,5 @@ void kernel_main() {
 
     // Uninit after loop
     compute_kernel_lib::untilize_uninit<tiles_per_row, src_cb_id, out_cb_id0>();
+#endif
 }

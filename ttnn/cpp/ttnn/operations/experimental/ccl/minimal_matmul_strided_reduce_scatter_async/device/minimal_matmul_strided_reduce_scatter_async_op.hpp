@@ -35,7 +35,7 @@ struct MinimalMatmulStridedReduceScatterAsync {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t = std::variant<MinimalMatmulStridedReduceScatterAsyncProgramFactory>;
+    using program_factory_t = std::variant<MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

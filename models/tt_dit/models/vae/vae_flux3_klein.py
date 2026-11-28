@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder H-partitioned over one mesh
-axis and tensor-parallel over the other, Flux2VaeEncoder tensor-parallel and replicated. One instance of each
-serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set per instance."""
+"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder splits the image's rows over one
+mesh axis and its columns over the other, Flux2VaeEncoder is tensor-parallel and replicated on fixed reference
+canvases (canvas_flux3_klein) and also splits the rows of the 1 MP square canvas over the decoder's row axis. One
+instance of each serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set
+per instance."""
 
 from __future__ import annotations
 
@@ -16,10 +18,12 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import configure_conv2d
+from ...layers.conv2d import Conv2dBlocking, configure_conv2d
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
+from .canvas_flux3_klein import CanvasMasks, CanvasVaeEncoder, canvas_for
+from .vae import set_halo_fusion
 from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 
 SUBFOLDER = "vae"
@@ -27,6 +31,9 @@ VAE_WEIGHTS = "diffusion_pytorch_model.safetensors"
 SCALE = 8
 PATCH = 2
 LATENT_CHANNELS = 128
+# A reference that fills the 1 MP square canvas (the served square reference, every square multi-reference canvas)
+# runs the plain encoder with its rows split over h_axis: 0.063-0.067 s per reference, 0.26 s TP alone
+FULL_CANVAS = (1024, 1024)
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
 Z_CHANNELS = 32
 
@@ -44,8 +51,8 @@ PARTITIONED_DECODER_CONVS_PER_LEVEL = (
 )
 
 
-def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int], int]:
-    """The decoder's conv slice table for square outputs of each size (the H-partitioned convs: 0, ttnn picks)."""
+def decoder_slice_params(sizes, h_factor: int, w_factor: int = 1) -> dict[tuple[int, int, int, int], int]:
+    """The decoder's conv slice table for square outputs of each size (the partitioned convs: 0, ttnn picks)."""
     table = {}
     for size in sizes:
         h = w = size
@@ -53,14 +60,55 @@ def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int]
             for (cin, cout), slices in level.items():
                 table.setdefault((h, w, cin, cout), min(slices, max(1, ttnn.core.divup(w, 32))))
             if h_factor > 1:
+                local_w = w // w_factor + 2 if w_factor > 1 else w
                 for cin, cout in partitioned:
-                    table.setdefault((h // h_factor + 2, w, cin, cout), 0)
+                    table.setdefault((h // h_factor + 2, local_w, cin, cout), 0)
             h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
     return table
 
 
-# Larger encoder GroupNorm blocks (e.g. 95 rows for a 1600x912 reference) collide with the pipeline's resident L1.
-GROUP_NORM_MAX_BLOCK_ROWS = 64
+# Decode sizes from which the 3 x 3 convs take their border from a boundary exchange in the halo and norm2 comes from
+# conv1's epilogue statistics (4096 decode -0.038 s; no gain at 1024 / 2048), on the mesh shapes it is
+# measured on (other shapes, e.g. a 4 x 4 half, clash its static circular buffers with L1)
+HALO_FUSION_MIN_SIZE = 4096
+HALO_FUSION_MESH_SHAPES = ((4, 8),)
+# Full-K weights plus the activation block a core can hold next to the resident DiT (the largest that fit: 1.33 MB)
+CONV_FULL_K_L1_BYTES = 1_350_000
+# Decoder convs whose double-buffered program clashes with the resident DiT's L1 (1024 x 1024, level 0)
+DECODER_SINGLE_BUFFER_CONVS = frozenset({(130, 258, 256, 128)})
+# Per-device input pixels from which a conv whose full-K weights do not fit runs as output-channel slices that do
+OUT_CHANNEL_SPLIT_MIN_PIXELS = 100_000
+# Encoder conv slices per mesh shape; ttnn picks the rest. These sit at its L1 threshold: 3 slices before the first
+# render, 4 after (1 KB less L1 free), which compiled new programs on the second 2816x1536 encode
+ENCODER_SLICE_PARAMS = {(4, 8): {(353, 1408, 256, 256): 4, (354, 1408, 256, 256): 4}}
+
+
+def _full_k_fits(cin: int, cout: int) -> bool:
+    return 2 * 9 * cin * (cout + 64) <= CONV_FULL_K_L1_BYTES
+
+
+def _out_channel_splits(cin: int, cout: int) -> int:
+    return next((n for n in (2, 4, 8, 16) if cout % n == 0 and cout // n >= 32 and _full_k_fits(cin, cout // n)), 1)
+
+
+def decoder_conv_blocking(slice_table) -> dict[tuple[int, int, int, int], Conv2dBlocking]:
+    """64 activation rows per core with double-buffered activations and weights; the full inner dimension and
+    height-sharded activations where a 3 x 3 conv's full-K weights fit in L1. Where they do not, large inputs run as
+    output-channel slices whose weights fit, small ones block-shard."""
+    table = {}
+    for key in slice_table:
+        h, w, cin, cout = key
+        fits = _full_k_fits(cin, cout)
+        splits = 1 if fits or h * w < OUT_CHANNEL_SPLIT_MIN_PIXELS else _out_channel_splits(cin, cout)
+        full_k = fits or splits > 1
+        table[key] = Conv2dBlocking(
+            act_block_h_override=64,
+            double_buffer=key not in DECODER_SINGLE_BUFFER_CONVS,
+            full_inner_dim=full_k,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if full_k else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            out_channel_splits=splits,
+        )
+    return table
 
 
 class Flux3KleinVae:
@@ -81,7 +129,8 @@ class Flux3KleinVae:
         self._ccl = ccl_manager
         self._dit_ccl = dit_ccl_manager
         self._dit_sp_axis = dit_sp_axis
-        self._h_axis = h_axis
+        self.h_axis = h_axis
+        self.w_axis = tp_axis
         model_name = f"flux3_klein_vae_{cache.checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         mesh_shape = tuple(device.shape)
         common = {
@@ -113,63 +162,100 @@ class Flux3KleinVae:
             )
             return module
 
-        decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+        decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=None, h_axis=h_axis, w_axis=tp_axis)
         self._decoder = Flux2VaeDecoder(
-            parallel_config=decoder_parallel, use_conv3d=False, local_query_attention=True, **common
+            parallel_config=decoder_parallel, use_conv3d=False, group_norm_2d=True, local_attention=True, **common
         )
+        slice_table = decoder_slice_params(sizes, int(device.shape[h_axis]), int(device.shape[tp_axis]))
         configure_conv2d(
-            self._decoder, slice_params={mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]))}
+            self._decoder, slice_params={mesh_shape: slice_table}, shape_blocking=decoder_conv_blocking(slice_table)
         )
         load(self._decoder, decoder_parallel, SUBFOLDER)
+        self._halo_fusion = False
+        self._halo_fusion_mesh = mesh_shape in HALO_FUSION_MESH_SHAPES
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
-        self._encoder = Flux2VaeEncoder(
-            parallel_config=encoder_parallel, group_norm_max_block_rows=GROUP_NORM_MAX_BLOCK_ROWS, **common
-        )
-        # ttnn picks the encoder's conv slicing (a reference can have any 16-px shape), not the shared table
-        configure_conv2d(self._encoder, slice_params={mesh_shape: {}}, replace=True)
-        load(self._encoder, encoder_parallel, "vae_encoder_main")
+        self._encoder = CanvasVaeEncoder(parallel_config=encoder_parallel, **common)
+        encoder_slices = ENCODER_SLICE_PARAMS.get(mesh_shape, {})
+        configure_conv2d(self._encoder, slice_params={mesh_shape: encoder_slices}, replace=True)
+        load(self._encoder, encoder_parallel, "vae_encoder_canvas")
+        full_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+        self._full_encoder = Flux2VaeEncoder(parallel_config=full_parallel, **common)
+        configure_conv2d(self._full_encoder, slice_params={mesh_shape: {}}, replace=True)
+        load(self._full_encoder, full_parallel, "vae_encoder_full")
 
         state = state_dict()
         self._bn_mean = state["bn.running_mean"].float()
         self._bn_std = torch.sqrt(state["bn.running_var"].float() + torch_vae.config.batch_norm_eps)
 
-    def decode(self, state: ttnn.Tensor, *, size: int) -> ttnn.Tensor:
-        """Decode the SP-sharded fp32 latent state of a size x size image to a replicated [1, size, size, 3] image."""
+    def decode(self, state: ttnn.Tensor | list[ttnn.Tensor], *, size: int) -> ttnn.Tensor:
+        """Decode the SP-sharded fp32 latent state of a size x size image, or a list of them as one batch, to
+        [n, size, size, 3] images with their rows sharded over `h_axis` and their columns over `w_axis`."""
         h = w = size // (SCALE * PATCH)
         decoder = self._decoder
 
-        z = ttnn.typecast(state, ttnn.bfloat16)
-        gathered = self._dit_ccl.all_gather(z, dim=1, mesh_axis=self._dit_sp_axis, use_hyperparams=True)
-        ttnn.deallocate(z)
-        rows = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(gathered)
-        if rows.shape[1] != h * w:
-            sliced = ttnn.slice(rows, [0, 0, 0], [1, h * w, LATENT_CHANNELS])
-            ttnn.deallocate(rows)
-            rows = sliced
-        parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self._h_axis, memory_config=rows.memory_config())
+        halo_fusion = self._halo_fusion_mesh and size >= HALO_FUSION_MIN_SIZE
+        if halo_fusion and isinstance(state, list) and len(state) > 1:
+            raise ValueError("a batched decode needs per-image norms: conv1's epilogue statistics span the batch")
+        latents = []
+        for s in state if isinstance(state, list) else [state]:
+            z = ttnn.typecast(s, ttnn.bfloat16)
+            gathered = self._dit_ccl.all_gather(z, dim=1, mesh_axis=self._dit_sp_axis, use_hyperparams=True)
+            ttnn.deallocate(z)
+            rows = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(gathered)
+            if rows.shape[1] != h * w:
+                sliced = ttnn.slice(rows, [0, 0, 0], [1, h * w, LATENT_CHANNELS])
+                ttnn.deallocate(rows)
+                rows = sliced
+            latents.append(rows)
+        rows = latents[0]
+        if len(latents) > 1:
+            rows = ttnn.concat(latents, dim=0)
+            for latent in latents:
+                ttnn.deallocate(latent)
+        parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self.h_axis, memory_config=rows.memory_config())
         ttnn.deallocate(rows)
         z = decoder.preprocess_and_unpatchify(parted, height=size // SCALE, width=size // SCALE)
         ttnn.deallocate(parted)
-        out = decoder.forward(z, traced=False)
+        rows = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(z)
+        z = ttnn.mesh_partition(rows, dim=2, cluster_axis=self.w_axis, memory_config=rows.memory_config())
+        ttnn.deallocate(rows)
+        z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
+        if halo_fusion != self._halo_fusion:
+            self._halo_fusion = halo_fusion
+            set_halo_fusion(decoder, self._halo_fusion)
+        out = decoder.forward(z, traced=False, gather_hw=False)
         ttnn.deallocate(z)
         return out
 
     def encode(self, image) -> torch.Tensor:
-        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16): Flux2VaeEncoder gives the latent mean,
-        then the 2x2 patchify and the BatchNorm on the host, as pipeline_flux2.py does."""
-        x = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
+        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16, at most a reference canvas):
+        the encoder on the image in the top-left corner of its canvas gives the latent mean, cropped to the image, then
+        the 2x2 patchify and the BatchNorm on the host, as pipeline_flux2.py does."""
+        width, height = image.size
+        cw, ch = canvas_for(width, height)
+        x = torch.zeros(1, ch, cw, 3)
+        x[0, :height, :width] = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
+        full = (width, height) == FULL_CANVAS
         x = tensor.from_torch(
-            x[None].contiguous(),
+            x,
             device=self._device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_axes=[None, None, None, None],
+            mesh_axes=[None, self.h_axis, None, None],
         )
-        out = self._encoder.forward(x)
+        if full:
+            out = self._full_encoder.forward(x)
+        else:
+            rows = self._gather_rows(x)
+            masks = CanvasMasks(self._device, canvas=(cw, ch), image=(width, height))
+            out = self._encoder.forward_canvas(rows, masks)
+            masks.deallocate()
+            ttnn.deallocate(rows)
         ttnn.deallocate(x)
-        mean = tensor.to_torch(out).float()
+        mean = tensor.to_torch(out).float()[:, : height // SCALE, : width // SCALE]
         ttnn.deallocate(out)
         b, h, w, c = mean.shape
         tokens = (
@@ -177,6 +263,15 @@ class Flux3KleinVae:
         )
         return ((tokens[0] - self._bn_mean) / self._bn_std).to(torch.bfloat16).contiguous()
 
+    def _gather_rows(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """The canvas from `x`, its rows split over h_axis ([1, H / n, W, 3] per device), gathered on the mesh: the
+        host uploads one row band to each device instead of the whole canvas."""
+        _, h, w, c = (int(d) for d in x.shape)
+        flat = ttnn.reshape(x, (1, 1, h, w * c))
+        rows = self._ccl.all_gather(flat, dim=2, mesh_axis=self.h_axis, use_hyperparams=True)
+        return ttnn.reshape(rows, (1, -1, w, c))
+
     def deallocate_weights(self) -> None:
         self._decoder.deallocate_weights()
         self._encoder.deallocate_weights()
+        self._full_encoder.deallocate_weights()

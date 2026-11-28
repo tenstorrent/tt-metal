@@ -69,7 +69,8 @@ std::vector<CBInfo> get_cb_info(
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
     uint32_t input_channels_padded,
-    std::optional<uint32_t> reader_indices_actual_page_size) {
+    std::optional<uint32_t> reader_indices_actual_page_size,
+    bool epilogue_stats) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -357,6 +358,31 @@ std::vector<CBInfo> get_cb_info(
         .page_size = conv_input_shard_shape[1] * input_datum_size,
         .is_globally_allocated = true,
         .data_format = conv_input_df});
+
+    // Epilogue stats: the sum and sum of squares rows of each output tile column, the reduce scaler, the masked
+    // tile and its square, and the row mask of a core's last, partial tile row.
+    const uint32_t fp32_tile_size = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    cb_info.emplace_back(CBInfo{
+        .name = Conv2dCb::STATS,
+        .num_pages = epilogue_stats ? 2 * per_core_out_matrix_width_ntiles : 0,
+        .page_size = fp32_tile_size,
+        .data_format = tt::DataFormat::Float32});
+    cb_info.emplace_back(CBInfo{
+        .name = Conv2dCb::STATS_SCALER,
+        .num_pages = epilogue_stats ? 1u : 0u,
+        .page_size = bf16_tile_size,
+        .data_format = tt::DataFormat::Float16_b});
+    cb_info.emplace_back(CBInfo{
+        .name = Conv2dCb::STATS_SCRATCH,
+        .num_pages = epilogue_stats ? 2u : 0u,
+        .page_size = fp32_tile_size,
+        .data_format = tt::DataFormat::Float32});
+    cb_info.emplace_back(CBInfo{
+        .name = Conv2dCb::STATS_MASK,
+        .num_pages = epilogue_stats ? 1u : 0u,
+        .page_size = bf16_tile_size,
+        .data_format = tt::DataFormat::Float16_b});
 
     TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs  by got {}!", num_cbs, cb_info.size());
     return cb_info;
@@ -728,7 +754,8 @@ static conv_op_l1_usage predicted_conv2d_l1_usage(
             groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias),
         input_channels_padded,
         skip_mcast.skip_activation_mcast,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        operation_attributes.epilogue_stats);
 }
 
 void emit_cb_descriptors(

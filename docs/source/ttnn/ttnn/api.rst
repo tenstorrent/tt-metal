@@ -582,6 +582,7 @@ Convolution
 
    ttnn.conv1d
    ttnn.conv2d
+   ttnn.conv2d_fused
    ttnn.conv_transpose2d
    ttnn.experimental.conv3d
    ttnn.prepare_conv_bias
@@ -595,6 +596,7 @@ Convolution
    :template: class.rst
 
    ttnn.Conv2dConfig
+   ttnn.Conv2dFusedOps
    ttnn.Conv2dSliceConfig
 
 Pooling

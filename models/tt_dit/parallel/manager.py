@@ -11,6 +11,17 @@ import ttnn
 from ..utils.tensor import local_device_to_torch
 
 
+def _deallocate_entry(entry):
+    # A flat [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
+    if entry is None:
+        return
+    if isinstance(entry, (list, tuple)):
+        for item in entry:
+            _deallocate_entry(item)
+    else:
+        ttnn.deallocate(entry)
+
+
 class CCLManager:
     """
     Manages parallelization of DiT model.
@@ -26,15 +37,18 @@ class CCLManager:
         num_links=1,
         topology=None,
         reduce_scatter_topology=None,
+        axis_topologies=None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
         self.reduce_scatter_topology = reduce_scatter_topology or topology
+        self.axis_topologies = axis_topologies or {}
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
+        self._used_ping_pong_keys = set()
 
         # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
@@ -182,7 +196,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.reduce_scatter_topology == ttnn.Topology.Linear:
+            if self.axis_topology(mesh_axis, self.reduce_scatter_topology) == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
@@ -221,7 +235,7 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
-        return self._ping_pong_buffer_cache[cache_key][current_idx]
+        return self._ping_pong_entry(cache_key)[current_idx]
 
     def get_ag_ping_pong_buffer(
         self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None, rows=None
@@ -289,7 +303,7 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
-        return self._ping_pong_buffer_cache[cache_key][current_idx]
+        return self._ping_pong_entry(cache_key)[current_idx]
 
     @contextmanager
     def transient_ping_pong_buffers(self):
@@ -303,24 +317,31 @@ class CCLManager:
         a buffer a live capture references corrupts its replays.
         """
 
-        # The cache is shared by several getters whose entries differ in nesting: a flat
-        # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
-        def deallocate_entry(entry):
-            if entry is None:
-                return
-            if isinstance(entry, (list, tuple)):
-                for item in entry:
-                    deallocate_entry(item)
-            else:
-                ttnn.deallocate(entry)
-
         before = set(self._ping_pong_buffer_cache)
         try:
             yield
         finally:
-            for key in [k for k in self._ping_pong_buffer_cache if k not in before]:
-                deallocate_entry(self._ping_pong_buffer_cache.pop(key))
-                self._ping_pong_buffer_indices.pop(key, None)
+            self.free_ping_pong_buffers([k for k in self._ping_pong_buffer_cache if k not in before])
+
+    def _ping_pong_entry(self, key):
+        self._used_ping_pong_keys.add(key)
+        return self._ping_pong_buffer_cache[key]
+
+    def ping_pong_keys(self) -> set:
+        return set(self._ping_pong_buffer_cache)
+
+    def take_used_ping_pong_keys(self) -> set:
+        """The keys of the ping-pong pairs the getters returned since the last call."""
+        used, self._used_ping_pong_keys = self._used_ping_pong_keys, set()
+        return used
+
+    def free_ping_pong_buffers(self, keys):
+        """Free the ping-pong pairs of `keys` (one already freed is skipped); the next getter call for one allocates it
+        again. Untraced only."""
+        for key in keys:
+            _deallocate_entry(self._ping_pong_buffer_cache.pop(key, None))
+            self._ping_pong_buffer_indices.pop(key, None)
+            self._used_ping_pong_keys.discard(key)
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
@@ -593,7 +614,7 @@ class CCLManager:
 
         cur = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - cur
-        return self._ping_pong_buffer_cache[cache_key][cur]
+        return self._ping_pong_entry(cache_key)[cur]
 
     def neighbor_pad_halo_only(
         self,
@@ -779,7 +800,7 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
-        return self._ping_pong_buffer_cache[cache_key][current_idx]
+        return self._ping_pong_entry(cache_key)[current_idx]
 
     def neighbor_pad_persistent_buffer(
         self,
@@ -890,6 +911,18 @@ class CCLManager:
             use_persistent_buffer=True,
         )
 
+    def axis_topology(self, mesh_axis: int | None, topology: ttnn.Topology | None = None):
+        """The topology of a CCL along `mesh_axis` (`topology`, default the manager's): the caller's `axis_topologies`
+        entry (an axis whose ends the fabric does not wire, e.g. the line axis of a 4x4 half), else a 2-chip axis has no
+        wrap-around link, so it is a line even on a Ring mesh. Only 2-chip axes: a longer slice of a Ring axis still
+        gets Ring."""
+        if mesh_axis in self.axis_topologies:
+            return self.axis_topologies[mesh_axis]
+        topology = topology or self.topology
+        if topology == ttnn.Topology.Ring and mesh_axis is not None and self.mesh_device.shape[mesh_axis] == 2:
+            return ttnn.Topology.Linear
+        return topology
+
     def all_gather(
         self,
         tensor: ttnn.Tensor,
@@ -933,7 +966,7 @@ class CCLManager:
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
-            topology=self.topology,
+            topology=self.axis_topology(mesh_axis),
             cluster_axis=mesh_axis,
             **params,
         )
@@ -980,7 +1013,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=self.reduce_scatter_topology,
+            topology=self.axis_topology(mesh_axis, self.reduce_scatter_topology),
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )

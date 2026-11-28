@@ -10,6 +10,7 @@
 #include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -172,6 +173,55 @@ struct extract_tensor_buffers_t<std::tuple<Ts...>, void> {
  * 1. From an existing device operation, derive a new operation that uses this adapter
  * 2. The operation will now work correctly on mesh devices without additional code
  */
+// The resolved bindings' runtime-arg slots and the address last written to each, and the CB bindings' last addresses:
+// a cache hit writes a binding only when its buffer moved.
+struct ChangedBindingSlots {
+    bool recorded = false;
+    std::vector<tt::tt_metal::RuntimeArgsData*> rt_args;
+    std::vector<std::optional<uint32_t>> rt_written;
+    std::vector<std::optional<uint32_t>> cb_written;
+};
+
+// apply_resolved_bindings for one cached program, writing only the bindings whose buffer address changed since the last
+// hit. The slots are recorded on the first hit; dispatch updates the RuntimeArgsData objects in place, so the recorded
+// pointers stay valid.
+inline void apply_changed_bindings(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::ResolvedBindings& bindings,
+    ChangedBindingSlots& slots,
+    std::span<tt::tt_metal::Buffer* const> buffers) {
+    if (!slots.recorded) {
+        slots.rt_args.reserve(bindings.rt_args.size());
+        for (const auto& b : bindings.rt_args) {
+            slots.rt_args.push_back(
+                b.is_common ? &tt::tt_metal::GetCommonRuntimeArgs(program, b.kernel_idx)
+                            : &tt::tt_metal::GetRuntimeArgs(program, b.kernel_idx, b.core));
+        }
+        slots.rt_written.assign(bindings.rt_args.size(), std::nullopt);
+        slots.cb_written.assign(bindings.cbs.size(), std::nullopt);
+        slots.recorded = true;
+    }
+    for (size_t i = 0; i < bindings.rt_args.size(); ++i) {
+        const auto& b = bindings.rt_args[i];
+        const auto address = static_cast<uint32_t>(buffers[b.tensor_buffer_idx]->address());
+        if (slots.rt_written[i] != address) {
+            (*slots.rt_args[i])[b.arg_idx] = address;
+            slots.rt_written[i] = address;
+        }
+    }
+    for (size_t i = 0; i < bindings.cbs.size(); ++i) {
+        const auto& cb = bindings.cbs[i];
+        const auto address = static_cast<uint32_t>(buffers[cb.tensor_buffer_idx]->address());
+        // address() is only the first core's for a per-core buffer, so its CBs are always rewritten
+        if (slots.cb_written[i] != address ||
+            tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(*buffers[cb.tensor_buffer_idx])) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(
+                program, cb.cb_id, *buffers[cb.tensor_buffer_idx], cb.address_offset);
+            slots.cb_written[i] = address;
+        }
+    }
+}
+
 template <typename DeviceOperation>
 struct MeshDeviceOperationAdapter {
     // Add type aliases to identify the template parameters

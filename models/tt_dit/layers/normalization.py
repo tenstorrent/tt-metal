@@ -298,7 +298,7 @@ class DistributedRMSNorm(Module):
             self.mesh_axis,
             self.mesh_device,
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-            topology=self.ccl_manager.topology,
+            topology=self.ccl_manager.axis_topology(self.mesh_axis),
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 # Everything that changes the stats-buffer geometry (width, row capacity, heads per
                 # device, RoPE and weight presence/width), so modules never share a mismatched buffer.
@@ -465,7 +465,7 @@ class DistributedLayerNorm(Module):
             self.mesh_axis,
             self.mesh_device,
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-            topology=self.ccl_manager.topology,
+            topology=self.ccl_manager.axis_topology(self.mesh_axis),
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 ("ln", tuple(x.shape)),
                 lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
@@ -532,25 +532,6 @@ def dram_group_norm_core_grid(
     return best
 
 
-def bounded_group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: int, max_block_rows: int) -> int:
-    """num_out_blocks for ``norm`` on a [batch, spatial, channels] input: -1 (the op's auto choice) unless that leaves
-    more than ``max_block_rows`` tile rows per block, else the smallest divisor of the per-core block height that
-    does not."""
-    grid = norm._op_core_grid(batch, spatial)
-    virtual_rows = (grid.x // norm.num_virtual_cols) * grid.y
-    block_h = batch * math.ceil(spatial / ttnn.TILE_SIZE) // virtual_rows
-    target = max(
-        1, spatial * channels // (256 * 256 * (grid.x // norm.num_virtual_cols) * norm.num_virtual_cols * grid.y)
-    )
-    auto = 1
-    while auto < target and auto < 256:
-        auto <<= 1
-    if block_h <= max_block_rows * auto:
-        return -1
-    low = max(auto, ttnn.core.divup(block_h, max_block_rows))
-    return next(d for d in range(low, block_h + 1) if block_h % d == 0)
-
-
 """
 Groupnorm that supports data parallel computation.
 The number of channels and groups will be updated to match the distribution of the data across the mesh.
@@ -573,7 +554,6 @@ class GroupNorm(Module):
         mesh_axis: int | None = None,
         core_grid: ttnn.CoreGrid | None = None,
         activation_fn: str | None = None,
-        max_block_rows: int | None = None,
     ) -> None:
         """
         Args:
@@ -587,13 +567,10 @@ class GroupNorm(Module):
             num_out_blocks: The number of output blocks to use.
             activation_fn: Applied after the norm. ``ttnn.group_norm`` cannot fuse one, so it
                 always runs as a separate op here.
-            max_block_rows: When set, the automatic num_out_blocks is raised so that no output block
-                holds more tile rows than this (bounds the op's L1 circular buffers).
         """
         super().__init__()
 
         self.activation_fn = activation_fn
-        self.max_block_rows = max_block_rows
         self.eps = eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -720,10 +697,6 @@ class GroupNorm(Module):
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
-        if num_out_blocks == -1 and self.max_block_rows is not None:
-            num_out_blocks = bounded_group_norm_out_blocks(
-                self, batch_size, height * width, channels, self.max_block_rows
-            )
         x = x.reshape([batch_size, 1, width * height, channels])
         kwargs = dict(
             weight=self.weight.data,
@@ -955,7 +928,9 @@ class DistributedGroupNorm(Module):
             cluster_axis=self.cluster_axis,
             mesh_device=self.mesh_device,
             multi_device_global_semaphore=semaphores,
-            topology=self.ccl_manager.topology if self.ccl_manager is not None else ttnn.Topology.Linear,
+            topology=self.ccl_manager.axis_topology(self.cluster_axis)
+            if self.ccl_manager is not None
+            else ttnn.Topology.Linear,
             input_mask=self.mask.data,
             weight=self.weight.data,
             bias=self.bias.data,

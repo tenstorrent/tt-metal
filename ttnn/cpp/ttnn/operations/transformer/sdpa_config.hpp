@@ -33,6 +33,15 @@ struct SDPAProgramConfig {
     // narrowest pack, in tiles, that goes out as one block rather than tile by tile. Unset keeps the architecture
     // default, 8 on Wormhole and 2 on Blackhole.
     std::optional<uint32_t> min_blocked_pack_tiles;
+    // Ring joint only, requires fp32_dest_acc_en: take the streaming compute path (fp32 dest; the score block and the
+    // running sums are packed as bf16) instead of compute_common.hpp. Not bit-identical to it. The streaming-only
+    // features (attention sink, split KV, kv_actual_isl, sharded padded joint tail, latent V, matmul_math_fidelity)
+    // still require fp32_dest_acc_en=false.
+    bool streaming_fp32_dest = false;
+    // Ring joint only: also run SDPA on the cores (x .. grid.x - 1, grid.y) of the CCL row below the grid that the
+    // fused all-gather does not use (it takes num_links * 2 cores from ccl_core_grid_offset). Only the core a (head, Q
+    // chunk) unit runs on changes: outputs are byte-identical to the rectangle.
+    std::optional<uint32_t> ccl_row_sdpa_start_x = std::nullopt;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import queue
+import threading
 import time
+from collections import OrderedDict, deque
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,21 +28,34 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     IN_CHANNELS,
     SINGLE_DEPTH,
     TILE,
+    Flux3KleinPlan,
     Flux3KleinSequenceLayout,
     Flux3KleinTransformer,
     timestep_inputs,
 )
-from ...models.vae.vae_flux3_klein import Flux3KleinVae
+from ...models.vae.canvas_flux3_klein import REFERENCE_CANVASES
+from ...models.vae.vae_flux3_klein import FULL_CANVAS, Flux3KleinVae
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.dbcache import DBCacheConfig
 from ...utils.dbcache_runner import DBCache
 from .dbcache_flux3_klein import Flux3KleinCachedSample, content_mask
-from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
+from .packing import (
+    DOWNSAMPLING_RATIO,
+    MAX_TEXT_LENGTH,
+    TEXT_BUCKETS,
+    TEXT_BUCKETS_BY_LAYOUT,
+    image_ids,
+    latent_shape,
+    pad_rows,
+    reference_ids,
+    text_bucket,
+)
 from .policy import (
     FLUX3_KLEIN_DEFAULT_SIZE,
     FLUX3_KLEIN_MAX_REFERENCES,
+    FLUX3_KLEIN_MULTI_REFERENCE_MAX_PIXELS,
     FLUX3_KLEIN_REFERENCE_MAX_PIXELS,
     FLUX3_KLEIN_REFERENCE_MAX_SIDE,
     FLUX3_KLEIN_REFERENCE_MIN_SIDE,
@@ -49,12 +67,24 @@ from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_
 from .weights_flux3_klein import resolve_weights_dir
 
 SIZES = tuple(side for side, _ in FLUX3_KLEIN_SERVING_SIZES)
+# Images of the smallest size decoded as one VAE batch: 4 hold the activations of one image of the next size
+DECODE_BATCH_MAX = 4
 DEFAULT_SIZE = FLUX3_KLEIN_DEFAULT_SIZE[0]
 MAX_REFERENCES = FLUX3_KLEIN_MAX_REFERENCES
 MATCH_MAX_PIXELS = FLUX3_KLEIN_REFERENCE_MAX_PIXELS
 MIN_SIDE, MAX_SIDE = FLUX3_KLEIN_REFERENCE_MIN_SIDE, FLUX3_KLEIN_REFERENCE_MAX_SIDE
 REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)
+MULTI_REFERENCE_MAX_PIXELS = FLUX3_KLEIN_MULTI_REFERENCE_MAX_PIXELS
+# Several references: 1, 2, 4 or all 10 references of 1 MP each fill a bucket.
+MULTI_REFERENCE_TOKEN_BUCKETS = tuple(
+    n * MULTI_REFERENCE_MAX_PIXELS // DOWNSAMPLING_RATIO**2 for n in (1, 2, 4, MAX_REFERENCES)
+)
 WARMUP_PROMPT = "warmup"
+# Plans (RoPE tables, modulation / row-gather indices) kept on device: ~200 MB host-built each at 4096.
+PLAN_CACHE_SIZE = 8
+# Meshes whose pipelines free other layouts' CCL pairs (_claim_pairs), from this size on: DP4's (4, 2) groups at 4096,
+# DP8's (2, 2) groups from 2048 (its 2048 warm-up ran out of DRAM on them).
+PAIR_FREEING_FROM_SIZE = {(4, 2): 4096, (2, 2): 2048}
 
 
 @dataclass(frozen=True)
@@ -77,6 +107,21 @@ class Flux3KleinResult:
     seed: int
     timings: dict[str, float]
     cached_steps: int = 0
+
+
+@dataclass(eq=False)
+class _Prepared:
+    request: Flux3KleinRequest
+    canvases: list[Image.Image]
+    ref_bucket: int
+    prompt: str
+    seed: int
+    latent_job: Future
+    text_rows: int
+    tokens: tuple[torch.Tensor, torch.Tensor, int]
+    timings: dict[str, float]
+    rope: tuple[torch.Tensor, torch.Tensor] | None = None
+    text: tuple[ttnn.Tensor, torch.Tensor, int] | None = None
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
@@ -116,10 +161,24 @@ def prepare_reference(image: Image.Image) -> Image.Image:
     return Image.fromarray(np.pad(np.asarray(image), padding, mode=mode))
 
 
-def reference_bucket(tokens: int) -> int:
-    if tokens > REFERENCE_TOKEN_BUCKETS[-1]:
-        raise ValueError(f"{tokens} reference tokens exceed {REFERENCE_TOKEN_BUCKETS[-1]}")
-    return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
+def prepare_multi_reference(image: Image.Image) -> Image.Image:
+    """BFL's reference of a multi-reference edit (pipeline.prepare_multi_reference): RGB, fitted under 1 MP (sides
+    floored), centre-cropped to the 16 px grid."""
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    width, height = image.size
+    if width * height > MULTI_REFERENCE_MAX_PIXELS:
+        scale = math.sqrt(MULTI_REFERENCE_MAX_PIXELS / (width * height))
+        width, height = int(width * scale), int(height * scale)
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
+    w, h = width // DOWNSAMPLING_RATIO * DOWNSAMPLING_RATIO, height // DOWNSAMPLING_RATIO * DOWNSAMPLING_RATIO
+    left, top = (width - w) // 2, (height - h) // 2
+    return image.crop((left, top, left + w, top + h))
+
+
+def reference_bucket(tokens: int, buckets: tuple[int, ...] = REFERENCE_TOKEN_BUCKETS) -> int:
+    if tokens > buckets[-1]:
+        raise ValueError(f"{tokens} reference tokens exceed {buckets[-1]}")
+    return next(b for b in buckets if tokens <= b)
 
 
 # combine_cfg and euler_update compute in fp32 and round to bf16 where the reference computes in bf16.
@@ -169,11 +228,19 @@ class Flux3KleinPipeline:
         sp_axis: int = 1,
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
+        axis_topologies: dict[int, ttnn.Topology] | None = None,
         num_links: int = 2,
         upsample: bool = False,
+        free_other_sizes: bool = False,
+        text_batch: int = 1,
+        decode_batch: int = 1,
     ) -> None:
-        """With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
-        with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded."""
+        """``text_batch`` > 1 lets `serve` encode up to that many queued prompts at once, one per sequence-parallel row.
+        ``decode_batch`` > 1 lets `serve` decode up to that many queued images of the smallest size as one VAE batch.
+        With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
+        with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded. With
+        ``free_other_sizes``, a request of another size than the last one frees the CCL pairs and plans only other sizes
+        used (rebuilt on their next request), so a DP4 group holds one size's working set, not every size's."""
         self._upsampler_ranges = reserve_upsampler_ranges(mesh_device) if upsample else None
         self._device = mesh_device
         self._sp_axis = sp_axis
@@ -183,16 +250,23 @@ class Flux3KleinPipeline:
         encoder_parallel = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis)
         )
+        encoder_ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         encoder = build_flux3_klein_text_encoder(
             shared,
             mesh_device=mesh_device,
             parallel_config=encoder_parallel,
-            ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
+            ccl_manager=encoder_ccl,
+            # the TP shard is ~1.8 GB per chip: keep it resident instead of all-gathering every weight per prompt
+            is_fsdp=False,
         )
         self._text_encoder = encoder
         self._prompt_encoder = Flux3KleinPromptEncoder(encoder, shared, mesh_device)
 
-        self._ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        self._ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         parallel = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
             sequence_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
@@ -200,7 +274,11 @@ class Flux3KleinPipeline:
         self._transformers: dict[str, Flux3KleinTransformer] = {}
         for model, snapshot in snapshots.items():
             transformer = Flux3KleinTransformer(
-                flow_map=model == "distilled", device=mesh_device, ccl_manager=self._ccl, parallel_config=parallel
+                flow_map=model == "distilled",
+                device=mesh_device,
+                ccl_manager=self._ccl,
+                parallel_config=parallel,
+                linear1=self._ccl.axis_topology(tp_axis) == ttnn.Topology.Ring,
             )
             cache.load_model(
                 transformer,
@@ -213,37 +291,95 @@ class Flux3KleinPipeline:
             )
             self._transformers[model] = transformer
 
+        vae_ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         self._vae = Flux3KleinVae(
             shared,
             device=mesh_device,
-            ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
+            ccl_manager=vae_ccl,
             dit_ccl_manager=self._ccl,
             dit_sp_axis=sp_axis,
             sizes=SIZES,
             tp_axis=tp_axis,
             h_axis=sp_axis,
         )
-        self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
+        self._null_text = None
+        if "base" in snapshots:
+            null_rows = ttnn.core.roundup(self._prompt_encoder.tokenize("")[2], mesh_shape[sp_axis] * TILE)
+            self._null_text = self._prompt_encoder.encode("", null_rows)
+        self._plan_cache: OrderedDict[tuple, Flux3KleinPlan] = OrderedDict()
+        self._ccl_managers = (encoder_ccl, self._ccl, vae_ccl)
+        self._pair_users: dict[tuple, set] = {}
+        self._last_layout = None
+        self._pair_freeing_size = PAIR_FREEING_FROM_SIZE.get(tuple(mesh_device.shape))
+        self._free_other_sizes = free_other_sizes
+        self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
+        if not 0 < text_batch <= mesh_shape[sp_axis]:
+            raise ValueError(f"text_batch {text_batch} must be 1 to the {mesh_shape[sp_axis]} sequence-parallel rows")
+        self._text_batch = text_batch
+        if not 0 < decode_batch <= DECODE_BATCH_MAX:
+            raise ValueError(f"decode_batch {decode_batch} must be 1 to {DECODE_BATCH_MAX}")
+        self._decode_batch = decode_batch
 
     @classmethod
-    def create(cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), **kwargs):
-        return cls(mesh_device, snapshots={model: resolve_weights_dir(model) for model in models}, **kwargs)
+    def create(
+        cls,
+        mesh_device: ttnn.MeshDevice,
+        *,
+        models: tuple[str, ...] = ("distilled",),
+        snapshots: dict[str, Path] | None = None,
+        **kwargs,
+    ):
+        """`snapshots` (model -> weights dir), when given, replace `models`: a caller that already resolved them."""
+        if snapshots is None:
+            snapshots = {model: resolve_weights_dir(model) for model in models}
+        return cls(mesh_device, snapshots=snapshots, **kwargs)
 
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
         """Compile every program of the served shapes: each size without a reference and with one per reference token
-        bucket (a square reference that fills the bucket). A reference of another shape reuses its bucket's DiT
-        programs; only the VAE encoder compiles for a new reference shape."""
+        bucket (a square reference that fills the bucket), at each text bucket of that layout (a long prompt reaches the
+        larger ones), two steps each (every step runs the same programs), the VAE encoder on every reference canvas
+        (an image 16 px narrower: the masked path) and on the full 1 MP square canvas (the plain encoder). A reference
+        of any other shape runs its bucket's DiT programs and its canvas's encoder programs.
+        The multi-reference buckets the single reference lacks run with 1 MP square references."""
+        multi = [b for b in MULTI_REFERENCE_TOKEN_BUCKETS if b not in REFERENCE_TOKEN_BUCKETS]
+        for width, height in REFERENCE_CANVASES:
+            self._vae.encode(Image.new("RGB", (width - 16, height)))
+        self._vae.encode(Image.new("RGB", FULL_CANVAS))
         for model in self._transformers:
             for size in sizes:
-                for bucket in (None, *REFERENCE_TOKEN_BUCKETS):
+                for bucket in (None, *REFERENCE_TOKEN_BUCKETS, *multi):
                     images = ()
-                    if bucket is not None:
+                    if bucket in multi:
+                        n = bucket // MULTI_REFERENCE_TOKEN_BUCKETS[0]
+                        side = math.isqrt(MULTI_REFERENCE_TOKEN_BUCKETS[0]) * DOWNSAMPLING_RATIO
+                        images = (Image.new("RGB", (side, side)),) * n
+                    elif bucket is not None:
                         side = math.isqrt(bucket) * DOWNSAMPLING_RATIO
                         images = (Image.new("RGB", (side, side)),)
-                    self.generate(
-                        Flux3KleinRequest(WARMUP_PROMPT, model=model, width=size, height=size, seed=0, images=images)
+                    request = Flux3KleinRequest(
+                        WARMUP_PROMPT, model=model, width=size, height=size, seed=0, images=images, steps=2
                     )
+                    for text_rows in TEXT_BUCKETS_BY_LAYOUT.get((size, bucket or 0), TEXT_BUCKETS):
+                        self._generate(request, text_rows)
+        if self._text_batch > 1:
+            tokens = self._prompt_encoder.tokenize(WARMUP_PROMPT, TEXT_BUCKETS[0])
+            rope = self._prompt_encoder.rope_rows(tokens[1])
+            batch = self._text_batch
+            for text in self._prompt_encoder.encode_rows(
+                [tokens] * batch, [rope] * batch, self._sp_axis, self._ccl_managers[0]
+            ):
+                ttnn.deallocate(text[0])
+        if self._decode_batch > 1 and SIZES[0] in sizes:
+            model = next(iter(self._transformers))
+            request = Flux3KleinRequest(WARMUP_PROMPT, model=model, width=SIZES[0], height=SIZES[0], seed=0, steps=2)
+            runs = []
+            for _ in range(self._decode_batch):
+                prepared = self._prepare(request, None)
+                runs.append((prepared, *self._denoised(prepared)))
+            self._decode_rows(runs)
 
     def validate_request(self, request: Flux3KleinRequest) -> None:
         if request.model not in self._transformers:
@@ -251,64 +387,313 @@ class Flux3KleinPipeline:
         if request.height != request.width or request.width not in SIZES:
             raise ValueError(f"{request.width}x{request.height} is not one of the served sizes {SIZES} (square)")
         if len(request.images) > MAX_REFERENCES:
-            raise ValueError(f"at most {MAX_REFERENCES} reference image")
+            raise ValueError(f"at most {MAX_REFERENCES} reference images")
         if request.model == "distilled" and request.guidance not in (None, 1.0):
             raise ValueError("the distilled model takes no guidance")
 
+    def _text_rows(self, prompt: str, size: int, ref_bucket: int) -> int:
+        buckets = TEXT_BUCKETS_BY_LAYOUT.get((size, ref_bucket), TEXT_BUCKETS)
+        return text_bucket(self._prompt_encoder.tokenize(prompt, MAX_TEXT_LENGTH)[2], buckets)
+
     def generate(self, request: Flux3KleinRequest) -> Flux3KleinResult:
+        return self._generate(request, None)
+
+    def _generate(self, request: Flux3KleinRequest, text_rows: int | None) -> Flux3KleinResult:
+        return self._result(*self._run(self._prepare(request, text_rows)))
+
+    def serve(self, receive: Callable[[], Flux3KleinRequest | None], emit: Callable[[object], None]) -> None:
+        """Answers requests in order until `receive` returns None; `emit` gets each result or exception. Requests are
+        received and prepared (references, tokens, noise) on a helper thread while one runs, and each image is built and
+        emitted on another, so the device does not wait for the host between queued requests. With `text_batch` > 1 the
+        prepared requests of the shortest text bucket are encoded up to that many at once, one per sequence-parallel
+        row. With `decode_batch` > 1 denoised images of the smallest size wait, up to that many, for one batched decode
+        while more requests are queued."""
+        if self._upsampler is not None:
+            raise ValueError("serve needs the upsampler off: it runs on this pipeline's device")
+        prepared: queue.SimpleQueue = queue.SimpleQueue()
+        failed = []
+
+        def receive_all() -> None:
+            try:
+                while (request := receive()) is not None:
+                    try:
+                        prepared.put(self._prepare(request, None))
+                    except Exception as e:  # noqa: BLE001
+                        prepared.put(e)
+            except BaseException as e:  # noqa: BLE001
+                failed.append(e)  # a request that does not arrive ends the loop, as in generate's loop
+            prepared.put(None)
+
+        def answer(run: tuple) -> None:
+            try:
+                result = self._result(*run)
+            except Exception as e:  # noqa: BLE001
+                result = e
+            emit(result)
+
+        ready, done, pending = deque(), False, []
+
+        def decode_pending() -> None:
+            for run in self._decode_rows(pending):
+                if isinstance(run, Exception):
+                    out.submit(emit, run)
+                else:
+                    out.submit(answer, run)
+            pending.clear()
+
+        # a daemon: if this loop raises, the caller closes the connection while the receiver may still wait on it
+        threading.Thread(target=receive_all, name="flux3_klein_ahead", daemon=True).start()
+        with ThreadPoolExecutor(1, thread_name_prefix="flux3_klein_emit") as out:
+            while ready or not done:
+                if not ready:
+                    if pending and prepared.empty():
+                        decode_pending()
+                    while not done and (not ready or len(ready) < self._text_batch):
+                        try:
+                            item = prepared.get(block=not ready)
+                        except queue.Empty:
+                            break
+                        done = item is None
+                        if not done:
+                            ready.append(item)
+                    ready = self._encode_rows(ready)
+                    continue
+                item = ready.popleft()
+                batched = isinstance(item, _Prepared) and self._decode_batch > 1 and item.request.width == SIZES[0]
+                if pending and not batched:
+                    decode_pending()
+                if isinstance(item, Exception):
+                    out.submit(emit, item)
+                    continue
+                try:
+                    if batched:
+                        pending.append((item, *self._denoised(item)))
+                    else:
+                        out.submit(answer, self._run(item))
+                except Exception as e:  # noqa: BLE001
+                    if pending:
+                        decode_pending()
+                    out.submit(emit, e)
+                if len(pending) == self._decode_batch:
+                    decode_pending()
+            if pending:
+                decode_pending()
+        if failed:
+            raise failed[0]
+
+    def _encode_rows(self, items: deque) -> deque:
+        """Encodes the batchable prompts among `items` together (`Flux3KleinPromptEncoder.encode_rows`); a failed batch
+        becomes each of its requests' answer."""
+        batch = [p for p in items if isinstance(p, _Prepared) and p.rope is not None]
+        if len(batch) < 2:
+            return items
+        t0 = time.time()
+        try:
+            texts = self._prompt_encoder.encode_rows(
+                [p.tokens for p in batch], [p.rope for p in batch], self._sp_axis, self._ccl_managers[0]
+            )
+        except Exception as e:  # noqa: BLE001
+            return deque(e if any(p is b for b in batch) else p for p in items)
+        share = (time.time() - t0) / len(batch)
+        for p, text in zip(batch, texts):
+            p.text = text
+            p.timings["encode"] += share
+        return items
+
+    def _prepare(self, request: Flux3KleinRequest, text_rows: int | None) -> _Prepared:
+        """The host-only part of a request: its references, prompt tokens and noise (the noise on the pre-step
+        thread)."""
         self.validate_request(request)
         size = request.width
-        steps = request.steps or STEPS[request.model]
-        guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
-        guidance = None if request.model == "distilled" else guidance
-        reference = None
-        if request.images:
-            reference = request.images[0]
-            if not isinstance(reference, Image.Image):
-                reference = Image.open(reference)
+        references = [r if isinstance(r, Image.Image) else Image.open(r) for r in request.images]
+        reference = references[0] if references else None
+        if len(references) > 1:
+            canvases = [prepare_multi_reference(r) for r in references]
+        else:
+            canvases = [prepare_reference(r) for r in references]
+        ref_tokens = sum((c.width // DOWNSAMPLING_RATIO) * (c.height // DOWNSAMPLING_RATIO) for c in canvases)
+        buckets = MULTI_REFERENCE_TOKEN_BUCKETS if len(canvases) > 1 else REFERENCE_TOKEN_BUCKETS
+        ref_bucket = reference_bucket(ref_tokens, buckets) if canvases else 0
         timings = {}
 
         t0 = time.time()
         prompt = request.prompt if self._upsampler is None else self._upsampler(request.prompt, reference)
         timings["upsample"] = time.time() - t0
         seed = caption_seed(prompt) if request.seed is None else request.seed
+        # The noise and the latent's host tensor are built on a helper thread while this thread dispatches the text
+        # encoder; the device copy stays on this thread
+        sp = self._transformers[request.model].sp_factor
+        latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, *latent_shape(size, size), sp)
 
         t0 = time.time()
-        text = self._prompt_encoder.encode(prompt, MAX_TEXT_LENGTH)
+        text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
+        tokens = self._prompt_encoder.tokenize(prompt, text_rows)
+        batched = self._text_batch > 1 and text_rows == TEXT_BUCKETS[0] and size != max(SIZES)
+        rope = self._prompt_encoder.rope_rows(tokens[1]) if batched else None
         timings["encode"] = time.time() - t0
+        return _Prepared(request, canvases, ref_bucket, prompt, seed, latent_job, text_rows, tokens, timings, rope)
 
-        t0 = time.time()
-        image_cond = None
-        if reference is not None:
-            canvas = prepare_reference(reference)
-            h, w = latent_shape(canvas.height, canvas.width)
-            image_cond = (self._vae.encode(canvas), reference_ids(h, w, 0))
-        timings["encode_reference"] = time.time() - t0
+    def _run(self, prepared: _Prepared) -> tuple[_Prepared, torch.Tensor, int]:
+        """The device part of a prepared request: its image as `[size, size * 3]` uint8 rows on the host."""
+        return self._decode_rows([(prepared, *self._denoised(prepared))])[0]
 
-        t0 = time.time()
-        h, w = latent_shape(size, size)
-        state, cached_steps = self._denoise(
-            request.model, make_noise(seed, h, w), image_ids(h, w), text, image_cond, steps, guidance, request.cache
+    def _denoised(self, prepared: _Prepared) -> tuple[ttnn.Tensor, int]:
+        """A prepared request's denoised latent state and its cached steps."""
+        request, canvases, ref_bucket, timings = (
+            prepared.request,
+            prepared.canvases,
+            prepared.ref_bucket,
+            prepared.timings,
         )
+        size = request.width
+        steps = request.steps or STEPS[request.model]
+        guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
+        guidance = None if request.model == "distilled" else guidance
+        h, w = latent_shape(size, size)
+
+        t0 = time.time()
+        switched = self._free_other_sizes and self._last_layout is not None and self._last_layout[1] != size
+        if self._pair_freeing_size or self._free_other_sizes:
+            self._claim_pairs(
+                (request.model, size, ref_bucket, prepared.text_rows),
+                free_others=size >= (self._pair_freeing_size or math.inf),
+                free_other_sizes=switched,
+            )
+        if switched:
+            self._free_other_plans(math.prod(latent_shape(size, size)))
+        text = prepared.text or self._prompt_encoder.encode(prepared.prompt, prepared.text_rows, tokens=prepared.tokens)
+        timings["encode"] += time.time() - t0
+
+        try:
+            t0 = time.time()
+            image_cond = None
+            if size == max(SIZES):
+                self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
+            if canvases:
+                tokens, ids = [], []
+                for index, canvas in enumerate(canvases):
+                    tokens.append(self._vae.encode(canvas))
+                    ids.append(reference_ids(*latent_shape(canvas.height, canvas.width), index))
+                image_cond = (torch.cat(tokens), torch.cat(ids))
+            timings["encode_reference"] = time.time() - t0
+
+            t0 = time.time()
+            noise, x_host = prepared.latent_job.result()
+            state, cached_steps = self._denoise(
+                request.model,
+                noise,
+                image_ids(h, w),
+                text,
+                image_cond,
+                ref_bucket,
+                steps,
+                guidance,
+                request.cache,
+                x_host=x_host,
+            )
+        finally:
+            ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
+        return state, cached_steps
 
-        t0 = time.time()
-        decoded = self._vae.decode(state, size=size)
-        ttnn.synchronize_device(self._device)
-        timings["decode"] = time.time() - t0
+    def _decode_rows(self, runs: list[tuple[_Prepared, ttnn.Tensor, int]]) -> list[tuple[_Prepared, torch.Tensor, int]]:
+        """The images of denoised requests of one size as `[size, size * 3]` uint8 rows on the host; frees the states.
+        More than one are decoded as one VAE batch of `decode_batch` (a short batch repeats its last state); a failed
+        batch becomes each request's answer."""
+        size, n = runs[0][0].request.width, len(runs)
+        states = [state for _, state, _ in runs]
+        try:
+            t0 = time.time()
+            batch = states[0] if n == 1 else states + states[-1:] * (self._decode_batch - n)
+            decoded = self._vae.decode(batch, size=size)
+            ttnn.synchronize_device(self._device)
+            decode = (time.time() - t0) / n
 
+            t0 = time.time()
+            u8 = image_to_uint8(decoded)
+            rows = tensor.to_torch(u8, mesh_axes=[None, self._vae.h_axis, self._vae.w_axis])
+            ttnn.deallocate(u8)
+            ttnn.deallocate(decoded)
+        except Exception as e:  # noqa: BLE001
+            if n == 1:
+                raise
+            return [e] * n
+        finally:
+            for state in states:
+                ttnn.deallocate(state)
+        to_host = (time.time() - t0) / n
+        for prepared, _, _ in runs:
+            prepared.timings["decode"], prepared.timings["to_host"] = decode, to_host
+        return [(prepared, rows[i], cached_steps) for i, (prepared, _, cached_steps) in enumerate(runs)]
+
+    def _result(self, prepared: _Prepared, rows: torch.Tensor, cached_steps: int) -> Flux3KleinResult:
+        request, timings, size = prepared.request, prepared.timings, prepared.request.width
         t0 = time.time()
-        u8 = image_to_uint8(decoded)
-        rows = ttnn.to_torch(ttnn.get_device_tensors(u8)[0])[0]
         image = Image.fromarray(rows.reshape(size, size, 3).numpy())
-        ttnn.deallocate(u8)
-        ttnn.deallocate(decoded)
-        ttnn.deallocate(state)
-        timings["to_host"] = time.time() - t0
+        timings["to_host"] += time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
-        return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
+        return Flux3KleinResult(
+            image=image, prompt=prepared.prompt, seed=prepared.seed, timings=timings, cached_steps=cached_steps
+        )
 
-    def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
+    def _claim_pairs(self, layout: tuple, free_others: bool, free_other_sizes: bool = False) -> None:
+        """Credits the CCL ping-pong pairs (keyed by shape, never evicted) the previous request used to its layout and,
+        with `free_others`, frees the allocated pairs only other layouts of its size have used, as _free_other_plans
+        does for plans: a DP4 group warmed on every 4096 layout otherwise runs out of DRAM on them. Pairs of a shape the
+        layouts share stay once each has used them; pairs another size used stay too (freed, they would be re-created
+        mid-render on its next request), unless `free_other_sizes` frees every pair no layout of this size used."""
+        for index, ccl in enumerate(self._ccl_managers):
+            for key in ccl.take_used_ping_pong_keys():
+                self._pair_users.setdefault((index, key), set()).add(self._last_layout)
+        self._last_layout = layout
+        if not free_others and not free_other_sizes:
+            return
+        live = [ccl.ping_pong_keys() for ccl in self._ccl_managers]
+        stale = [
+            (i, key)
+            for (i, key), users in self._pair_users.items()
+            if key in live[i]
+            and (
+                (free_others and layout not in users and all(user is None or user[1] == layout[1] for user in users))
+                or (free_other_sizes and all(user is None or user[1] != layout[1] for user in users))
+            )
+        ]
+        if stale:
+            ttnn.synchronize_device(self._device)
+        for index, key in stale:
+            self._ccl_managers[index].free_ping_pong_buffers([key])
+
+    def _prestep_pool(self) -> ThreadPoolExecutor:
+        if getattr(self, "_prestep_executor", None) is None:
+            self._prestep_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flux3_klein_prestep")
+        return self._prestep_executor
+
+    def _prepare_latent_host(self, seed: int, h: int, w: int, sp: int) -> tuple[torch.Tensor, ttnn.Tensor]:
+        """The noise and its padded, SP-sharded fp32 host tensor (no device access)."""
+        noise = make_noise(seed, h, w)
+        rows_padded = ttnn.core.roundup(noise.shape[0], sp * TILE)
+        x_host = tensor.from_torch(
+            pad_rows(noise, rows_padded)[None],
+            device=self._device,
+            dtype=ttnn.float32,
+            mesh_axes=[None, self._sp_axis, None],
+            on_host=True,
+        )
+        return noise, x_host
+
+    def _free_other_plans(self, image_rows: int, cond_rows: int | None = None) -> None:
+        """Frees the cached plans of every other layout (every other size without `cond_rows`): at the largest size, the
+        reference encoder and the denoise need their DRAM (a TP2 group holds twice the DiT weights)."""
+        for key in list(self._plan_cache):
+            lengths = dict(key[3])
+            if lengths["image"] != image_rows or cond_rows is not None and lengths["image_cond"] != cond_rows:
+                self._plan_cache.pop(key).deallocate()
+
+    def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
+        if isinstance(rows, ttnn.Tensor):
+            if rows.shape[-2] % (sp_factor * TILE):
+                raise ValueError(f"{rows.shape[-2]} device rows are not a multiple of {sp_factor} tiles")
+            return ttnn.mesh_partition(rows, dim=1, cluster_axis=self._sp_axis)
         rows = pad_rows(rows.to(torch.bfloat16), ttnn.core.roundup(rows.shape[0], sp_factor * TILE))
         return tensor.from_torch(
             rows[None], device=self._device, dtype=ttnn.bfloat16, mesh_axes=[None, self._sp_axis, None]
@@ -324,22 +709,23 @@ class Flux3KleinPipeline:
         ids: torch.Tensor,
         text: tuple[torch.Tensor, torch.Tensor, int],
         image_cond: tuple[torch.Tensor, torch.Tensor] | None,
+        cond_rows: int,
         steps: int,
         guidance: float | None,
         cache_config: DBCacheConfig | None,
+        x_host: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, int]:
         transformer = self._transformers[model]
         sp = transformer.sp_factor
         cond_valid = 0 if image_cond is None else image_cond[0].shape[0]
-        cond_rows = 0 if image_cond is None else reference_bucket(cond_valid)
         cond_embedded = None
         if image_cond is not None:
             tokens = self._upload_rows(pad_rows(image_cond[0], cond_rows), sp)
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
-        def sample(index: int, text_rows: torch.Tensor, text_ids: torch.Tensor, text_valid: int):
-            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[0]}
+        def sample(index: int, text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
+            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[-2]}
             layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
             sample_ids = {"image": ids, "text": text_ids}
             if image_cond is not None:
@@ -347,19 +733,34 @@ class Flux3KleinPipeline:
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            return transformer.prepare_plan(layout, sample_ids, sample=index), embedded
+            key = _plan_key(model, index, sp, lengths, text_valid, sample_ids)
+            plan = self._plan_cache.get(key)
+            if plan is None:
+                plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids, sample=index)
+                if len(self._plan_cache) > PLAN_CACHE_SIZE:
+                    self._plan_cache.popitem(last=False)[1].deallocate()
+            else:
+                self._plan_cache.move_to_end(key)
+                transformer.write_logical_n(plan, sample=index)
+            return plan, embedded
 
         samples = [sample(0, *text)]
         if guidance is not None:
             samples.append(sample(1, *self._null_text))
         image_axes = [None, self._sp_axis, None]
         rows, rows_padded = noise.shape[0], ttnn.core.roundup(noise.shape[0], sp * TILE)
-        x = tensor.from_torch(
-            pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
-        )
-        mask = torch.zeros(1, rows_padded, IN_CHANNELS["image"])
-        mask[:, :rows] = 1.0
-        mask = tensor.from_torch(mask, device=self._device, dtype=ttnn.float32, mesh_axes=image_axes)
+        if x_host is not None:
+            x = ttnn.to_device(x_host, self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = tensor.from_torch(
+                pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
+            )
+        mask = self._mask_cache.get((rows, rows_padded))
+        if mask is None:
+            mask = torch.zeros(1, rows_padded, IN_CHANNELS["image"])
+            mask[:, :rows] = 1.0
+            mask = tensor.from_torch(mask, device=self._device, dtype=ttnn.float32, mesh_axes=image_axes)
+            self._mask_cache[(rows, rows_padded)] = mask
         guidance_tt = self._scalar(torch.tensor([[guidance]])) if guidance is not None else None
         dbcache, diff_masks = None, []
         if cache_config:
@@ -411,22 +812,49 @@ class Flux3KleinPipeline:
         ttnn.synchronize_device(self._device)
 
         cached_steps = len(dbcache.cached_steps) if dbcache is not None else 0
-        for plan, embedded in samples:
-            plan.deallocate()
+        for _, embedded in samples:
             ttnn.deallocate(embedded)
-        for t in (cond_embedded, mask, guidance_tt, *diff_masks):
+        for t in (cond_embedded, guidance_tt, *diff_masks):
             if t is not None:
                 ttnn.deallocate(t)
         return x, cached_steps
 
     def close(self) -> None:
+        if getattr(self, "_prestep_executor", None) is not None:
+            self._prestep_executor.shutdown(wait=True)
+            self._prestep_executor = None
         if self._upsampler is not None:
             self._upsampler.close()
             for t in self._upsampler_ranges:
                 ttnn.deallocate(t)
+        self.clear_constant_caches()
+        self._prompt_encoder.close()
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()
+        if self._null_text is not None:
+            ttnn.deallocate(self._null_text[0])
+
+    def clear_constant_caches(self) -> None:
+        for plan in self._plan_cache.values():
+            plan.deallocate()
+        for mask in self._mask_cache.values():
+            ttnn.deallocate(mask)
+        self._plan_cache.clear()
+        self._mask_cache.clear()
+
+
+def _plan_key(model: str, index: int, sp: int, lengths: dict[str, int], text_valid: int, ids: dict) -> tuple:
+    """The plan cache key; `Flux3KleinPipeline._free_other_plans` reads the lengths at index 3."""
+    return (model, index, sp, tuple(sorted(lengths.items())), text_valid, _ids_digest(ids))
+
+
+def _ids_digest(ids: dict[str, torch.Tensor]) -> tuple:
+    """A key for a request's token ids (shape + content), so a cached plan is reused only for identical ids."""
+    return tuple(
+        (name, tuple(t.shape), hashlib.sha1(t.contiguous().numpy().tobytes()).hexdigest())
+        for name, t in sorted(ids.items())
+    )
 
 
 def _load_dit_state(snapshot: Path) -> dict[str, torch.Tensor]:

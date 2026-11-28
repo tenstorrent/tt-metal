@@ -33,11 +33,7 @@ from safetensors.torch import load_file
 
 import ttnn
 
-from ....models.transformers.transformer_ideogram4 import (
-    Ideogram4Transformer,
-    Ideogram4TransformerBlock,
-    rope_halfsplit_to_interleaved,
-)
+from ....models.transformers.transformer_ideogram4 import Ideogram4Transformer, Ideogram4TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.ideogram4 import modeling_ideogram4
@@ -45,6 +41,7 @@ from ....reference.ideogram4.constants import IMAGE_POSITION_OFFSET, LLM_TOKEN_I
 from ....reference.ideogram4.dequant import dequant_fp8_state_dict
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.mochi import rope_halfsplit_to_interleaved
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
 from ....utils.test import line_params, ring_params

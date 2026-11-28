@@ -863,7 +863,11 @@ def call_sdpa(
     kv_cache_layer_idx=None,
     circular_kv_cache=False,
     kv_valid_end_tensor=None,
+    ccl_core_grid_offset=None,
+    output_concat_heads=False,
+    v_heads_in_row=False,
 ):
+    """The all-gather runs on column ccl_column, or row-major from ccl_core_grid_offset when given."""
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -887,8 +891,8 @@ def call_sdpa(
         mesh_device=mesh_device,
         topology=topology,
         subdevice_id=worker_sub_device_id,
-        ccl_core_grid_offset=(ccl_column, 0),
-        use_column_major_ccl=True,
+        ccl_core_grid_offset=(ccl_column, 0) if ccl_core_grid_offset is None else ccl_core_grid_offset,
+        use_column_major_ccl=ccl_core_grid_offset is None,
         scale=scale,
         kv_cache_batch_idx=kv_cache_batch_idx,
         kv_actual_isl=kv_actual_isl,
@@ -900,6 +904,8 @@ def call_sdpa(
         kv_cache_layer_idx=kv_cache_layer_idx,
         circular_kv_cache=circular_kv_cache,
         kv_valid_end_tensor=kv_valid_end_tensor,
+        output_concat_heads=output_concat_heads,
+        v_heads_in_row=v_heads_in_row,
     )
     return tt_out
 
@@ -1233,6 +1239,7 @@ def run_ring_joint_sdpa_model_configs(
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
+    streaming_fp32_dest: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1412,6 +1419,7 @@ def run_ring_joint_sdpa_model_configs(
                 q_chunk_size=q_chunk_size,
                 k_chunk_size=k_chunk_size,
                 exp_approx_mode=False,
+                streaming_fp32_dest=streaming_fp32_dest,
             )
 
             reference_output = None
@@ -5687,6 +5695,220 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
     )
 
 
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX"])
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_accuracy(model_name):
+    """streaming_fp32_dest at the fp32-dest thresholds."""
+    model = MODEL_CONFIGS[model_name]
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=True)
+    assert qk_configs, f"{model.name}: no q/k config fits with fp32 dest"
+    # The output depends on k_chunk_size only: one q chunk per k chunk is enough
+    q_chunk = min(q for q, _ in qk_configs)
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        model,
+        [(q, k) for q, k in qk_configs if q == q_chunk],
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+
+
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX"])
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_determinism(model_name):
+    """Two calls on the streaming fp32-dest path give identical bytes."""
+    model = MODEL_CONFIGS[model_name]
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        model,
+        get_model_qk_configs(model, fp32_dest_acc_en=True)[:1],
+        num_iterations=2,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+
+
+def test_ring_joint_attention_sdpa_ccl_row_cores(expect_error):
+    """ccl_row_sdpa_start_x also runs SDPA on the CCL row's cores that the all-gather leaves free. Only the core each
+    (head, Q chunk) unit runs on changes, so the output equals the rectangle's byte for byte. A start column inside
+    the all-gather's cores is refused."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS["wan2_2_1xGLX"]
+    assert not model.is_causal and not model.is_balanced
+    nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
+    sq = model.seq_len * mesh_config.sp_size
+    q_chunk_size, k_chunk_size = get_model_qk_configs(model)[0]
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh_device = runtime.mesh_device
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        grid = (full_grid.x, full_grid.y - 1)
+        torch.manual_seed(1234)
+        Q = torch.randn(BATCH_SIZE, nhq, sq, model.d_q)
+        K = torch.randn(BATCH_SIZE, nhk, sq, model.d_k)
+        V = torch.randn(BATCH_SIZE, nhv, sq, model.d_v)
+
+        dims = [None, None]
+        dims[runtime.sp_axis] = 2
+        gathered_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            dims[runtime.tp_axis] = 1
+            gathered_dims[runtime.tp_axis] = 1
+
+        def to_device(t, dtype, shard_dims):
+            return ttnn.from_torch(
+                t,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+
+        tt_q = to_device(Q, model.q_dtype, dims)
+        tt_k = to_device(K, model.kv_dtype, dims)
+        tt_v = to_device(V, model.kv_dtype, dims)
+        p_buf_k = to_device(torch.zeros_like(K), model.kv_dtype, gathered_dims)
+        p_buf_v = to_device(torch.zeros_like(V), model.kv_dtype, gathered_dims)
+        fence_persistent_buffers(mesh_device)
+        composer = ttnn.create_mesh_composer(
+            mesh_device, ttnn.MeshComposerConfig(*[-1 if d is None else d for d in dims])
+        )
+
+        def run(ccl_row_sdpa_start_x):
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,
+                ccl_row_sdpa_start_x=ccl_row_sdpa_start_x,
+            )
+            tt_out = call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=None,
+                ccl_core_grid_offset=(0, grid[1]),
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :]
+
+        all_gather_cores = 2 * runtime.num_links
+        rectangle = run(None)
+        with_ccl_row = run(all_gather_cores)
+        assert_pcc_rmse(
+            torch_sdpa_reference(Q, K, V, is_causal=False),
+            rectangle,
+            DEFAULT_PCC_THRESHOLD,
+            DEFAULT_RMSE_THRESHOLD,
+            "rectangle",
+        )
+        assert torch.equal(rectangle, with_ccl_row), "the CCL row's cores changed the output"
+        with expect_error(RuntimeError, "ccl_row_sdpa_start_x"):
+            run(all_gather_cores - 1)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_attention_sdpa_concat_heads_and_v_in_row():
+    """output_concat_heads writes the heads side by side, [B, 1, N, NH * DH]: byte for byte what nlp_concat_heads makes
+    of the default [B, NH, N, DH] output. v_heads_in_row reads V (and its gathered buffer) as [B, 1, N, NH * DH], the
+    QKV projection's layout: the output equals the default byte for byte."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS["wan2_2_1xGLX"]
+    assert not model.is_causal and not model.is_balanced
+    nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
+    sq = model.seq_len * mesh_config.sp_size
+    q_chunk_size, k_chunk_size = get_model_qk_configs(model)[0]
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh_device = runtime.mesh_device
+        torch.manual_seed(1234)
+        Q = torch.randn(BATCH_SIZE, nhq, sq, model.d_q)
+        K = torch.randn(BATCH_SIZE, nhk, sq, model.d_k)
+        V = torch.randn(BATCH_SIZE, nhv, sq, model.d_v)
+
+        def mesh_dims(seq_dim, heads_dim):  # SP shards the sequence, TP the heads (dim 1, or dim 3 side by side)
+            dims = [None, None]
+            dims[runtime.sp_axis] = seq_dim
+            if mesh_config.tp_size > 1:
+                dims[runtime.tp_axis] = heads_dim
+            return dims
+
+        def to_device(t, dtype, shard_dims):
+            return ttnn.from_torch(
+                t,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+
+        tt_q = to_device(Q, model.q_dtype, mesh_dims(2, 1))
+        tt_k = to_device(K, model.kv_dtype, mesh_dims(2, 1))
+        tt_v = to_device(V, model.kv_dtype, mesh_dims(2, 1))
+        p_buf_k = to_device(torch.zeros_like(K), model.kv_dtype, mesh_dims(None, 1))
+        p_buf_v = to_device(torch.zeros_like(V), model.kv_dtype, mesh_dims(None, 1))
+        fence_persistent_buffers(mesh_device)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+
+        def run(out_heads_dim, v=tt_v, buf_v=p_buf_v, **kwargs):
+            tt_out = call_sdpa(
+                tt_q,
+                tt_k,
+                v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                **kwargs,
+            )
+            dims = mesh_dims(2, out_heads_dim)
+            composer = ttnn.create_mesh_composer(
+                mesh_device, ttnn.MeshComposerConfig(*[-1 if d is None else d for d in dims])
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :]
+
+        default = run(1)
+        side_by_side = default.permute(0, 2, 1, 3).reshape(BATCH_SIZE, 1, sq, nhq * model.d_v)
+        assert torch.equal(run(3, output_concat_heads=True), side_by_side), "output_concat_heads changed the output"
+        assert nhq == nhk == nhv, "v_heads_in_row is MHA only"
+        v_row = V.permute(0, 2, 1, 3).reshape(BATCH_SIZE, 1, sq, nhv * model.d_v)
+        tt_v_row = to_device(v_row, model.kv_dtype, mesh_dims(2, 3))
+        p_buf_v_row = to_device(torch.zeros_like(v_row), model.kv_dtype, mesh_dims(None, 3))
+        fence_persistent_buffers(mesh_device)
+        in_row = run(1, v=tt_v_row, buf_v=p_buf_v_row, v_heads_in_row=True)
+        assert torch.equal(in_row, default), "v_heads_in_row changed the output"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_balanced,q_dtype,kv_dtype",
     RING_MLA_TEST_CONFIGS,
@@ -9606,6 +9828,59 @@ def test_ring_joint_attention_dynamic_local_n_rehashes_on_width_change():
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
+@pytest.mark.timeout(1800)
+def test_ring_joint_attention_dynamic_local_n_rehashes_on_output_concat_heads():
+    """The dynamic-length program hash keys output_concat_heads: the same inputs with the heads written side by side
+    build a new program (a reused one would write the default head layout), and their output is the default's heads
+    side by side."""
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh = runtime.mesh_device
+        heads = H3_DYNAMIC_CHAIN_HEADS_PER_CHIP * mesh_config.tp_size
+        rows = 16 * 32 * mesh_config.sp_size
+        torch.manual_seed(1234)
+        q, k, v = (torch.randn(1, heads, rows, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(3))
+        tt_q, tt_k, tt_v, logical_n = _h3_dynamic_device_inputs(runtime, q, k, v, rows)
+        gather_k, gather_v = _h3_dynamic_gather_buffers(
+            runtime,
+            mesh_config,
+            H3_DYNAMIC_HEAD_DIM,
+            heads_per_chip=H3_DYNAMIC_CHAIN_HEADS_PER_CHIP,
+            capacity_tiles=H3_DYNAMIC_CHAIN_CAPACITY_TILES,
+        )
+        semaphores = _h3_dynamic_semaphores(runtime)
+
+        def run(**overrides):
+            return _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n,
+                gather_k,
+                gather_v,
+                semaphores,
+                qk_chunks=H3_DYNAMIC_QK_CHUNKS["long"],
+                **overrides,
+            )
+
+        mesh.disable_and_clear_program_cache()
+        mesh.enable_program_cache()
+        default = _h3_dynamic_to_torch(runtime, run())
+        entries = mesh.num_program_cache_entries()
+        out = run(output_concat_heads=True)
+        assert mesh.num_program_cache_entries() == entries + 1, "output_concat_heads reused the default program"
+        dims = [None, None]
+        dims[runtime.tp_axis] = 3
+        dims[runtime.sp_axis] = 2
+        composer = ttnn.create_mesh_composer(mesh, ttnn.MeshComposerConfig(dims[0], dims[1]))
+        side_by_side = default.permute(0, 2, 1, 3).reshape(1, 1, rows, heads * H3_DYNAMIC_HEAD_DIM)
+        assert torch.equal(ttnn.to_torch(out, mesh_composer=composer), side_by_side), "output_concat_heads layout"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 # Causal dynamic_local_n. The gqa variants are the MiniMax-H3 prompt encoder's call on the 4x8: 16 Q / 2 K / 2 V
 # heads per chip, 1..20 tile rows per chip. Per variant: (Q heads, K/V heads) per chip, (q_chunk, k_chunk).
 H3_CAUSAL_DYNAMIC_VARIANTS = {
@@ -9905,5 +10180,72 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
             f"cache hit ran the SDPA before the halo landed on devices {differ}: "
             f"max |call 2 - call 1| = {max((out_b[i] - out_a[i]).abs().max().item() for i in differ)}"
         )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+def test_ring_joint_sdpa_cache_hit_after_aliased_first_call(expect_error):
+    """A first call that passes one buffer as both Q and K builds an entry whose buffer bindings cannot be re-patched
+    (the binding resolver bails on the alias). A same-shape hit with distinct tensors must then raise, as the
+    descriptor adapter does for an op without an override, instead of running on the first call's addresses."""
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, num_global_semaphores=3)
+    mesh_device = runtime.mesh_device
+    try:
+        sp_dims = [None, None]
+        sp_dims[runtime.sp_axis] = 2
+        buf_dims = [None, None]
+        if MESH_CONFIG.tp_size > 1:
+            sp_dims[runtime.tp_axis] = 1
+            buf_dims[runtime.tp_axis] = 1
+
+        def to_mesh(t, dims):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        b, nh, d = 1, 4 * MESH_CONFIG.tp_size, 128
+        sq = 256 * MESH_CONFIG.sp_size
+        tt_q, tt_k, tt_v = (to_mesh(fa_rand(b, nh, sq, d), sp_dims) for _ in range(3))
+        p_buf_k = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        p_buf_v = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        fence_persistent_buffers(mesh_device)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+
+        def run(q, k):
+            call_sdpa(
+                q,
+                k,
+                tt_v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+            )
+            ttnn.synchronize_device(mesh_device)
+
+        run(tt_q, tt_q)
+        entries = mesh_device.num_program_cache_entries()
+        with expect_error(RuntimeError, "passed the same buffer in more than one tensor slot"):
+            run(tt_q, tt_k)
+        assert mesh_device.num_program_cache_entries() == entries, "the second call must be a program-cache hit"
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)

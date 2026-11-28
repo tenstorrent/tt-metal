@@ -65,7 +65,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    bool dynamic_local_n) {
+    bool dynamic_local_n,
+    bool output_concat_heads,
+    bool v_heads_in_row) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -108,7 +110,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_valid_end_tensor,
-        dynamic_local_n);
+        dynamic_local_n,
+        output_concat_heads,
+        v_heads_in_row);
     return outputs;
 }
 
@@ -800,6 +804,11 @@ void bind_sdpa(nb::module_& mod) {
                 separate V, no joint tensors and no balanced or cross attention; causal attention is served
                 unbalanced. The program config should then be fixed per capacity, not per length. Defaults to
                 False.
+            output_concat_heads (bool): Write the output as [b x 1 x s x nh*dh], the heads side by side (what
+                `nlp_concat_heads` makes of the default layout). Self-attention only. Defaults to False.
+            v_heads_in_row (bool): V (and its persistent gathered buffer) is [b x 1 x s x nh*dh], the heads side by
+                side as the QKV projection writes them, so V needs no head split. MHA self-attention only.
+                Defaults to False.
             kv_valid_end_tensor (ttnn.Tensor, optional): Global count of real tokens, read on-device;
                 attention stops at the tile holding the last real token of a partially filled chunk. Output
                 rows in the tiles past it are not written and hold unspecified values. Same one-element
@@ -874,7 +883,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
         nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
-        nb::arg("dynamic_local_n") = false);
+        nb::arg("dynamic_local_n") = false,
+        nb::arg("output_concat_heads") = false,
+        nb::arg("v_heads_in_row") = false);
 
     ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
         mod,

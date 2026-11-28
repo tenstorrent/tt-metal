@@ -16,11 +16,16 @@ from models.tt_dit.layers.conv2d import Conv2d
 from models.tt_dit.layers.linear import ColParallelLinear, RowParallelLinear, _apply_activation_fn
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
 from models.tt_dit.layers.normalization import DistributedGroupNorm, DistributedRMSNorm, GroupNorm, RMSNorm
+from models.tt_dit.models.vae.gn_stats import gn_affine_from_stats
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.conv3d import aligned_channels, get_conv3d_config
 from models.tt_dit.utils.substate import rename_substate
 from models.tt_dit.utils.tensor import local_device_to_torch
+
+# Upper bound on the DRAM slices ttnn picks for a conv1 with no slice count of its own: the statistics pages cover
+# this many (the C++ refuses a conv that needs more)
+EPILOGUE_STATS_AUTO_SLICES = 16
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,12 @@ class VaeContext:
       * ``w_factor > 1`` shards W across ``w_mesh_axis``.
     Both default to ``factor=1`` (disabled) so existing TP-only callers are unchanged.
     The H/W mesh axes must differ from ``tp_axis``.
+
+    Without channel TP, two options keep the activations on their shard:
+      * ``group_norm_2d``: with H and W both sharded, GroupNorm gathers per-group sums over both
+        axes instead of the activations over W.
+      * ``local_attention``: attention keeps its queries on the shard and gathers only the
+        normalized rows for K / V.
     """
 
     device: ttnn.MeshDevice
@@ -45,7 +56,13 @@ class VaeContext:
     use_conv3d: bool = False
     # VaeAttention computes only each device's own query rows (its H partition, split over tp_axis where even).
     local_query_attention: bool = False
-    group_norm_max_block_rows: int | None = None
+    group_norm_2d: bool = False
+    local_attention: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.group_norm_2d or self.local_attention) and self.tp_axis is not None:
+            msg = "group_norm_2d and local_attention need full channels per device (tp_axis None)"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -324,6 +341,7 @@ class VaeConv2d(Module):
         self._h_sharded = ctx.h_factor > 1 and (top > 0 or bottom > 0)
         self._w_sharded = ctx.w_factor > 1 and (left > 0 or right > 0)
         self._needs_neighbor_pad = self._h_sharded or self._w_sharded
+        self._full_padding = (top, bottom, left, right)
 
         if self._h_sharded:
             self._h_halo = (top, bottom)
@@ -358,11 +376,114 @@ class VaeConv2d(Module):
                 ccl_manager=ctx.ccl_manager,
             )
         self._ctx = ctx
+        self.external_halo = False
+        self._halo_capable = (
+            self._needs_neighbor_pad
+            and not self._use_conv3d
+            and kernel_size == 3
+            and stride == 1
+            and self._full_padding == (1, 1, 1, 1)
+        )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "", "inner")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def padded_shape(self, h: int, w: int) -> tuple[int, int]:
+        """The (h, w) the conv sees after the neighbour padding: the slice and blocking tables are keyed on it."""
+        return h + (sum(self._h_halo) if self._h_sharded else 0), w + (sum(self._w_halo) if self._w_sharded else 0)
+
+    def takes_external_halo(self, h: int, w: int) -> bool:
+        if not (self.external_halo and self._halo_capable):
+            return False
+        return self.inner.blocking_for(*self.padded_shape(h, w)).shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    def _exchange_boundary(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """The neighbour devices' boundary sticks for this device's border padding, in the ExternalHaloSpec layout
+        [top: W + 2][bottom: W + 2][left: H][right: H] (corners in the rows), ROW_MAJOR DRAM, zeros at the image
+        edge: one-row slices exchanged along H, then the H-extended edge columns (from 32-column tile bands, so the
+        activation is never converted whole) along W, which carries the corners."""
+        ccl = self._ctx.ccl_manager
+        n, h, w, c = (int(d) for d in x.shape)
+
+        def rm(t):
+            return t if t.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+
+        def exchange(edges, dim, axis):
+            e5 = ttnn.unsqueeze(edges, 0)
+            out = ccl.neighbor_pad(
+                e5,
+                dims=[dim],
+                pad_left=[1],
+                pad_right=[1],
+                padding_mode="zeros",
+                axes=[axis],
+                neighbor_sems=[ccl.get_np_ping_pong_semaphore(axis)],
+                num_links=[_get_neighbor_pad_num_links(ccl, e5, dim)],
+            )
+            return ttnn.squeeze(out, 0)
+
+        top = rm(ttnn.slice(x, [0, 0, 0, 0], [n, 1, w, c]))
+        bot = rm(ttnn.slice(x, [0, h - 1, 0, 0], [n, h, w, c]))
+        if self._h_sharded:
+            ph = exchange(ttnn.concat([top, bot], dim=1), 2, self._ctx.h_mesh_axis)
+            halo_top = ttnn.slice(ph, [0, 0, 0, 0], [n, 1, w, c])
+            halo_bot = ttnn.slice(ph, [0, 3, 0, 0], [n, 4, w, c])
+        else:
+            halo_top, halo_bot = ttnn.zeros_like(top), ttnn.zeros_like(bot)
+        band = min(32, w)
+        left = ttnn.slice(rm(ttnn.slice(x, [0, 0, 0, 0], [n, h, band, c])), [0, 0, 0, 0], [n, h, 1, c])
+        right = ttnn.slice(rm(ttnn.slice(x, [0, 0, w - band, 0], [n, h, w, c])), [0, 0, band - 1, 0], [n, h, band, c])
+        left_ext = ttnn.concat(
+            [ttnn.slice(halo_top, [0, 0, 0, 0], [n, 1, 1, c]), left, ttnn.slice(halo_bot, [0, 0, 0, 0], [n, 1, 1, c])],
+            dim=1,
+        )
+        right_ext = ttnn.concat(
+            [
+                ttnn.slice(halo_top, [0, 0, w - 1, 0], [n, 1, w, c]),
+                right,
+                ttnn.slice(halo_bot, [0, 0, w - 1, 0], [n, 1, w, c]),
+            ],
+            dim=1,
+        )
+        if self._w_sharded:
+            pw = exchange(ttnn.concat([left_ext, right_ext], dim=2), 3, self._ctx.w_mesh_axis)
+            halo_left = ttnn.slice(pw, [0, 0, 0, 0], [n, h + 2, 1, c])
+            halo_right = ttnn.slice(pw, [0, 0, 3, 0], [n, h + 2, 4, c])
+        else:
+            halo_left, halo_right = ttnn.zeros_like(left_ext), ttnn.zeros_like(right_ext)
+
+        def corner(t, r):
+            return ttnn.slice(t, [0, r, 0, 0], [n, r + 1, 1, c])
+
+        top_seq = ttnn.concat([corner(halo_left, 0), halo_top, corner(halo_right, 0)], dim=2)
+        bot_seq = ttnn.concat([corner(halo_left, h + 1), halo_bot, corner(halo_right, h + 1)], dim=2)
+        left_seq = ttnn.reshape(ttnn.slice(halo_left, [0, 1, 0, 0], [n, h + 1, 1, c]), (n, 1, h, c))
+        right_seq = ttnn.reshape(ttnn.slice(halo_right, [0, 1, 0, 0], [n, h + 1, 1, c]), (n, 1, h, c))
+        boundary = ttnn.concat([top_seq, bot_seq, left_seq, right_seq], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(boundary, (1, 1, n * (2 * (w + 2) + 2 * h), c))
+
+    def _forward_external_halo(self, x: ttnn.Tensor, epilogue_stats) -> ttnn.Tensor:
+        h, w = int(x.shape[1]), int(x.shape[2])
+        boundary = self._exchange_boundary(x)
+        if self.inner.num_slices(*self.padded_shape(h, w)) not in (None, 1) and x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)  # the DRAM-sliced conv reads DRAM
+        saved = self.inner.padding
+        self.inner.padding = self._full_padding  # the conv pads the border itself, from the boundary
+        try:
+            return self.inner.forward(
+                x,
+                use_persistent_buffer=False,
+                halo_boundary=boundary,
+                slice_shape=self.padded_shape(h, w),
+                epilogue_stats=epilogue_stats,
+            )
+        finally:
+            self.inner.padding = saved
+            ttnn.deallocate(boundary)
+
+    def forward(self, x: ttnn.Tensor, *, epilogue_stats=None) -> ttnn.Tensor:
+        if self.takes_external_halo(int(x.shape[1]), int(x.shape[2])):
+            return self._forward_external_halo(x, epilogue_stats)
         if self._needs_neighbor_pad:
             ccl = self._ctx.ccl_manager
             assert ccl is not None
@@ -401,7 +522,17 @@ class VaeConv2d(Module):
 
         if self._use_conv3d:
             return self.inner.forward(x)
-        return self.inner.forward(x, use_persistent_buffer=False)
+        return self.inner.forward(x, use_persistent_buffer=False, epilogue_stats=epilogue_stats)
+
+
+def set_halo_fusion(module: Module, on: bool) -> None:
+    """External-halo 3 x 3 convs and norm2 from conv1's epilogue statistics, on or off throughout `module`."""
+    if isinstance(module, VaeConv2d):
+        module.external_halo = on
+    if isinstance(module, VaeResnetBlock):
+        module.norm_from_stats = on
+    for _, child in module.named_children():
+        set_halo_fusion(child, on)
 
 
 class VaeUpsampler(Module):
@@ -437,18 +568,99 @@ class VaeResnetBlock(Module):
             if in_channels != out_channels
             else None
         )
+        self._ctx = ctx
+        self.norm_from_stats = False
+        self._stats_capable = isinstance(self.norm2, _VaeSpatial2dGroupNorm) and not self.conv1._use_conv3d
+        self._stats_pages: dict[tuple[int, ...], list[ttnn.Tensor]] = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "conv_shortcut.weight" in state:
             state["conv_shortcut.weight"] = state["conv_shortcut.weight"].squeeze(2, 3)
 
+    def _conv1_shape(self, h: ttnn.Tensor) -> tuple[int, int]:
+        """The (h, w) conv1's slice and blocking tables know this input by."""
+        return self.conv1.padded_shape(int(h.shape[1]), int(h.shape[2]))
+
+    def _stats_eligible(self, h: ttnn.Tensor) -> bool:
+        """One image (the epilogue statistics sum over the whole batch; GroupNorm is per image) on the height-sharded
+        conv (unsplit or split by output channels) whose output width is tile-aligned (a ragged DRAM width slice
+        computes junk columns the epilogue would sum), with the groups split evenly over the output-channel parts."""
+        if int(h.shape[0]) != 1 or int(h.shape[2]) % 32:
+            return False
+        blocking = self.conv1.inner.blocking_for(*self._conv1_shape(h))
+        parts = blocking.out_channel_splits
+        return (
+            blocking.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            and self.norm2.num_groups % parts == 0
+            and (self.norm2.num_channels // parts) % 32 == 0
+        )
+
+    def _conv1_norm2_from_stats(self, h: ttnn.Tensor) -> ttnn.Tensor:
+        """conv1 with its output statistics in the epilogue, then norm2 + SiLU as one per-channel affine from them.
+        An output-channel split conv writes one page block per part; the groups split the same way."""
+        ctx = self._ctx
+        norm = self.norm2
+        c = norm.num_channels
+        parts = self.conv1.inner.blocking_for(*self._conv1_shape(h)).out_channel_splits
+        c_part = c // parts
+        slices = self.conv1.inner.num_slices(*self._conv1_shape(h)) or EPILOGUE_STATS_AUTO_SLICES
+        num_pages = ttnn.conv2d_epilogue_stats_num_pages(ctx.device, c_part, slices)
+        key = (*(int(d) for d in h.shape), parts)
+        pages = self._stats_pages.get(key)
+        if pages is None:
+            # zeroed once: each call rewrites the pages of the slices and cores it uses, the rest stay zero
+            pages = [
+                tensor.from_torch(
+                    torch.zeros(1, 1, num_pages * 32, 32),
+                    device=ctx.device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_axes=[None, None, None, None],
+                )
+                for _ in range(parts)
+            ]
+            self._stats_pages[key] = pages
+        out = self.conv1.forward(h, epilogue_stats=pages if parts > 1 else pages[0])
+        _, oh, ow, _ = (int(d) for d in out.shape)
+        count = oh * ctx.h_factor * ow * ctx.w_factor * (c // norm.num_groups)
+        scales, shifts = [], []
+        for i in range(parts):
+            gamma = ttnn.slice(norm.weight.data, [0, 0, 0, i * c_part], [1, 1, 1, (i + 1) * c_part])
+            beta = ttnn.slice(norm.bias.data, [0, 0, 0, i * c_part], [1, 1, 1, (i + 1) * c_part])
+            sc, sh = gn_affine_from_stats(
+                pages[i],
+                num_pages // (2 * (c_part // 32)),
+                c_part,
+                norm.num_groups // parts,
+                gamma,
+                beta,
+                norm.eps,
+                ctx.h_mesh_axis,
+                ctx.w_mesh_axis,
+                ctx.ccl_manager,
+                count,
+            )
+            scales.append(sc)
+            shifts.append(sh)
+        scale = scales[0] if parts == 1 else ttnn.concat(scales, dim=3)
+        shift = shifts[0] if parts == 1 else ttnn.concat(shifts, dim=3)
+        if out.layout != ttnn.TILE_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        scaled = ttnn.multiply(out, scale)
+        ttnn.deallocate(out)
+        res = ttnn.add(scaled, shift, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)])
+        ttnn.deallocate(scaled)
+        return res
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         h = x
 
         h = self.norm1.forward(h)
-        h = self.conv1.forward(h)
-
-        h = self.norm2.forward(h)
+        if self.norm_from_stats and self._stats_capable and self._stats_eligible(h):
+            h = self._conv1_norm2_from_stats(h)
+        else:
+            h = self.conv1.forward(h)
+            h = self.norm2.forward(h)
         h = self.conv2.forward(h)
 
         if self.conv_shortcut is not None:
@@ -488,7 +700,10 @@ class VaeAttention(Module):
 
         # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
         # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
-        norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
+        # With local_attention it runs on the local shard instead.
+        norm_ctx = (
+            ctx if ctx.local_attention else replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
+        )
         self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
         # round-trips. Each output is fractured on out_dim (channels) and gets AG'd before SDPA.
@@ -571,7 +786,52 @@ class VaeAttention(Module):
 
         return qkv.squeeze(-1) if is_1d else qkv
 
+    def _forward_local(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        identity = x
+        n, h, w, c = x.shape
+
+        x = self.norm.forward(x)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        local = x.reshape([n, 1, h * w, c])
+        full = local
+        for mesh_axis, factor in (
+            (self._ctx.h_mesh_axis, self._ctx.h_factor),
+            (self._ctx.w_mesh_axis, self._ctx.w_factor),
+        ):
+            if factor > 1:
+                full = self._ccl_manager.all_gather(full, dim=2, mesh_axis=mesh_axis, use_hyperparams=True)
+
+        q, k, v = self.to_qkv.forward(local, compute_kernel_config=self._mm_compute_kernel_config)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        unused_q, k, v = self.to_qkv.forward(full, compute_kernel_config=self._mm_compute_kernel_config)
+        ttnn.deallocate(unused_q)
+
+        program_config = self._sdpa_program_config
+        rows = h * w
+        if rows % program_config.q_chunk_size:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
+                k_chunk_size=program_config.k_chunk_size,
+                exp_approx_mode=program_config.exp_approx_mode,
+            )
+        x = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
+        x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
+        return x.reshape([n, h, w, c]) + identity
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self._ctx.local_attention:
+            return self._forward_local(x)
+
         identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
 
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
@@ -839,19 +1099,101 @@ class _VaeSpatialGroupNorm(Module):
         return x
 
 
+class _VaeSpatial2dGroupNorm(Module):
+    """GroupNorm for activations sharded on H and W with full channels per device.
+
+    The per-group sums are formed locally, all-gathered over both mesh axes (h x w x G values) and
+    applied as one per-channel affine, with the activation folded into the add.
+    """
+
+    def __init__(
+        self,
+        num_groups: int,
+        num_channels: int,
+        *,
+        eps: float,
+        ctx: VaeContext,
+        activation_fn: str | None = None,
+    ) -> None:
+        super().__init__()
+        assert ctx.ccl_manager is not None
+        assert num_channels % num_groups == 0
+        self.num_channels = num_channels
+        self.num_groups = num_groups
+        self.eps = eps
+        self._ctx = ctx
+        self._fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation_fn == "silu" else None
+        self.activation_fn = None if activation_fn == "silu" else activation_fn
+        self.weight = Parameter(total_shape=[1, 1, 1, num_channels], device=ctx.device, dtype=ttnn.float32)
+        self.bias = Parameter(total_shape=[1, 1, 1, num_channels], device=ctx.device, dtype=ttnn.float32)
+        self.to_groups = Parameter(total_shape=[1, 1, num_channels, num_groups], device=ctx.device, dtype=ttnn.float32)
+        self.from_groups = Parameter(
+            total_shape=[1, 1, num_groups, num_channels], device=ctx.device, dtype=ttnn.float32
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        state["weight"] = state["weight"].reshape(1, 1, 1, self.num_channels)
+        state["bias"] = state["bias"].reshape(1, 1, 1, self.num_channels)
+        selector = torch.eye(self.num_groups).repeat_interleave(self.num_channels // self.num_groups, dim=0)
+        state["to_groups"] = selector.reshape(1, 1, self.num_channels, self.num_groups)
+        state["from_groups"] = selector.t().contiguous().reshape(1, 1, self.num_groups, self.num_channels)
+
+    def _group_sums(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """(N, 1, HW_local, C) -> per-group sums over every device, (N, 1, 1, G)."""
+        sums = ttnn.matmul(ttnn.sum(x, dim=2, keepdim=True), self.to_groups.data)
+        ccl = self._ctx.ccl_manager
+        sums = ccl.all_gather(sums, dim=1, mesh_axis=self._ctx.h_mesh_axis, use_hyperparams=False)
+        sums = ccl.all_gather(sums, dim=1, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=False)
+        return ttnn.sum(sums, dim=1, keepdim=True)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        n, h, w, c = x.shape
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.reshape(x, (n, 1, h * w, c))
+        scale = 1.0 / (c // self.num_groups * h * w * self._ctx.h_factor * self._ctx.w_factor)
+        x32 = ttnn.typecast(x, ttnn.float32)
+        mean_g = ttnn.multiply(self._group_sums(x32), scale)
+        sq = ttnn.multiply(x32, x32)
+        ttnn.deallocate(x32)
+        var_g = ttnn.subtract(ttnn.multiply(self._group_sums(sq), scale), ttnn.multiply(mean_g, mean_g))
+        ttnn.deallocate(sq)
+        # fp32 until the final cast: bias - mean * gamma cancels badly in bf16.
+        inv_g = ttnn.rsqrt(ttnn.add(var_g, self.eps))
+        gamma = ttnn.multiply(ttnn.matmul(inv_g, self.from_groups.data), self.weight.data)
+        beta = ttnn.subtract(self.bias.data, ttnn.multiply(ttnn.matmul(mean_g, self.from_groups.data), gamma))
+        gamma = ttnn.typecast(gamma, x.dtype)
+        beta = ttnn.typecast(beta, x.dtype)
+        scaled = ttnn.multiply(x, gamma)
+        if self._fused_activation is not None:
+            out = ttnn.add(scaled, beta, activations=[self._fused_activation])
+        else:
+            out = _apply_activation_fn(ttnn.add(scaled, beta), self.activation_fn)
+        ttnn.deallocate(scaled)
+        return ttnn.reshape(out, (n, h, w, c))
+
+
 def _norm(
     norm: VaeNormDesc,
     num_channels: int,
     *,
     ctx: VaeContext,
     activation_fn: str | None = None,
-) -> GroupNorm | _VaeSpatialGroupNorm | VaeRmsNorm:
+) -> GroupNorm | _VaeSpatialGroupNorm | _VaeSpatial2dGroupNorm | VaeRmsNorm:
     """Build the norm module.
 
     ``activation_fn`` is applied after the norm; the module folds it into the fused GN op
     when that path is used and runs it separately otherwise. Callers just call ``forward``.
     """
     if isinstance(norm, VaeNormDescGroup):
+        if ctx.group_norm_2d and ctx.h_factor > 1 and ctx.w_factor > 1:
+            return _VaeSpatial2dGroupNorm(
+                num_groups=norm.num_groups,
+                num_channels=num_channels,
+                eps=norm.eps,
+                ctx=ctx,
+                activation_fn=activation_fn,
+            )
         # SP-active: fused DistributedGroupNorm (stats AG on one spatial axis).
         if ctx.h_factor > 1 or ctx.w_factor > 1:
             return _VaeSpatialGroupNorm(
@@ -868,7 +1210,6 @@ def _norm(
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             activation_fn=activation_fn,
-            max_block_rows=ctx.group_norm_max_block_rows,
         )
     if isinstance(norm, VaeNormDescRms):
         # VaeRmsNorm normalizes per spatial position over the channel dim → SP-safe as-is.

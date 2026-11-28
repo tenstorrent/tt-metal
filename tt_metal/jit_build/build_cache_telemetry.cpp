@@ -506,7 +506,7 @@ SummaryRows summarize(const BuildCacheTelemetryImpl& impl) {
             "{:.1f} average, {} peak, on {} CPU threads, {:.1f} s per build",
             summed_build_s / busy_s,
             builds.peak,
-            detail::EXECUTOR_NTHREADS,
+            detail::executor_threads(),
             summed_build_s / builds.intervals));
     // Builds compile sources, shared by the RISCs they link for, then link one binary per RISC. Link time is
     // mostly LTO optimization and code generation.

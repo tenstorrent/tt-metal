@@ -14,6 +14,9 @@ DOWNSAMPLING_RATIO = 16
 IMAGE_ROPE_SCALE = 0.5
 TEXT_PAD_MULTIPLE = 80
 MAX_TEXT_LENGTH = 4096
+TEXT_BUCKETS = (1024, 2048, MAX_TEXT_LENGTH)
+# (size, reference token bucket): at 4096 with a 4096-token reference only the 2048 bucket gives whole k = 640 chunks.
+TEXT_BUCKETS_BY_LAYOUT = {(4096, 4096): (2048, MAX_TEXT_LENGTH)}
 
 
 def latent_shape(height: int, width: int) -> tuple[int, int]:
@@ -41,6 +44,10 @@ def text_ids(length: int) -> torch.Tensor:
 
 def padded_text_length(real_length: int) -> int:
     return min(ttnn.core.roundup(real_length, TEXT_PAD_MULTIPLE), MAX_TEXT_LENGTH)
+
+
+def text_bucket(attended: int, buckets: tuple[int, ...] = TEXT_BUCKETS) -> int:
+    return next((b for b in buckets if b >= attended), buckets[-1])
 
 
 def pad_rows(rows: torch.Tensor, length: int) -> torch.Tensor:

@@ -63,6 +63,10 @@ struct AllGatherMinimalMatmulAsyncParams {
     // Input blocks reach their whole row or column of the matmul grid in one NoC multicast instead of a core-to-core
     // relay. Independent of the fabric config.
     bool use_mcast = false;
+    // The last chunk gets the fused SwiGLU epilogue: its weight columns are tile-pair-interleaved [gate|up] and its
+    // output is half as wide. The chunks before it form N group A, it forms group B, and each N core computes an
+    // equal share of both (grouped N split).
+    bool swiglu_last_chunk;
 
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
@@ -91,7 +95,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {},
         std::optional<bool> transpose_core_grid = std::nullopt,
-        bool use_mcast = false) :
+        bool use_mcast = false,
+        bool swiglu_last_chunk = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -118,7 +123,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu),
         transpose_core_grid(transpose_core_grid),
-        use_mcast(use_mcast) {}
+        use_mcast(use_mcast),
+        swiglu_last_chunk(swiglu_last_chunk) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -140,6 +146,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "use_mcast",
         "fused_activation",
         "output_dtype",
+        "swiglu_last_chunk",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -163,12 +170,13 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->use_mcast,
             this->fused_activation,
             this->output_dtype,
+            this->swiglu_last_chunk,
             this->compute_kernel_config);
     }
 };
 
-// The orientation the program is built with. M and N are the matmul's padded row count and weight width. Fabric2D
-// only runs the untransposed grid, so it is not picked there automatically.
+// The orientation the program is built with. M and N are the matmul's padded row count and weight width. On Fabric2D
+// the transposed grid keeps the core-to-core relay instead of the multicast, so it runs only when asked for.
 inline bool resolve_transpose_core_grid(
     const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N, bool fabric_2d) {
     return params.transpose_core_grid.value_or(params.force_transpose || (M > N && !fabric_2d));

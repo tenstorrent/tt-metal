@@ -178,6 +178,68 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("return_output_dim") = false,
         nb::arg("return_weights_and_bias") = false);
 
+    nb::class_<ttnn::Conv2dFusedOps>(mod, "Conv2dFusedOps", R"doc(
+        Work done inside :func:`ttnn.conv2d_fused` instead of in separate ops; each is off when None.
+
+        prologue_scale, prologue_shift: [1, C] BFLOAT16 TILE tensors, passed together; the conv reads
+        silu(x * scale + shift) instead of x (BFLOAT16 TILE input).
+        halo_boundary: ROW_MAJOR DRAM tensor of the input's padding sticks from neighbouring devices (sliding_window
+        ExternalHaloSpec layout); height-sharded conv; on the DRAM path, a DRAM_WIDTH slice config.
+        epilogue_stats: FLOAT32 TILE DRAM tensor of :func:`ttnn.conv2d_epilogue_stats_num_pages` pages; gets the per
+        output channel sum and sum of squares of the output. Height-sharded conv, TILE output. A conv writes only its
+        own cores' pages: zero the tensor before each conv.
+        )doc")
+        .def(
+            nb::init<std::optional<Tensor>, std::optional<Tensor>, std::optional<Tensor>, std::optional<Tensor>>(),
+            nb::kw_only(),
+            nb::arg("prologue_scale") = nb::none(),
+            nb::arg("prologue_shift") = nb::none(),
+            nb::arg("halo_boundary") = nb::none(),
+            nb::arg("epilogue_stats") = nb::none())
+        .def_rw("prologue_scale", &ttnn::Conv2dFusedOps::prologue_scale)
+        .def_rw("prologue_shift", &ttnn::Conv2dFusedOps::prologue_shift)
+        .def_rw("halo_boundary", &ttnn::Conv2dFusedOps::halo_boundary)
+        .def_rw("epilogue_stats", &ttnn::Conv2dFusedOps::epilogue_stats);
+
+    ttnn::bind_function<"conv2d_fused">(
+        mod,
+        R"doc(
+        :func:`ttnn.conv2d` with fused_ops (:class:`ttnn.Conv2dFusedOps`): the same arguments, plus fused_ops.
+        )doc",
+        &ttnn::conv2d_fused,
+        nb::kw_only(),
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("device"),
+        nb::arg("in_channels"),
+        nb::arg("out_channels"),
+        nb::arg("batch_size"),
+        nb::arg("input_height"),
+        nb::arg("input_width"),
+        nb::arg("kernel_size"),
+        nb::arg("stride") = nb::cast(std::array<uint32_t, 2>{1, 1}),
+        nb::arg("padding") = nb::cast(std::array<uint32_t, 2>{0, 0}),
+        nb::arg("dilation") = nb::cast(std::array<uint32_t, 2>{1, 1}),
+        nb::arg("groups") = 1,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("slice_config") = nb::none(),
+        nb::arg("return_output_dim") = false,
+        nb::arg("return_weights_and_bias") = false,
+        nb::arg("fused_ops"));
+
+    mod.def(
+        "conv2d_epilogue_stats_num_pages",
+        &ttnn::conv2d_epilogue_stats_num_pages,
+        nb::arg("device"),
+        nb::arg("out_channels"),
+        nb::arg("num_slices") = 1,
+        R"doc(Pages of the :class:`ttnn.Conv2dFusedOps` epilogue_stats tensor for a conv with out_channels outputs run
+        in num_slices DRAM slices.)doc");
+
     mod.def(
         "prepare_conv_weights",
         prepare_conv_weights,
