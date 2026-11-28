@@ -77,7 +77,7 @@ LAYOUT_CASES = [
     for op in _OPS
 ] + [
     (f, a, LlkBroadcastType.Column, op, l)
-    for l in ("L210", "L303")
+    for l in ("L210", "L303", "L132p0")
     for f, a in (_FMT_ACC[0], _FMT_ACC[2])
     for op in _OPS
 ]
@@ -85,6 +85,11 @@ LAYOUT_CASES = [
 RUNTIME_LAYOUT_CASES = [
     (f, a, LlkBroadcastType.Row, op, l)
     for l in ("L210", "L132p0")
+    for f, a in (_FMT_ACC[0], _FMT_ACC[2])
+    for op in _OPS
+] + [
+    (f, a, LlkBroadcastType.Column, op, l)
+    for l in ("L210", "L303", "L132p0")
     for f, a in (_FMT_ACC[0], _FMT_ACC[2])
     for op in _OPS
 ]
