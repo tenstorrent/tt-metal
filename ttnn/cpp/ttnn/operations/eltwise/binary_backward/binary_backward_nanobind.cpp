@@ -103,8 +103,8 @@ void bind_binary_backward_concat(
         Keyword args:
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_a`. Defaults to `None`.
-            other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
+            input_a_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_a`. Defaults to `None`.
+            input_b_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
 
 
 
@@ -171,8 +171,8 @@ void bind_binary_backward_addalpha(
         Keyword args:
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_a`. Defaults to `None`.
-            other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
+            input_a_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_a`. Defaults to `None`.
+            input_b_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
 
 
 
@@ -444,8 +444,8 @@ void bind_binary_bw_mul(
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
-            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor, passed as `input_tensor` with a tensor `input_tensor_b` and as `input_tensor_a` with a number or a ComplexTensor.
+            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor, passed as `other_tensor` for a ttnn.Tensor, `scalar` for a number and `input_tensor_b` for a ComplexTensor.
 
         Keyword args:
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
@@ -533,8 +533,9 @@ void bind_binary_bw_add(
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
-            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor, passed as `input_tensor` with a tensor `input_tensor_b` and as `input_tensor_a` with a number or a ComplexTensor.
+            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor, passed as `other_tensor` for a ttnn.Tensor, `scalar` for a number and `input_tensor_b` for a ComplexTensor.
+            alpha (float): the alpha value, required by the ComplexTensor overload.
 
         Keyword args:
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
@@ -625,8 +626,9 @@ void bind_binary_bw_sub(
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
-            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor, passed as `input_tensor` with a tensor `input_tensor_b` and as `input_tensor_a` with a number or a ComplexTensor.
+            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor, passed as `other_tensor` for a ttnn.Tensor, `scalar` for a number and `input_tensor_b` for a ComplexTensor.
+            alpha (float): the alpha value, required by the ComplexTensor overload.
 
         Keyword args:
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
@@ -717,8 +719,8 @@ void bind_binary_bw_div(
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
-            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor, passed as `input_tensor` with a tensor `input_tensor_b` and as `input_tensor_a` with a number or a ComplexTensor.
+            input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor, passed as `other_tensor` for a ttnn.Tensor, `scalar` for a number and `input_tensor_b` for a ComplexTensor.
 
         Keyword args:
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.

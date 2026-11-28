@@ -36,13 +36,13 @@ void bind_unary_backward_two_float(
         {2}
 
         .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i, \verb|threshold|, \verb|value|)
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i, \verb|min|, \verb|max|)
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
-            threshold (float): the input threshold value.
-            value (float): the input value.
+            min (float): the input threshold value.
+            max (float): the input value.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -98,7 +98,7 @@ void bind_unary_backward_op(
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -156,7 +156,7 @@ void bind_unary_backward_rsqrt(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -206,7 +206,7 @@ void bind_unary_backward_op_reciprocal(
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -456,7 +456,7 @@ void bind_unary_backward_float_with_default(
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
             {2} (float, optional): {3}. Defaults to `{4}`.
@@ -592,7 +592,7 @@ void bind_unary_backward_rdiv(
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
             {2} (float): {3}.
 
         Keyword args:
@@ -654,12 +654,12 @@ void bind_unary_backward_unary_optional_float(
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
             {2} (Number): {3}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -771,7 +771,7 @@ void bind_unary_backward_optional(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -824,7 +824,7 @@ void bind_unary_backward_neg(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
