@@ -1681,7 +1681,7 @@ fixes:
   title: 'wo_a bank layout at 1M history, same load: test_woa_offon caps history at CAP 155648 (its load''s max'
   gate:
   - WA.3
-  status: queued
+  status: placed
   t: '2026-11-28T05:17:19'
   text: 'wo_a bank layout at 1M history, same load: test_woa_offon caps history at CAP 155648 (its load''s max_seq), so
     the same-load off / on cannot run at 1M. Extend it (a variant or a WOA_OFFON_POS-driven max_seq, BATCH_MAX_SEQ) to run
@@ -1692,6 +1692,7 @@ fixes:
     no 40-layer load.'
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
+  placed: '2026-11-28T05:18:57'
 classified:
   L.smoke:
     kind: framework

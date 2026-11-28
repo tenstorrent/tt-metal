@@ -1624,3 +1624,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   queued a fix job (same-load off / on at 1M, test extended).
 - 05:20 heartbeat: FIX.43 running; RAM used 79 GB; / 100G free.
 - 05:50 heartbeat: FIX.43 agent active (a large load for 1M history); RAM used 268 GB; / 99G free.
+- 06:05 FIX.43 PASS -> ad677db52bb: same load at real 1M, off -> on: single 8192 111.64 -> 111.34 ms, 4x2k 127.35 -> 126.55 ms (attention 29.27 -> 28.87 / 32.22 -> 32.19); off == on 0.0. The WA.4 gap was load-to-load drift: the bank layout stays on everywhere. Next: model_bringup batch (FIX.41 placeholder to be replaced by a task in model_bringup's own ledger).
