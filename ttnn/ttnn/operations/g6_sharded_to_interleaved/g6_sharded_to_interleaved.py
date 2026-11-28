@@ -17,6 +17,7 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_sharded_to_interleaved_program_descriptor import (
     DEFAULT_KNOBS,
+    TILE,
     Knobs,
     bind_call,
     build_program_descriptor,
@@ -103,8 +104,8 @@ def _structural_checks(input_tensor, memory_config):
     spec = in_mc.shard_spec
     if spec is None:
         raise ValueError(f"{_OP}: input_tensor has no shard spec")
-    if spec.shape[0] % 32 != 0 or spec.shape[1] % 32 != 0:
-        raise ValueError(f"{_OP}: shard shape {tuple(spec.shape)} is not a whole number of 32x32 tiles")
+    if spec.shape[0] % TILE != 0 or spec.shape[1] % TILE != 0:
+        raise ValueError(f"{_OP}: shard shape {tuple(spec.shape)} is not a whole number of {TILE}x{TILE} tiles")
     if len(input_tensor.shape) not in (2, 4):
         raise ValueError(f"{_OP}: input rank must be 2 or 4, got {len(input_tensor.shape)}")
     if memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:

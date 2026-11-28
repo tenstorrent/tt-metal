@@ -23,7 +23,7 @@ No other CB. No compute kernel; no DEST use (`fp32_dest_acc_en` not applicable).
 - p1 (1024 tiles × 1088 B → L1, ~100+ banks): ≈ `ceil(1024/num_l1_banks) * 1088` ≈ 10–11 KB per bank ≪ 1347776 B.
 - p2 (160 tiles × 2048 B → DRAM): 0 B L1.
 
-No term scales with a block knob; the only scaling term is the output itself.
+No term scales with a block knob; the only scaling term is the output itself. The implemented knobs `Knobs.blocks_per_shard` (block rows per lane) and `Knobs.writer_lanes` (1 or 2 kernel instances on disjoint sub-rectangles) change only RT args / kernel count, never a CB: both add 0 B of L1 at every setting (verifier audit, Phase 0).
 
 ## Data-movement budget
 

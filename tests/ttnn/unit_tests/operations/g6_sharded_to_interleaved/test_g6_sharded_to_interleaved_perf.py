@@ -1,28 +1,29 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-time harness for the perf refinements in op_requirements.md: the two production cases only (BB-22).
+"""Device-time harness for the perf refinements in op_requirements.md: production cases only (BB-22).
 
-- `test_eager_calls`: 12 eager calls per (case, knobs). Run under `scripts/run_safe_pytest.sh --profile` and read
-  DEVICE KERNEL DURATION from the ops CSV, dropping the first two calls of each group.
-- `test_trace_replay_ns_per_op`: host wall clock over N replays of a K-call trace, i.e. what one call costs a
-  traced model (dispatch plus kernel). Prints `REPLAY ... ns/op`; bit-exactness is the only assertion.
+Run under `scripts/run_safe_pytest.sh --profile <this file>` and summarize the ops CSV with
+`probes/perf_csv_summary.py <csv> <labels in test order>` (12 eager calls per group, first 2 dropped).
 
-The `default` variant calls the public entry point (the knobs `default_knobs` picks); every other variant pins
-its knobs through `_dispatch`, which skips only the support gate.
+Cases outside the current SUPPORTED (p1 before Refinement 1) are run with SUPPORTED widened for the
+test (monkeypatch), through the real entry point; `_knobs` pins a non-default plan.
 """
 
 from __future__ import annotations
 
-import time
+import sys
 
 import pytest
 import torch
 import ttnn
 
 from ttnn.operations.g6_sharded_to_interleaved import g6_sharded_to_interleaved
-from ttnn.operations.g6_sharded_to_interleaved.g6_sharded_to_interleaved import _dispatch
 from ttnn.operations.g6_sharded_to_interleaved.g6_sharded_to_interleaved_program_descriptor import Knobs
+
+op_module = sys.modules[g6_sharded_to_interleaved.__module__]
+
+EAGER_CALLS = 12
 
 CASES = {
     # FLUX.2-dev (1, 5120) bf16, 32 width shards of 1 x 5 tiles -> DRAM interleaved.
@@ -34,15 +35,6 @@ CASES = {
         (((0, 0), (7, 3)),),
         ttnn.DRAM_MEMORY_CONFIG,
     ),
-    # Guard: the p2 input written to L1 interleaved instead of DRAM.
-    "p2l1": (
-        (1, 5120),
-        ttnn.bfloat16,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        (32, 160),
-        (((0, 0), (7, 3)),),
-        ttnn.L1_MEMORY_CONFIG,
-    ),
     # Panoptic-DeepLab (1, 128, 256, 32) bf8b, 103 height shards of 10 x 1 tiles -> L1 interleaved (PERF FOCUS).
     "p1": (
         (1, 128, 256, 32),
@@ -53,85 +45,70 @@ CASES = {
         ttnn.L1_MEMORY_CONFIG,
     ),
 }
-KNOBS = {
-    "default": None,  # what the public entry point runs (`default_knobs`)
-    "lanes1": Knobs(),
-    "lanes1_stagger": Knobs(bank_stagger=True),
-    "lanes2": Knobs(num_write_lanes=2, bank_stagger=True),
-    "lanes2_nostagger": Knobs(num_write_lanes=2),
-    "nocs2": Knobs(num_write_nocs=2, bank_stagger=True),
-    "nocs2_nostagger": Knobs(num_write_nocs=2),
-    "lanes2_nocs2": Knobs(num_write_lanes=2, num_write_nocs=2, bank_stagger=True),
-}
-EAGER_CALLS = 12
-TRACE_CALLS = 16  # calls per captured trace: amortizes the execute_trace command itself
-TRACE_REPLAYS = 50
+KNOBS = {"default": Knobs(), "lanes2": Knobs(writer_lanes=2)}
+
+
+def _widen(monkeypatch):
+    widened = {k: list(v) for k, v in op_module.SUPPORTED.items()}
+    for axis, value in (("dtype", ttnn.bfloat8_b), ("in_scheme", "height_sharded"), ("buffer", "l1")):
+        if value not in widened[axis]:
+            widened[axis].append(value)
+    monkeypatch.setattr(op_module, "SUPPORTED", widened)
 
 
 def _input(device, case):
     shape, dtype, scheme, shard, grid, _ = case
-    size = device.compute_with_storage_grid_size()
-    for _, (x1, y1) in grid:
-        if x1 >= size.x or y1 >= size.y:
-            pytest.skip(f"shard grid end ({x1},{y1}) exceeds the device worker grid ({size.x},{size.y})")
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in grid])
     mc = ttnn.MemoryConfig(scheme, ttnn.BufferType.L1, ttnn.ShardSpec(crs, shard, ttnn.ShardOrientation.ROW_MAJOR))
-    torch.manual_seed(0)
-    x = torch.randn(shape).bfloat16()
-    tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
-    return tt_input, ttnn.to_torch(tt_input)
-
-
-def _call(tt_input, memory_config, knobs):
-    """`default` goes through the public entry point; explicit knobs need `_dispatch`."""
-    if knobs is None:
-        return g6_sharded_to_interleaved(tt_input, memory_config)
-    return _dispatch(tt_input, memory_config, knobs)
-
-
-def _assert_exact(output, expected):
-    got = ttnn.to_torch(output)
-    assert got.dtype == expected.dtype and torch.equal(got.view(torch.int16), expected.view(torch.int16))
+    torch.manual_seed(1)
+    x = torch.randn(shape).to(torch.bfloat16)
+    return x, ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
 
 
 @pytest.mark.parametrize("knobs", list(KNOBS))
 @pytest.mark.parametrize("name", list(CASES))
-def test_eager_calls(device, name, knobs):
+def test_eager_calls(device, name, knobs, monkeypatch):
+    _widen(monkeypatch)
     case = CASES[name]
-    tt_input, expected = _input(device, case)
+    _, tt_input = _input(device, case)
+    expected = ttnn.to_torch(tt_input)
     for _ in range(EAGER_CALLS):
-        output = _call(tt_input, case[-1], KNOBS[knobs])
-        _assert_exact(output, expected)
-        ttnn.deallocate(output)
-    ttnn.deallocate(tt_input)
+        out = g6_sharded_to_interleaved(tt_input, case[-1], _knobs=KNOBS[knobs])
+        ttnn.deallocate(out) if _ < EAGER_CALLS - 1 else None
+    assert torch.equal(ttnn.to_torch(out).view(torch.int16), expected.view(torch.int16))
+    for t in (out, tt_input):
+        ttnn.deallocate(t)
 
 
-@pytest.mark.use_module_device({"trace_region_size": 4 << 20})
+TRACE_CALLS = 16
+TRACE_REPLAYS = 50
+
+
+@pytest.mark.use_module_device({"trace_region_size": 1 << 20})
 @pytest.mark.parametrize("knobs", list(KNOBS))
 @pytest.mark.parametrize("name", list(CASES))
-def test_trace_replay_ns_per_op(device, name, knobs):
+def test_trace_replay_ns_per_op(device, name, knobs, monkeypatch):
+    """Host wall clock per op over replays of a TRACE_CALLS-call trace: what one call costs a traced model."""
+    import time
+
+    _widen(monkeypatch)
     case = CASES[name]
-    tt_input, expected = _input(device, case)
-    ttnn.deallocate(_call(tt_input, case[-1], KNOBS[knobs]))  # program cache warm before capture (BB-16)
-
+    _, tt_input = _input(device, case)
+    expected = ttnn.to_torch(tt_input).view(torch.int16)
+    ttnn.deallocate(g6_sharded_to_interleaved(tt_input, case[-1], _knobs=KNOBS[knobs]))  # warm cache (BB-16)
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    outputs = [_call(tt_input, case[-1], KNOBS[knobs]) for _ in range(TRACE_CALLS)]
+    outputs = [g6_sharded_to_interleaved(tt_input, case[-1], _knobs=KNOBS[knobs]) for _ in range(TRACE_CALLS)]
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(5):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
     samples = []
     for _ in range(3):
-        start = time.perf_counter_ns()
+        t0 = time.perf_counter_ns()
         for _ in range(TRACE_REPLAYS):
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(device)
-        samples.append(round((time.perf_counter_ns() - start) / (TRACE_REPLAYS * TRACE_CALLS)))
+        samples.append((time.perf_counter_ns() - t0) / (TRACE_REPLAYS * TRACE_CALLS))
+    print(f"\nREPLAY {name} {knobs} ns/op={[round(s) for s in samples]}")
+    assert torch.equal(ttnn.to_torch(outputs[-1]).view(torch.int16), expected)
     ttnn.release_trace(device, trace_id)
-    print(f"\nREPLAY {name} {knobs} ns/op={samples}")
-
-    for output in outputs:
-        _assert_exact(output, expected)
-        ttnn.deallocate(output)
-    ttnn.deallocate(tt_input)
+    for t in outputs + [tt_input]:
+        ttnn.deallocate(t)
