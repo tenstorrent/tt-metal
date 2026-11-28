@@ -973,7 +973,9 @@ def test_rs1_early_gates_two_fields():
     """rev 67, the RS1-early race (B 16 distinct users, 8 lanes x 2 tokens: user 0 moved at decode id 8): with one count
     of every root signal (rev 65 / 66) the first gate opens at t signals in total -- the fast lanes' pass-1 signals open
     it while a slow lane's pass-0 slices are unwritten; with two fields (rev 67) it opens exactly at the last pass-0
-    signal. Balanced lanes (B 4: 4 identical users x 1 token) never expose it, which is why B 4 stayed bit-identical."""
+    signal. Balanced lanes (B 4: 4 identical users x 1 token) never expose it, which is why B 4 stayed bit-identical.
+    Rev 82 RS1_PIPE: the per-half gates at 8 lanes x 2 tokens, and the roots' SEM_RSC waits (rs1 weight 2) against
+    every arrival order -- with the regressions they exist to prevent (unit weights, a stale round-2 wait, a hang)."""
     # 8 lanes x 2 tokens, lane 7 (more selected pools) slow in pass 0
     pass_us = [([40.0, 40.0], [50.0, 50.0])] * 7 + [([200.0, 200.0], [50.0, 50.0])]
     done0, done1 = SP.rs1_lane_ships(pass_us)
@@ -990,13 +992,38 @@ def test_rs1_early_gates_two_fields():
     assert (
         SP.rs1_early_gates(done0, done1, 4, fields=False)[0] == 60.0 < 100.0 == SP.rs1_early_gates(done0, done1, 4)[0]
     )
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE (8 lanes x 2 tokens, ~31 us per token pass): rs1 carries every lane's first token
+    # (t 0..7) and opens at their last pass-0 ship, a token pass before rs1a and the knob-off gate; each gate = its
+    # half's last ship (sound). The knob-off increments (every signal to both lanes) with the halved waits open rs1a
+    # on half 0's signals while its own slices are unwritten (the regression the per-half signal prevents)
+    done0, done1 = SP.rs1_lane_ships([([28.0, 31.0], [31.0, 31.0])] * 8)
+    assert SP.rs1_early_gates(done0, done1, 16) == (59.0, 121.0)  # knob off: both lanes
+    assert SP.rs1_pipe_gates(done0, done1, 16) == {1: (28.0, 90.0, 28.0, 90.0), 0: (59.0, 121.0, 59.0, 121.0)}
+    bad = SP.rs1_pipe_gates(done0, done1, 16, mutate="both")
+    assert bad[0][0] == 28.0 < bad[0][2] == 59.0 and bad[0][1] == 90.0 < bad[0][3] == 121.0
+    # the roots' landing waits: every arrival order of rs1's two increments and rs1a's one -- half 0 only past rs1,
+    # half 1 past both, round 2 past rs2 too (rs2 sends only after every root's half-1 scatter)
+    for o in (["rs1", "rs1", "rs1a"], ["rs1", "rs1a", "rs1"], ["rs1a", "rs1", "rs1"]):
+        st = SP.rs1_pipe_root(o)
+        assert [s for s, _ in st] == ["half0", "half1", "round2"], st
+        assert "rs1" in st[0][1] and st[1][1] == ("rs1", "rs1a") and st[2][1] == ("rs1", "rs1a", "rs2"), (o, st)
+    # regressions: the knob-off unit weights with the ordinal waits let rs1a's landing release half 0; a round-2 wait
+    # left at 3 passes before rs2 landed; a half-1 wait at 4 waits for rs2, which waits for the half-1 scatters: a hang
+    unit = {"rs1": 1, "rs1a": 1, "rs2": 1}
+    st = SP.rs1_pipe_root(["rs1a", "rs1"], weights=unit, waits=(1, 2, 3))
+    assert st[0] == ("half0", ("rs1a",)), st
+    st = SP.rs1_pipe_root(["rs1", "rs1", "rs1a"], waits=(2, 3, 3))
+    assert st[2] == ("round2", ("rs1", "rs1a")), st
+    assert SP.rs1_pipe_root(["rs1", "rs1", "rs1a"], waits=(2, 4, 4))[1] == ("hang", ("rs1", "rs1a"))
 
 
 def test_rs1_early_gates_sound_random():
     """rev 67's two-field gates are sound for any lane skew (gate 1 at the last pass-0 signal, gate 2 at the last
-    pass-1 signal); the one-count gates of rev 65 / 66 are not"""
+    pass-1 signal); the one-count gates of rev 65 / 66 are not. Rev 82 RS1_PIPE (whole-token halves): each RS1 lane's
+    gates open exactly at its own half's last pass-0 / pass-1 ship; with every signal sent to both lanes (the knob-off
+    increments) and the halved waits they open early"""
     gen = torch.Generator().manual_seed(67)
-    unsound_old = 0
+    unsound_old = checked = unsound_both = 0
     for _ in range(200):
         lanes = int(torch.randint(1, 9, (1,), generator=gen))
         per = int(torch.randint(1, 5, (1,), generator=gen))
@@ -1010,7 +1037,14 @@ def test_rs1_early_gates_sound_random():
         assert SP.rs1_early_gates(done0, done1, t) == (need1, need2)
         g1_old, _ = SP.rs1_early_gates(done0, done1, t, fields=False)
         unsound_old += g1_old < need1
+        if SP.rs1_pipe_halves(t) is not None:  # rev 82 RS1_PIPE: each half's lane opens at its own last ship
+            checked += 1
+            for link, (g1, g2, n0, n1) in SP.rs1_pipe_gates(done0, done1, t).items():
+                assert (g1, g2) == (n0, n1), (lanes, per, link)
+            bad = SP.rs1_pipe_gates(done0, done1, t, mutate="both")  # (the knob-off increments, halved waits)
+            unsound_both += any(g1 < n0 or g2 < n1 for g1, g2, n0, n1 in bad.values())
     assert unsound_old > 20, unsound_old
+    assert checked > 50 and unsound_both > checked // 2, (checked, unsound_both)
 
 
 def test_rev65_knobs(monkeypatch):
@@ -1166,13 +1200,16 @@ def test_agk_launch_matches_rev65(lanes, tl, case):
             assert r["got"][0]["k_rem"] > 0 and not r["got"][0]["done"]  # a real tie round on every token
 
 
-def test_agk_count_is_the_local_select_count():
+def test_agk_count_is_the_local_select_count(monkeypatch):
     """the AGK count (min(512, n_closed_local(p, q))) = the local top-512's record count on every chip at every lane
     count, across pool-page / unit boundaries, below / at / above 512 local pools (the key page carries no count); and
     the same DSA state under speculative verify + rollback (SP.spec_ring_emulate: ix_dm1.cpp MLA_DSA_ONE_SLOT /
     MLA_DSA_GROUP_ROWS ring rows + pooled keys, spec_ctl.cpp ACCEPT's per-group ring move, plain steps between verifies)
     == sequential decode of the committed tokens; Zoe Carver's regen trap (a rejected row closing a pool reused a stale
-    open-pool record) is the "save_if_open" control, ACCEPT without the move the "no_move" one -- both must fail"""
+    open-pool record) is the "save_if_open" control, ACCEPT without the move the "no_move" one -- both must fail.
+    GLM53_ACCEPT_BATCH (spec_ctl.cpp SPEC_ACCEPT_BATCH: every read of a batch before its first write) moves the same
+    rows: no ring piece's source overlaps a destination at any base / accepted count (K <= 7); the knob, SpecCtl's
+    scratch and the kernel's offsets agree"""
     for K, G in ((1, 1), (1, 4), (1, 8), (2, 1), (3, 1), (3, 4)):
         r = SP.spec_ring_emulate(K, G, 300, seed=10 * K + G, plain_p=0.05)
         assert r["checks"] > 1500 and not r["mismatches"], (K, G, r["mismatches"][:5])
@@ -1184,6 +1221,208 @@ def test_agk_count_is_the_local_select_count():
     assert not SP.spec_ring_emulate(1, 1, 3, **trap)["mismatches"]
     bad = SP.spec_ring_emulate(1, 1, 3, variant="save_if_open", **trap)["mismatches"]
     assert (0, 0, "open_row", 6) in bad and (1, 0, "scored_pool", 1) in bad, bad
+    disjoint = lambda ps: all(s + b <= d or d + bd <= s for s, _, b in ps for _, d, bd in ps)  # noqa: E731
+    for c in range(-1, 64):
+        for n in range(8):
+            pieces = SP.accept_ring_pieces(c, n)
+            assert (pieces == []) == (c < 0 or c % 4 + n + 1 < 4) and len(pieces) in (0, 2), (c, n)
+            assert disjoint(pieces), (c, n, pieces)
+            assert all(s % 64 == 0 and s + b <= 1024 and d in (0, 512) for s, d, b in pieces), (c, n, pieces)
+    # RING (SPEC_MODE 4): the move rows 4 grp -> 0..3, the save 0..3 -> 8..11, the restore 8..11 -> 0..3, each batched
+    # over the 8 tiles; the save reads the move's rows, so ring_rows ends with a write barrier
+    for src, dst in [(4, 0), (8, 0), (0, SP.SPEC_RING_SAVE_ROW), (SP.SPEC_RING_SAVE_ROW, 0)]:
+        assert disjoint(SP.ring_row_pieces(src, dst)), (src, dst)
+    assert SP.spec_ctl_scratch("accept", 8, 11, False) == (2048, None)
+    assert SP.spec_ctl_scratch("gather", 0, 0, True) == (1024, None)  # BOOT / GATHER never take the define
+    assert SP.spec_ctl_scratch("accept", 8, 11, True) == (2048 + 1024 + 11 * 2048, 11)
+    assert SP.spec_ctl_scratch("ring", 0, 1, True) == (1024 + 2048, 1)
+    with open(os.path.join(SP.KDIR, "spec", "spec_ctl.cpp")) as f:
+        src = f.read()
+    for line in ("constexpr uint32_t BATCH_OFF = 2048;", "constexpr uint32_t BATCH_OFF = 1024;",
+                 "constexpr uint32_t TB_BYTES = 1024;", "s_tb = scr + BATCH_OFF, s_rb = scr + BATCH_OFF + TB_BYTES;",
+                 "static_assert(2 * K + 1 <= 16,", "const uint32_t b = buf + (l * RING_TILES + i) * 256;",
+                 "noc_async_write(b, a, 128);", "noc_async_write(b + 128, a + 512, 128);",
+                 f"constexpr uint32_t RING_SAVE_ROW = {SP.SPEC_RING_SAVE_ROW};"):  # fmt: skip
+        assert line in src, line
+    monkeypatch.delenv("GLM53_ACCEPT_BATCH", raising=False)
+    assert not SP.accept_batch()
+    monkeypatch.setenv("GLM53_ACCEPT_BATCH", "0")
+    assert not SP.accept_batch()
+    monkeypatch.setenv("GLM53_ACCEPT_BATCH", "1")
+    assert SP.accept_batch()
+    monkeypatch.setenv("GLM53_ACCEPT_BATCH", "2")
+    with expect_error(ValueError, "GLM53_ACCEPT_BATCH=2: 0 or 1"):
+        SP.accept_batch()
+    # GLM53_HEAD_SELECT_FAST (topk_select.cpp TOPK_SEL_FAST): the kernel's heap merge (SP.topk_chip_merge mirrors it line
+    # for line: array heap, sift, ids decoded on demand) takes the linear scan's sequence (unique ids across the chips;
+    # key ties across chips included), and a load that keeps the previous head's id (the negative control) does not;
+    # the knob parses 0 / 1
+    rng, stale = random.Random(7), 0
+    for trial in range(200):
+        nchip, k = rng.choice([(32, 1), (32, 32), (8, 4), (32, 8)])
+        vocab = rng.sample(range(1 << 18), nchip * k)
+        lists = []
+        for q in range(nchip):
+            keys = [rng.randint(0, 3 if trial % 2 else 1 << 16) for _ in range(rng.randint(0, k))]
+            lists.append(sorted(((kk, vocab[q * k + j]) for j, kk in enumerate(keys)), key=lambda x: (-x[0], x[1])))
+        want = SP.topk_chip_merge(lists, k, heap=False)
+        assert SP.topk_chip_merge(lists, k, heap=True) == want, trial
+        stale += SP.topk_chip_merge(lists, k, heap=True, stale_id=True) != want
+    assert stale > 50, stale
+    monkeypatch.delenv("GLM53_HEAD_SELECT_FAST", raising=False)
+    assert not SP.head_select_fast()
+    monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "0")  # (an explicit 0: off)
+    assert not SP.head_select_fast()
+    monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "1")
+    assert SP.head_select_fast()
+    monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "2")
+    with expect_error(ValueError, "GLM53_HEAD_SELECT_FAST=2: 0 or 1"):
+        SP.head_select_fast()
+    # GLM53_KDA_VERIFY_FLAT (kda_pre reader.cpp KDA_VERIFY_FLAT, on PIPE): the readers' schedules over the DRAM history
+    # (SP.kda_verify_schedule) -- the knob-off GROUPS reader, PIPE and FLAT build the same windows and leave the same
+    # history for any selector (cross-group slots and inactive groups included); PIPE without its `late` deferral (the
+    # negative control) does not; the knob parses 0 / 1
+    rng, broken = random.Random(11), 0
+    for trial in range(400):
+        G, gp = rng.choice([(8, 1), (4, 1), (4, 2), (2, 2), (3, 2), (8, 2)])
+        rows = 2 * G * gp
+        selw = [rng.randrange(rows) if trial % 2 else 2 * gp * g + rng.randrange(2 * gp) for g in range(G)]
+        dead = {g for g in range(G) if rng.random() < 0.2}
+        active = [r // (2 * gp) not in dead for r in range(rows)]
+        ref = SP.kda_verify_schedule(G, gp, selw, "groups", active)
+        assert SP.kda_verify_schedule(G, gp, selw, "pipe", active) == ref, (G, gp, selw)
+        assert SP.kda_verify_schedule(G, gp, selw, "flat", active) == ref, (G, gp, selw)
+        broken += SP.kda_verify_schedule(G, gp, selw, "pipe_no_late", active) != ref
+    assert broken > 20, broken
+    monkeypatch.delenv("GLM53_KDA_VERIFY_FLAT", raising=False)
+    assert not SP.kda_verify_flat()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "0")
+    assert not SP.kda_verify_flat()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "1")
+    assert SP.kda_verify_flat()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "2")
+    with expect_error(ValueError, "GLM53_KDA_VERIFY_FLAT=2: 0 or 1"):
+        SP.kda_verify_flat()
+    # GLM53_KDA_VERIFY_RSPLIT (kda_pre reader.cpp KDA_VERIFY_RSPLIT, on FLAT): the G groups on G row-group cores
+    # (SP.kda_verify_schedule "rsplit": each core's reads and builds on its local pages, every core's write-back after
+    # every core's reads -- the owner's P6) build the same windows and leave the same history as the knob-off GROUPS
+    # reader for any selector and any core order; a core writing back right after its own build ("rsplit_eager", the
+    # negative control) does not once a selector names an earlier core's rows, and never with own-group selectors.
+    # The pages: every pair on exactly one core, one whole group per core, its slot on the group's last page, selector
+    # word = the global group. The knob parses 0 / 1; kda_verify_rsplit_rows engages only verify-groups widths (G > 1)
+    rng, eager = random.Random(13), 0
+    for trial in range(400):
+        G, gp = rng.choice([(8, 1), (4, 2), (4, 1), (2, 2), (8, 2)])
+        rows = 2 * G * gp
+        selw = [rng.randrange(rows) if trial % 2 else 2 * gp * g + rng.randrange(2 * gp) for g in range(G)]
+        dead = {g for g in range(G) if rng.random() < 0.2}
+        active = [r // (2 * gp) not in dead for r in range(rows)]
+        ref = SP.kda_verify_schedule(G, gp, selw, "groups", active)
+        order = rng.sample(range(G), G)
+        assert SP.kda_verify_schedule(G, gp, selw, "rsplit", active, R=G, order=order) == ref, (G, gp, selw, order)
+        bad = SP.kda_verify_schedule(G, gp, selw, "rsplit_eager", active, R=G) != ref
+        assert not bad or trial % 2, (G, gp, selw)  # own-group selectors (the steady 8 x 1): no cross-core slot
+        eager += bad
+    assert eager > 20, eager
+    for G, gp in ((8, 1), (4, 2), (4, 1), (2, 2), (8, 2)):
+        seen = []
+        for rg in range(G):
+            pg = SP.kda_verify_rsplit_pages(G, gp, G, rg)
+            assert pg["ng"] == 1 and pg["p1"] - pg["p0"] == gp and pg["g0"] == rg, (G, gp, rg, pg)
+            assert [x[0] for x in pg["pages"]] == list(range(gp)), pg
+            assert all(u == pg["p0"] + lp and g == rg and land == gp - 1 for lp, u, g, land in pg["pages"]), pg
+            seen += [x[1] for x in pg["pages"]]
+        assert sorted(seen) == list(range(G * gp)), (G, gp)
+    monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT", raising=False)
+    assert not SP.kda_verify_rsplit() and SP.kda_verify_rsplit_rows(8, 8, 64, pipe=True, flat=True) == 1
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "0")
+    assert not SP.kda_verify_rsplit()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "1")
+    assert SP.kda_verify_rsplit()
+    on = dict(pipe=True, flat=True)
+    assert SP.kda_verify_rsplit_rows(8, 8, 64, **on) == 8  # the served 8 x 1 at TP 32: 8 groups x 8 column cores
+    assert SP.kda_verify_rsplit_rows(4, 8, 64, **on) == 4  # the 4 x 3
+    assert SP.kda_verify_rsplit_rows(1, 8, 64, **on) == SP.kda_verify_rsplit_rows(0, 8, 64, **on) == 1  # lone / plain
+    for kw, msg in ((dict(pipe=True), "needs GLM53_KDA_VERIFY_PIPE=1 and GLM53_KDA_VERIFY_FLAT=1"),
+                    (dict(rsplit=2, **on), "with GLM53_KDA_RSPLIT=2"),
+                    (dict(prefetch=True, **on), "with GLM53_KDA_PREFETCH=1"),
+                    (dict(n_cols=16, **on), "8 row groups x 16 column cores > 64 owner cores")):  # fmt: skip
+        args = dict(kw)
+        with expect_error(ValueError, msg):
+            SP.kda_verify_rsplit_rows(8, args.pop("n_cols", 8), 64, **args)
+    # KdaPre asks kda_verify_rsplit_rows before its verify's one-row-group assert: the knob with GLM53_KDA_RSPLIT > 1
+    # is the ValueError above, not that AssertionError (kda_pre.py imports ttnn: read its text)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "kda_pre.py")) as fh:
+        src = fh.read()
+    assert src.index("self.vrsplit = kda_verify_rsplit_rows(") < src.index('"KDA_VERIFY: one row group"')
+    # the hand-off chain the deferred write-backs rely on (kernels/mk/owner_dm0.cpp), asserted where MkLayer /
+    # MkSparseLayer / MkStepB build it (kda_verify_rsplit_order_check) and where the TP wrappers route P6 through the
+    # all-reduce lanes (kda_verify_rsplit_lanes_check, through tp8_layer._hooked_rsplit_check in all four owner
+    # rewrites: the per-layer TP launches and tp_stack's layer_hooks, the stacks the served widths build), on the plans
+    # of the served shapes: KdaPre.consumers() (its body from kda_pre.py; TP 32 = 2 heads x kda_pre spread 4 = 8 column
+    # cores x G row groups, kda_rec spread 2 x G user groups), the o_proj readers' SEM_ON count and P6's wait. A mutated
+    # count, a quiet kda_pre core or a consumer past the kda_rec cores fails
+    import ast
+    import types
+
+    for name, fn, n in (("mk_layer.py", "kda_verify_rsplit_order_check", 1),
+                        ("mk_sparse.py", "kda_verify_rsplit_order_check", 1),
+                        ("mk_dense.py", "kda_verify_rsplit_order_check", 1),
+                        ("tp8_layer.py", "kda_verify_rsplit_lanes_check", 1),  # in _hooked_rsplit_check
+                        ("tp8_layer.py", "_hooked_rsplit_check", 2),  # its def + TPDenseKDALayer._hooked
+                        ("tp8_sparse.py", "_hooked_rsplit_check", 1),  # TPSparseKDALayer._hooked_sparse
+                        ("tp8_sparse.py", "kda_verify_rsplit_lanes_check", 0),
+                        ("tp_stack.py", "_hooked_rsplit_check", 2),  # TPStack / TPSparseStack.layer_hook
+                        ("tp_stack.py", "kda_verify_rsplit_lanes_check", 0)):  # fmt: skip
+        with open(os.path.join(os.path.dirname(SP.KDIR), name)) as fh:
+            assert fh.read().count(f"{fn}(") == n, (name, fn, n)
+    # MkStepB refuses kda_rec_ugroups > 1: its o_proj readers wait for one user group's kda_rec cores
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_dense.py")) as fh:
+        assert "assert self.rec is None or self.rec.ug == 1" in fh.read()
+    tree = ast.parse(src)
+    kp = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KdaPre")
+    body = [n for n in kp.body if isinstance(n, ast.FunctionDef) and n.name == "consumers"]
+    names = ("CONV_PER_CORE", "G_PER_CORE")
+    lit = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
+           if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") in names}  # fmt: skip
+    ns = {}
+    exec(compile(ast.Module(body=body, type_ignores=[]), "kda_pre.py", "exec"), ns)
+    s_on, s_a, nr = 5, 6, 48  # (any ids / reader count)
+
+    def plan(G, ug):  # -> (consumers, active kda_pre cores, kda_rec cores)
+        pre = types.SimpleNamespace(heads=2, core_list=[None] * 64, n_cols=8, n_active=8 * G, rec_spread=2, rec_ug=ug,
+                                    conv=lit["CONV_PER_CORE"] // 4, gpc=lit["G_PER_CORE"] // 4)  # fmt: skip
+        return ns["consumers"](pre), 8 * G, 2 * 2 * ug
+
+    for G in (8, 4):  # the 8 x 1 and the 4 x 3
+        assert SP.kda_verify_rsplit_rows(G, 8, 64, **on) == G
+        cons, n_pre, n_rec = plan(G, G)
+        ok = dict(o_wait=(s_on, n_rec), o_signal=s_a, post_wait=(s_a, nr), readers=nr, sem_on=s_on, sem_a=s_a)
+        SP.kda_verify_rsplit_order_check(cons, n_pre, n_rec, **ok)
+        for cons_, n_rec_, kw, msg in (
+            (cons, n_rec, dict(ok, o_wait=(s_on, n_rec - 1)), "o_proj"),  # the o_proj readers one kda_rec core early
+            (cons, n_rec, dict(ok, o_wait=(s_on, n_rec // G)), "o_proj"),  # the count without the user groups
+            (cons, n_rec, dict(ok, o_signal=s_on), "o_proj"),
+            (cons, n_rec, dict(ok, post_wait=(s_a, nr - 1)), "P6 waits"),  # P6 one o_proj reader early
+            ({**cons, n_pre - 1: []}, n_rec, ok, "signal no kda_rec core"),  # the last row group's last core quiet
+            (cons, n_rec // 2, dict(ok, o_wait=(s_on, n_rec // 2)), "outside the kda_rec cores"),  # half the groups
+        ):
+            with expect_error(AssertionError, msg):
+                SP.kda_verify_rsplit_order_check(cons_, n_pre, n_rec_, **kw)
+    for mask in ((1 << 2) | (1 << 4), 1 << 2):  # tp8_layer.run_layer's o_proj + down all-reduces, tp8_sparse's o_proj
+        SP.kda_verify_rsplit_lanes_check((s_a, 2), s_a, 2, nr, nr, mask)
+    # P6 behind one of the 2 lanes, the lanes signalling another semaphore, a lane one o_proj reader early, o_proj off
+    # the all-reduce
+    for args, msg in ((((s_a, 1), s_a, 2, nr, nr, 1 << 2), "P6 waits"),
+                      (((s_a, 2), s_on, 2, nr, nr, 1 << 2), "P6 waits"),
+                      (((s_a, 2), s_a, 2, nr - 1, nr, 1 << 2), "producers"),
+                      (((s_a, 2), s_a, 2, nr, nr, 1 << 4), "all-reduce")):  # fmt: skip
+        with expect_error(AssertionError, msg):
+            SP.kda_verify_rsplit_lanes_check(*args)
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "2")
+    with expect_error(ValueError, "GLM53_KDA_VERIFY_RSPLIT=2: 0 or 1"):
+        SP.kda_verify_rsplit()
+    monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT")
     gen = torch.Generator().manual_seed(66)
     for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
         keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)
@@ -1501,10 +1740,12 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
     default, an explicit RS1_SPLIT=0 / RSB=0 / RSNP=0 the RS1_TSPLIT default, an explicit MFAST=0 (or R8 / AGK / PREFILTER
-    = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the
-    COMB default); the speculative verify's step cuts and its kda_rec
-    value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still
-    follow apply); the 1 M prefill window ladder; other meshes get nothing"""
+    = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default, an explicit RS1_EARLY / RS1_SPLIT /
+    RS1_TSPLIT = 0 (or RSB / RSNP = 0, through TSPLIT) the RS1_PIPE default, an explicit KDA_VERIFY_PIPE / FLAT = 0,
+    GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1 (or any of them in a KDA kind's GLM53_STACK_KNOB_SET entry) the
+    KDA_VERIFY_RSPLIT default, PIPE = 0 the FLAT one); the speculative verify's step cuts and its kda_rec value split
+    (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still follow
+    apply); the 1 M prefill window ladder; other meshes get nothing"""
     import os
 
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1544,6 +1785,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     )
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB", "GLM53_MLA_ATT_OBF16"]
+    keys += ["GLM53_KDA_RSPLIT", "GLM53_KDA_PREFETCH", "GLM53_STACK_KNOB_SET"]  # (drop the KDA_VERIFY_RSPLIT default)
     _protect_env(monkeypatch, keys)
     assert GD.apply((2, 4), 4096) == {} and not SP.shard_agk(8)
     got = GD.apply((8, 4), 4096, 4096)
@@ -1634,6 +1876,98 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     )
     assert got["GLM53_MLA_DSA_BATON_GROUPS"] == got["GLM53_KDA_VERIFY_PIPE"] == "1"
     assert got["GLM53_MK_READER_PLACE"] == "row" and got["GLM53_REC_SPLIT_VERIFY"] == "2"
+    # the bitwise decode-step knobs and their readers: SP.accept_batch / head_select_fast / kda_verify_flat, and
+    # mhc_pre.py's MSG_TRIM env read + define (a misspelled name would build knob-off silently)
+    for k in ("GLM53_MHC_MSG_TRIM", "GLM53_ACCEPT_BATCH", "GLM53_HEAD_SELECT_FAST", "GLM53_KDA_VERIFY_FLAT"):
+        assert GD.KNOBS[k] == got[k] == "1", k
+    assert SP.accept_batch() and SP.head_select_fast() and SP.kda_verify_flat()
+    assert 'os.environ.get("GLM53_MHC_MSG_TRIM") == "1"' in mhc_src and '("MHC_MSG_TRIM", "1")' in mhc_src
+    # GLM53_KDA_VERIFY_RSPLIT: a default on PIPE + FLAT; its reader sees it, and with the applied environment read as
+    # KdaPre reads it the verify-groups widths engage it (8 x 1 / 4 x 3 at TP 32: G row groups x 8 column cores)
+    assert GD.KNOBS["GLM53_KDA_VERIFY_RSPLIT"] == got["GLM53_KDA_VERIFY_RSPLIT"] == "1" and SP.kda_verify_rsplit()
+    kp = dict(
+        rsplit=int(os.environ.get("GLM53_KDA_RSPLIT", "1")),
+        pipe=os.environ.get("GLM53_KDA_VERIFY_PIPE", "0") == "1",
+        flat=SP.kda_verify_flat(),
+        prefetch=os.environ.get("GLM53_KDA_PREFETCH") == "1",
+    )
+    assert SP.kda_verify_rsplit_rows(8, 8, 64, **kp) == 8 and SP.kda_verify_rsplit_rows(4, 8, 64, **kp) == 4
+    # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default (the others stay), and RSPLIT's (on FLAT) with it
+    monkeypatch.setenv("GLM53_KDA_VERIFY_PIPE", "0")
+    monkeypatch.delenv("GLM53_KDA_VERIFY_FLAT", raising=False)
+    monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT", raising=False)
+    got_np = GD.apply((8, 4), 4096, 4096)
+    assert "GLM53_KDA_VERIFY_FLAT" not in got_np and not SP.kda_verify_flat()
+    assert "GLM53_KDA_VERIFY_RSPLIT" not in got_np and not SP.kda_verify_rsplit()
+    monkeypatch.delenv("GLM53_KDA_VERIFY_PIPE")
+    # the other values the build refuses RSPLIT with (SP.kda_verify_rsplit_rows) drop its default: an explicit FLAT=0,
+    # GLM53_KDA_RSPLIT > 1, GLM53_KDA_PREFETCH=1, or either of the last two in a dense_kda / sparse_kda
+    # GLM53_STACK_KNOB_SET entry (stack_model.set_knobs pops both per-kind knobs and sets those); the knob-off values,
+    # a sparse_dsa entry and a dropped (K=-) entry keep it
+    for k, v, drop in (
+        ("GLM53_KDA_VERIFY_FLAT", "0", True),
+        ("GLM53_KDA_RSPLIT", "2", True),
+        ("GLM53_KDA_PREFETCH", "1", True),
+        ("GLM53_STACK_KNOB_SET", "s:GLM53_KDA_PREFETCH=1", True),
+        ("GLM53_STACK_KNOB_SET", "d:GLM53_MK_OPT=O3;d:GLM53_KDA_RSPLIT=2", True),
+        ("GLM53_KDA_RSPLIT", "1", False),
+        ("GLM53_KDA_PREFETCH", "0", False),
+        ("GLM53_STACK_KNOB_SET", "a:GLM53_KDA_PREFETCH=1,s:GLM53_KDA_RSPLIT=-", False),
+    ):
+        monkeypatch.setenv("GLM53_KDA_VERIFY_PIPE", "1")
+        monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "1")
+        monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT", raising=False)
+        monkeypatch.setenv(k, v)
+        assert ("GLM53_KDA_VERIFY_RSPLIT" not in GD.apply((8, 4), 4096, 4096)) == drop, (k, v)
+        assert (os.environ.get("GLM53_KDA_VERIFY_RSPLIT") is None) == drop, (k, v)
+        monkeypatch.delenv(k)
+    # a GLM53_STACK_KNOB_SET entry for PIPE / FLAT counts like the environment's value ("K=-" leaves the builds it
+    # reaches on the readers' default 0): PIPE = 0 drops the FLAT and RSPLIT defaults, FLAT = 0 the RSPLIT one -- else
+    # a verify build refuses the knob-on FLAT / RSPLIT. Every kind's entry counts, sparse_dsa's too: neither knob is a
+    # per-kind one (stack_model.KNOB_KEYS), so the value a sparse_dsa entry sets stays for the KDA builds after it; 1s
+    # keep both
+    for spec, flat, rsplit in (
+        ("s:GLM53_KDA_VERIFY_PIPE=0", False, False),
+        ("d:GLM53_MK_OPT=O3,d:GLM53_KDA_VERIFY_PIPE=-", False, False),
+        ("d:GLM53_KDA_VERIFY_FLAT=0", True, False),
+        ("s:GLM53_KDA_VERIFY_FLAT=-", True, False),
+        ("a:GLM53_KDA_VERIFY_PIPE=0;a:GLM53_KDA_VERIFY_FLAT=0", False, False),
+        ("a:GLM53_KDA_VERIFY_FLAT=-", True, False),
+        ("a:GLM53_KDA_VERIFY_PIPE=-", False, False),
+        ("s:GLM53_KDA_VERIFY_PIPE=1;d:GLM53_KDA_VERIFY_FLAT=1", True, True),
+    ):
+        for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT", "GLM53_KDA_VERIFY_RSPLIT"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("GLM53_STACK_KNOB_SET", spec)
+        got_ks = GD.apply((8, 4), 4096, 4096)
+        assert got_ks["GLM53_KDA_VERIFY_PIPE"] == "1", spec
+        kept = ("GLM53_KDA_VERIFY_FLAT" in got_ks, "GLM53_KDA_VERIFY_RSPLIT" in got_ks)
+        assert kept == (flat, rsplit), (spec, got_ks)
+    monkeypatch.delenv("GLM53_STACK_KNOB_SET")
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "1")
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "1")
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE: a default on the 8x4 (never the pair / 2x4); it rides on RS1_EARLY + RS1_SPLIT +
+    # RS1_TSPLIT: an explicit 0 on any of them drops the RS1_PIPE default (else shard_rs1_pipe refuses the build)
+    assert GD.KNOBS["GLM53_DSA_SHARD_RS1_PIPE"] == got["GLM53_DSA_SHARD_RS1_PIPE"] == "1"
+    assert SP.shard_rs1_pipe(8) and not SP.shard_rs1_pipe(2)
+    for k in ("GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RS1_TSPLIT"):
+        monkeypatch.setenv(k, "0")
+        monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE", raising=False)
+        assert "GLM53_DSA_SHARD_RS1_PIPE" not in GD.apply((8, 4), 4096, 4096), k
+        assert os.environ.get("GLM53_DSA_SHARD_RS1_PIPE") is None, k
+        monkeypatch.setenv(k, "1")
+    # an explicit RSB=0 or RSNP=0 drops it through TSPLIT (whose default goes): the derived defaults cleared first, as
+    # in a fresh process (an RSNP / TSPLIT left in the environment by the apply above would count as explicit)
+    for k in ("GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP"):
+        for d in ("GLM53_DSA_SHARD_RSNP", "GLM53_DSA_SHARD_RS1_TSPLIT", "GLM53_DSA_SHARD_RS1_PIPE"):
+            monkeypatch.delenv(d, raising=False)
+        monkeypatch.setenv(k, "0")
+        got_k = GD.apply((8, 4), 4096, 4096)
+        assert "GLM53_DSA_SHARD_RS1_TSPLIT" not in got_k and "GLM53_DSA_SHARD_RS1_PIPE" not in got_k, (k, got_k)
+        assert os.environ.get("GLM53_DSA_SHARD_RS1_PIPE") is None, k
+        for d in ("GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP", "GLM53_DSA_SHARD_RS1_TSPLIT"):
+            monkeypatch.setenv(d, "1")
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "1")
     _protect_env(monkeypatch, [k for k in os.environ if k.startswith("GLM53_SPEC_")] + list(GD.SPEC_KNOBS_B16))
     spec_set, spec_mode, spec_why = GD.apply_spec((8, 4), 16, 4)  # (after apply, as test_mk_e2e runs them)
     assert spec_mode == "spec" and spec_set["GLM53_SPEC_K"] == "3", (spec_mode, spec_why)
@@ -1736,6 +2070,77 @@ def test_rs1_split_build_refusals(monkeypatch):
     monkeypatch.delenv("GLM53_DSA_SHARD_RS1_TSPLIT")
     SP.rs1_tsplit_header_check()
     assert SP.rs1_tsplit_spans(16) == {1: (0, 72), 0: (72, 72)} and SP.rs1_tsplit_spans(1) == {1: (0, 4), 0: (4, 6)}
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0; on in tt/galaxy_defaults.py): 0 / 1 only, the 8x4 only, needs
+    # RS1_EARLY + RS1_SPLIT + RS1_TSPLIT; the TSPLIT halves as tokens (None where a span splits a token's pages);
+    # engaged only at t 16 on 8 lanes (RS1_PIPE_SHAPES, the device-validated shape); each lane's gates count its half
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE", raising=False)
+    assert not SP.shard_rs1_pipe(8, False, False, False)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "1")
+    assert SP.shard_rs1_pipe(8) and not SP.shard_rs1_pipe(2, False, False, False)
+    for need in (dict(early=False), dict(rs1s=False), dict(rs1t=False)):
+        with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_PIPE=1 needs"):
+            SP.shard_rs1_pipe(8, **need)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "2")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_PIPE=2: 0 or 1"):
+        SP.shard_rs1_pipe(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE")
+    assert SP.rs1_pipe_halves(16) == {1: list(range(8)), 0: list(range(8, 16))}
+    assert SP.rs1_pipe_halves(4) == {1: [0, 1], 0: [2, 3]} and SP.rs1_pipe_halves(32)[0] == list(range(16, 32))
+    assert all(SP.rs1_pipe_halves(t) is None for t in (1, 2, 3, 6, 10, 14))
+    for t in range(1, 33):  # the halves = the TSPLIT spans' pages, token by token
+        hv = SP.rs1_pipe_halves(t)
+        if hv is not None:
+            sp_ = SP.rs1_tsplit_spans(t)
+            assert all(sp_[k][1] == len(hv[k]) * SP.RS1_DATA_PAGES for k in (0, 1)), t
+    # every other shape keeps the knob-off build, without an error: one token per lane (t 8 at 8, t 4 at 4), t 1, and
+    # the whole-token shapes with >= 2 tokens per lane that have no device identity run -- t 32 at 8 lanes,
+    # GLM53_MLA_DSA_LANES=4 (t 8 / 16 on 4), GLM53_MLA_DSA_LANES_AT=16:2, GLM53_MLA_DSA_LANES_T4=1 / 2 (t 4 on 1 / 2)
+    assert SP.RS1_PIPE_SHAPES == ((16, 8),) and SP.rs1_pipe_engaged(16, 8, True)
+    assert not SP.rs1_pipe_engaged(16, 8, False)
+    untested = ((32, 8), (8, 4), (16, 4), (16, 2), (4, 1), (4, 2))
+    one_per_lane = ((8, 8), (4, 4), (1, 1), (16, 16), (6, 2), (12, 8))
+    assert not any(SP.rs1_pipe_engaged(t, ln, True) for t, ln in untested + one_per_lane)
+    eng = [(t, ln) for t in range(1, 65) for ln in (1, 2, 4, 8, 16) if SP.rs1_pipe_engaged(t, ln, True)]
+    # the protocol's domain: whole-token halves and >= 2 tokens per lane
+    dom = [(t, ln) for t in range(1, 65) for ln in (1, 2, 4, 8, 16) if t >= 2 * ln and SP.rs1_pipe_halves(t)]
+    assert eng == [(16, 8)] and set(untested) <= set(dom) and (8, 8) not in dom, (eng, dom)
+    for t, ln in ((16, 8), (32, 8), (8, 4)):  # every lane holds tokens of both halves
+        hv = SP.rs1_pipe_halves(t)
+        assert all({k for k, v in hv.items() for x in range(l_, t, ln) if x in v} == {0, 1} for l_ in range(ln)), t
+    # the roots' second wait as the kernel runs it (rs1_pipe_root_waits; rs1_pipe_header_check ties its loop and
+    # condition to att_dsa_shard_dm1.cpp), over the protocol's domain (the engaged t 16 at 8 lanes and the shapes above
+    # that keep the knob-off build): each lane root waits exactly once, before its first half-1 token. The off-by-ones
+    # must fail: "le" a second wait wherever a lane holds > 2 tokens, "minus1" a wait before a half-0 token and a first
+    # half-1 token landed without it on every shape
+
+    def root_ok(t, ln, **kw):  # every lane: one wait, before its first half-1 token
+        waits, h1 = SP.rs1_pipe_root_waits(t, ln, **kw), set(SP.rs1_pipe_halves(t)[0])
+        return all(waits[l_] == [min(x for x in range(l_, t, ln) if x in h1)] for l_ in range(ln))
+
+    assert all(root_ok(t, ln) for t, ln in dom), [e for e in dom if not root_ok(*e)]
+    assert SP.rs1_pipe_root_waits(16, 8) == {l_: [8 + l_] for l_ in range(8)}
+    bad = {m: [e for e in dom if not root_ok(*e, mutate=m)] for m in ("le", "minus1")}
+    assert bad["le"] == [e for e in dom if e[0] > 2 * e[1]] and (32, 8) in bad["le"], bad["le"]
+    assert bad["minus1"] == dom, bad["minus1"]
+    assert SP.rs1_pipe_root_waits(16, 8, mutate="minus1")[7] == [7]  # half-0 token 7 waits, half-1 token 15 does not
+    assert SP.rs1_pipe_root_waits(32, 8, mutate="le")[0] == [16, 24]  # lane 0 waits twice
+    assert SP.rs1_pipe_waits(16) == {1: (8, 8), 0: (8, 8)} and SP.rs1_pipe_waits(16, 2) == {1: (16, 16), 0: (16, 16)}
+    SP.rs1_pipe_header_check()
+    with open(os.path.join(os.path.dirname(SP.KDIR), "galaxy_defaults.py")) as fh:
+        assert '"GLM53_DSA_SHARD_RS1_PIPE": "1"' in fh.read()  # a galaxy default (test_galaxy_defaults_shard_tail)
+    # the sizing model: knob off the root combines after both halves; with the knob half 0 behind rs1 alone -- the gain
+    # is min(rs1a - rs1 landing, the half-0 work), 0 when both land together (the probe of layer 3 at 32 K x 16 live:
+    # both lanes land 249.4 us after the merge, round-1 work 51.6 us for 2 tokens; rs1 a token pass (~31 us) earlier)
+    assert SP.rs1_pipe_round1_end({1: 249.4, 0: 249.4}, 25.8, 2, False) == SP.rs1_pipe_round1_end(
+        {1: 249.4, 0: 249.4}, 25.8, 2, True
+    )
+    off, on_ = (SP.rs1_pipe_round1_end({1: 218.4, 0: 249.4}, 25.8, 2, k) for k in (False, True))
+    assert abs(off - on_ - 25.8) < 1e-9 and abs(off - 301.0) < 1e-9
+    gen = random.Random(82)
+    for _ in range(100):
+        l1, l0, w, n = gen.uniform(0, 300), gen.uniform(0, 300), gen.uniform(1, 40), gen.choice((2, 4))
+        off, on_ = (SP.rs1_pipe_round1_end({1: l1, 0: l0}, w, n, k) for k in (False, True))
+        assert -1e-9 <= off - on_ <= max(0.0, min(l0 - l1, w * (n // 2))) + 1e-9, (l1, l0, w, n)
     env = {}
     # want = GLM53_MLA_DSA_LANES (8) as a power of two <= chunks / helpers; p also <= the free cores
     assert SP.dsa_lane_count(20, 4, 32, env) == (8, 8) and SP.dsa_lane_count(7, 4, 32, env) == (4, 8)

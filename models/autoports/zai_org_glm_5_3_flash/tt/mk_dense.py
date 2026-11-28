@@ -220,6 +220,12 @@ class MkStepB:
             if ds_o is not None
             else None
         )
+        # the o_proj readers wait for h x spread SEM_ON signals (the phase above): one user group's kda_rec cores. With
+        # kda_rec_ugroups > 1 every group's cores signal, so the readers could start before the last group landed
+        assert self.rec is None or self.rec.ug == 1, (
+            f"MkStepB: kda_rec_ugroups {self.rec.ug} > 1 (the o_proj readers wait for one user group's "
+            f"{self.rec.hs} kda_rec cores, not all {self.rec.n_active}); build the layer with MkLayer"
+        )
         from models.autoports.zai_org_glm_5_3_flash.tt import mhc_post as _mpost
 
         assert not post or ds_o is not None, "step D (post) needs step C (ds_o)"
@@ -306,6 +312,14 @@ class MkStepB:
                 for role in proles.values():
                     role[2].append(("MK_POST_PACKED", "1"))
             phase_roles.append(proles)
+        if self.kda.vrsplit > 1:  # GLM53_KDA_VERIFY_RSPLIT: the hand-off chain its deferred write-backs rely on
+            from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import KDA_O_PHASE, kda_verify_rsplit_order_check
+
+            assert rec is not None and self.post is not None, "GLM53_KDA_VERIFY_RSPLIT: the write-backs run after P6"
+            o_ph, pw = self.readers.phases[KDA_O_PHASE], dict(proles["reader"][2])
+            kda_verify_rsplit_order_check(cons, self.kda.n_active, rec.n_active, o_ph.wait, o_ph.signal,
+                                          (int(pw["MK_POST_WAIT_SEM"]), int(pw["MK_POST_WAIT_COUNT"])),
+                                          len(self.readers.assign), SEM_ON, SEM_A)  # fmt: skip
 
         kdir = _os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels", "mk")
         mkk = lambda src, cores, ct, rt, defs, cfg: ttnn.KernelDescriptor(

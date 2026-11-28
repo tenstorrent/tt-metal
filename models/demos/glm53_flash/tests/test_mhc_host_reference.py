@@ -16,6 +16,8 @@ Run without the repo conftest (its helpers query the cluster): no fixtures, no t
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -196,3 +198,41 @@ def test_mhc_pre_ms1_combined_round1_is_bitwise(T):
     assert all(plane_off(p + 16, t) == plane_off(p, t) + 512 for p in range(16) for t in range(32))
     # S rows t < T live in faces 2 / 3 only: no row of M below 16 is overwritten
     assert all(tile_off(16 + t, c) >= 512 for t in range(T) for c in range(32))
+    # GLM53_MHC_MSG_TRIM (sync.cpp MHC_MSG_TRIM): the root packs pre_s(t) at msg[T s + t] into a mailbox holding stale
+    # words and sends only the first 4 T words; a member whose mailbox holds other stale words unpacks msg[T s + t]
+    # into CB_PRE (column 0 of row t; the FPU collapse's diagonal) -- the 32-stride layout's values, bitwise
+    coef = torch.randn(4, 32, generator=g)
+    got = {}
+    for trim in (False, True):
+        row, sent = (T, 4 * T) if trim else (32, 128)
+        root = torch.zeros(128) if not trim else torch.randn(128, generator=g)  # (knob off: the zero-filled page)
+        for s_ in range(4):
+            root[row * s_ : row * s_ + T] = coef[s_, :T]
+        recv = torch.randn(128, generator=g)
+        recv[:sent] = root[:sent]
+        pre = torch.randn(4, 1024, generator=g)
+        for s_ in range(4):
+            for t in range(T):
+                pre[s_, tile_off(t, 0)] = recv[row * s_ + t]
+        got[trim] = torch.stack([pre[s_, tile_off(t, 0)] for s_ in range(4) for t in range(T)])
+        assert 4 * T <= sent <= 128
+    assert torch.equal(got[True].view(torch.int32), got[False].view(torch.int32))
+    assert torch.equal(got[True].view(torch.int32), coef[:, :T].reshape(-1).view(torch.int32))
+    repo_root = Path(__file__).resolve().parents[4]
+    with open(repo_root / "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/sync.cpp") as f:
+        sync_src = f.read()
+    # every round-1 writer and reader addresses the message through R1_MSG_ROW (no 32-stride index left)
+    assert sync_src.count("msg[R1_MSG_ROW * s + t]") >= 4 and "msg[32 * s + t]" not in sync_src
+    assert "s * TILE + t]" not in sync_src
+    # and R1_MSG_ROW / R1_MSG_BYTES are the layout modelled above, as the kernel defines them: MHC_MSG_TRIM rows of T
+    # and 4 T words sent (N_STREAMS = 4), else rows of 32 and the 128-word mailbox
+    assert sync_src.count("#if defined(MHC_MSG_TRIM)\n") == 1
+    trim = sync_src[sync_src.index("#if defined(MHC_MSG_TRIM)\n") :]
+    trim, full = trim[: trim.index("#else\n")], trim[trim.index("#else\n") : trim.index("#endif\n")]
+    assert "    const uint32_t R1_MSG_ROW = T;\n" in trim, trim
+    assert "    const uint32_t R1_MSG_BYTES = N_STREAMS * T * 4;\n" in trim, trim
+    assert "    constexpr uint32_t R1_MSG_ROW = TILE;\n" in full, full
+    assert "    constexpr uint32_t R1_MSG_BYTES = MSG_FLOATS * 4;\n" in full, full
+    with open(repo_root / "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_common.hpp") as f:
+        common = f.read()
+    assert "constexpr uint32_t N_STREAMS = 4;" in common and "constexpr uint32_t MSG_FLOATS = 128;" in common

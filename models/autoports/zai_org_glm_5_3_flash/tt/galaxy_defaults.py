@@ -82,6 +82,16 @@ KNOBS = {
     # split engaged (B 4 build, KPH 2), served gate hash unchanged; an explicit MFAST = 0 (or R8 / AGK / PREFILTER = 0)
     # drops it
     "GLM53_DSA_SHARD_MSPLIT": "1",
+    # GLM53_DSA_SHARD_RS1_PIPE (rev 82, on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT; engaged on the t 16 builds at 8 lanes):
+    # each split RS1 lane counts only its own token half's root signals, so a root lands and combines round 1 of its
+    # lane's first token while the second half is in flight -- the same pages, order and compute messages. Served build
+    # (B 16 + the narrow-width knobs), stamped 8 x 1 verify (8 live, ISL 32 K, OSL 96; the four decode-step knobs below
+    # on in every arm), A / B / A: the 11 DSA MLA programs 9,386.7 / 9,082.9 / 9,383.6 us, full replay 27.866 / 27.529 /
+    # 27.875 ms, in-loop 26.896 / 26.495 / 26.839 ms. Ids identical to the knob-off pins at 8 x 1 (t 16, engaged) and
+    # 4 x 3 (t 16, engaged; spec 64cbb5a1c37ad50c, plain c771d577ecc97865); the lone 1 x 3 (t 4) does not take the
+    # define. An explicit RS1_EARLY / RS1_SPLIT / RS1_TSPLIT = 0 drops it, and an explicit RSB / RSNP = 0 too (through
+    # TSPLIT)
+    "GLM53_DSA_SHARD_RS1_PIPE": "1",
     # GLM53_DSA_SHARD_COMB (rev 65): the fold combine on the lane roots -- each RS round's slices combined in one pass
     # (FOLD1 / FOLD2 matmuls, kernels/mla/att_c.cpp fold1 / fold2). Correct but not bitwise: the FPU rounds the matmul
     # operands to tf32 -- the O partials once instead of once per pairwise chain step, but also the softmax
@@ -157,6 +167,37 @@ KNOBS = {
     # waits only for the coefficient tile; mhc_post reads coef ungated, so coef still lands before the 1/rms(h)
     # signal; an explicit 0 keeps the knob-off kernels
     "GLM53_MHC_RMS_EARLY": "1",
+    # GLM53_MHC_MSG_TRIM (every mhc_pre site): the round-1 pre message as 4 x T words, no mailbox zero fill -- the same
+    # values (every reader reads t < T): traced plain step probe (B 16, 16 live, width 16) 25,690.5 / 25,665.2 / 25,688.0
+    # us at 32 K (A / B / A), 28,521.2 -> 28,499.7 us at 1 M; the CI pins and 16 identical rows unchanged
+    "GLM53_MHC_MSG_TRIM": "1",
+    # GLM53_ACCEPT_BATCH (spec_ctl.cpp ACCEPT / RING): a user's reads behind one barrier and its DSA ring move in one round
+    # trip -- the same bytes: in the stamped 8 x 1 verify step (B 16, 8 live, ISL 32 K, the step profiler's per-program
+    # stamps) ACCEPT 309 -> 54 us and the step span 28.40 -> 28.12 ms; spec ids identical at 8 x 1, 4 x 3, the lone 1 x 3
+    # and on the single-user kernel. Not a GLM53_SPEC_* name (apply_spec)
+    "GLM53_ACCEPT_BATCH": "1",
+    # GLM53_HEAD_SELECT_FAST (topk_select.cpp TOPK_SEL_FAST, every head): one write barrier for all rows, the heap merge
+    # of the chips' candidates -- the same rows: traced plain step probe (B 16, 16 live, 32 K) 25,635 / 25,603 / 25,634
+    # us at top-K 1 (A / B / A: a head call 294.6 -> 262.5 us), 25,808 -> 25,744 us at the served K 10 (467 -> 402 us);
+    # the CI pins, 16 identical rows (top-k 10 sampled) and the 8 x 1 / lone 1 x 3 spec ids identical
+    "GLM53_HEAD_SELECT_FAST": "1",
+    # GLM53_KDA_VERIFY_FLAT (kda_pre reader.cpp KDA_VERIFY_FLAT, on PIPE): every verify group's reads behind one barrier --
+    # the same windows. With ACCEPT_BATCH, on the served build (B 16 + the narrow-width knobs), 8 x 1 verify (8 live, ISL
+    # 32 K, OSL 96): host-timed replay 28.14 / 27.71 / 28.12 ms, in-loop 27.31 / 26.73 / 27.32 ms (A / B / A); FLAT's own
+    # share (ACCEPT_BATCH on in both arms, without the narrow knobs) 28.01 -> 27.70 ms; 8 x 1 / 4 x 3 spec ids identical.
+    # The served gate with all four of these knobs on: 1-user hash, 8-user errors and coherence unchanged
+    "GLM53_KDA_VERIFY_FLAT": "1",
+    # GLM53_KDA_VERIFY_RSPLIT (kda_pre reader.cpp KDA_VERIFY_RSPLIT, on PIPE + FLAT; the verify-groups widths): the G
+    # verify groups on G row groups of the column cores (8 x 8 = 64 owners at 8 x 1), one group per core, the history
+    # write-backs after P6 (kernels/mk/owner_dm0.cpp) -- the same windows and bytes. Served build (B 16 + the
+    # narrow-width knobs), stamped 8 x 1 verify (8 live, ISL 32 K, OSL 96; MSG_TRIM, ACCEPT_BATCH, HEAD_SELECT_FAST,
+    # KDA_VERIFY_FLAT and DSA_SHARD_RS1_PIPE on in every arm), A / B / A: the 12 KDA programs 13,775 / 12,992 / 13,779 us,
+    # full replay 27.50 / 26.77 / 27.53 ms, in-loop 26.48 / 25.93 / 26.71 ms. Spec ids identical where it engages (8 x 1,
+    # 4 x 3); the lone 1 x 3 and 16 identical rows (not engaged) unchanged; device byte identity with cross-group
+    # selectors (test_mk_layer_check::test_mk_layer_verify_groups). An explicit PIPE / FLAT = 0, GLM53_KDA_RSPLIT > 1
+    # or GLM53_KDA_PREFETCH=1 drops it, also as a GLM53_STACK_KNOB_SET entry: a KDA kind's for RSPLIT / PREFETCH,
+    # any kind's for PIPE / FLAT (_kda_kind_values)
+    "GLM53_KDA_VERIFY_RSPLIT": "1",
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
@@ -194,6 +235,53 @@ def sparse_t(seq: int) -> str:
     return ",".join(str(step * k) for k in range(1, 5) if step * k <= seq)
 
 
+def knob_set_items(spec: str | None = None):
+    """GLM53_STACK_KNOB_SET's items in order, one (kind, K, V) at a time -- the one parser of the variable
+    (stack_model.set_knobs applies a kind's items, _kda_kind_values reads the KDA kinds' values). Items "kind:K=V"
+    (kind d = dense_kda, s = sparse_kda, a = sparse_dsa; V "-" drops K) separated by ";", or by "," when the value has
+    no ";" (no value then holds a comma); empty items are skipped; an item without ":" or "=" raises ValueError when it
+    is reached. The kind letter is the caller's to check. spec None: the environment's value"""
+    spec = os.environ.get("GLM53_STACK_KNOB_SET", "") if spec is None else spec
+    for item in filter(None, spec.split(";") if ";" in spec else spec.split(",")):
+        kind, kv = item.split(":", 1)
+        k, v = kv.split("=", 1)
+        yield kind, k, v
+
+
+# the knobs of apply's drop rules that stack_model.set_knobs pops before it applies a kind's GLM53_STACK_KNOB_SET items
+# (stack_model.KNOB_KEYS): only a dense_kda / sparse_kda entry reaches a KDA build
+_PER_KIND_KEYS = ("GLM53_KDA_RSPLIT", "GLM53_KDA_PREFETCH")
+
+
+def _kda_kind_values(k: str, dropped: str | None = None) -> list:
+    """the values a KDA layer's build can read for the knob k: the environment's and GLM53_STACK_KNOB_SET's entries for
+    k (knob_set_items). A per-kind knob (_PER_KIND_KEYS) counts the dense_kda / sparse_kda entries: set_knobs pops it
+    and sets the kind's own. Any other knob counts the entries of every kind, sparse_dsa's included: set_knobs leaves it
+    in the environment, so a value one kind's call sets reaches the KDA builds after it. A "K=-" entry drops k (for
+    that kind's build; outside _PER_KIND_KEYS for the builds after it too), which then read k's default: `dropped`
+    stands for it (None: the entry adds nothing). Conservative: the top-level environment value counts although
+    set_knobs may pop it before a KDA build, and an earlier entry counts even when a later one replaces it"""
+    kinds = ("d", "s") if k in _PER_KIND_KEYS else ("d", "s", "a")
+    vals = [os.environ[k]] if k in os.environ else []
+    for kind, name, v in knob_set_items():
+        if kind in kinds and name == k:
+            if v != "-":
+                vals.append(v)
+            elif dropped is not None:
+                vals.append(dropped)
+    return vals
+
+
+def _kda_kind_on(k: str, want: dict) -> bool:
+    """whether every KDA layer's build reads the 0 / 1 knob k (default 0 in its readers) as 1: the environment's value,
+    or this call's default when the environment has none, and every GLM53_STACK_KNOB_SET entry for k that reaches a
+    KDA build (_kda_kind_values; "K=-" leaves the builds it reaches on the readers' default 0)"""
+    vals = _kda_kind_values(k, dropped="0")
+    if k not in os.environ:
+        vals.insert(0, want.get(k, "0"))
+    return all(v == "1" for v in vals)
+
+
 def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
     """-> {knob: value} of what this call set (nothing on other meshes, nothing already in the environment)"""
     if tuple(int(v) for v in mesh_shape) != GALAXY:
@@ -215,8 +303,27 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         for k in ("GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP")
     ):
         want.pop("GLM53_DSA_SHARD_RS1_TSPLIT")  # TSPLIT rides on RS1_SPLIT + RSNP (RSNP on RSB): an explicit 0 drops it
+    if any(
+        os.environ.get(k, want.get(k, "0")) != "1"
+        for k in ("GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RS1_TSPLIT")
+    ):
+        # RS1_PIPE rides on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT: an explicit 0 on any drops the RS1_PIPE default
+        want.pop("GLM53_DSA_SHARD_RS1_PIPE")
     if os.environ.get("GLM53_MLA_ATT_OBF16") == "1":
         want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
+    if not _kda_kind_on("GLM53_KDA_VERIFY_PIPE", want):
+        # FLAT rides on PIPE: an explicit PIPE=0 (the environment's, or any kind's GLM53_STACK_KNOB_SET entry) drops the
+        # FLAT default with it
+        want.pop("GLM53_KDA_VERIFY_FLAT")
+    if (
+        not all(_kda_kind_on(k, want) for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT"))
+        or any(v.strip() != "1" for v in _kda_kind_values("GLM53_KDA_RSPLIT"))
+        or "1" in _kda_kind_values("GLM53_KDA_PREFETCH")
+    ):
+        # RSPLIT rides on PIPE + FLAT and is refused with GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1
+        # (shard_plan.kda_verify_rsplit_rows): an explicit value that refuses the build (the environment's, or a
+        # GLM53_STACK_KNOB_SET entry that reaches a KDA build: _kda_kind_values) drops the RSPLIT default
+        want.pop("GLM53_KDA_VERIFY_RSPLIT")
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))
     if ladder:

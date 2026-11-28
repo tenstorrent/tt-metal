@@ -63,6 +63,7 @@ _MFAST_LOGGED: list = []  # the TPMlaShard MFAST log line, once per process
 _MSPLIT_LOGGED: list = []  # the TPMlaShard MSPLIT log line, once per process and KPH (the builds that take the define)
 _RS1S_LOGGED: list = []  # rev 76: the TPMlaShard RS1-split log line, once per process (the chains assert it)
 _RS1T_LOGGED: list = []  # GLM53_DSA_SHARD_RS1_TSPLIT: the halves-of-every-block log line, once per process
+_RS1P_LOGGED: list = []  # rev 82 GLM53_DSA_SHARD_RS1_PIPE: the log line of the first engaged build, once per process
 
 
 class TPMlaShard(TPM.TPMla):
@@ -331,17 +332,39 @@ class TPMlaShard(TPM.TPMla):
                     logger.info(f"TPMlaShard: GLM53_DSA_SHARD_RS1_TSPLIT active (RS1 lanes = the halves of every block: "
                                 f"spans {SP.rs1_tsplit_spans(t)} of {SP.rs_sent_pages(t, SP.RS1_DATA_PAGES)} pages at t {t})")  # fmt: skip
                     _RS1T_LOGGED.append(True)
+            # rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0; on in tt/galaxy_defaults.py; rides on RS1_EARLY + RS1_SPLIT +
+            # RS1_TSPLIT; the builds of SP.rs1_pipe_engaged: t 16 at 8 lanes, every other shape knob-off): each RS1 lane
+            # counts its own half's root signals (rs1 the tokens [0, t / 2): SP.rs1_pipe_waits) and rs1's waiter names
+            # every root twice (SEM_RSC weight 2) -- the roots land / combine half 0 while rs1a is in flight
+            # (dsa_shard.hpp RS1 PIPE)
+            pipe = SP.rs1_pipe_engaged(t, nl, SP.shard_rs1_pipe(self.P, early, rs1s, rs1t))
+            rs1_wait, rs1a_n, split1, split0, rs1_cons = rs_wait, rs_wait[1], split, split, (MK.SEM_RSC, roots)
+            if pipe:
+                pw = SP.rs1_pipe_waits(t, self.mk.groups)
+                rs1_wait, rs1a_n = (rs_wait[0], pw[1][0]), pw[0][0]
+                split1, split0 = dict(split, wait2=pw[1][1]), dict(split, wait2=pw[0][1])
+                rs1_cons = (MK.SEM_RSC, roots * SP.RS1_PIPE_W["rs1"])
+                if not _RS1P_LOGGED:  # one line per process: the chains assert the knob reached the build
+                    h0 = len(SP.rs1_pipe_halves(t)[1])
+                    logger.info(f"TPMlaShard: GLM53_DSA_SHARD_RS1_PIPE active (MLA_DSA_SHARD_RS1_PIPE, rev {MK.MLA_REV_RS1_PIPE}: "
+                                f"t {t}, {nl} lanes; rs1 = tokens [0, {h0}), rs1a = [{h0}, {t}), lane gates (wait, wait2) "
+                                f"{pw}; the roots land half 0 at SEM_RSC >= {SP.RS1_PIPE_WAITS[0]}, both halves at "
+                                f"{SP.RS1_PIPE_WAITS[1]}, round 2 at {SP.RS1_PIPE_WAITS[2]})")  # fmt: skip
+                    _RS1P_LOGGED.append(True)
             rs1e = {} if rs1t else dict(rsa["rs1"]["extra"])  # (RS1_TSPLIT: each half's nb / slots / sub span)
             rs1_sc = [self.lane_core["rs1"], self.lane_core[SP.RS1S_NAME]] if rs1s else None
             rs1x = dict(**half(1), sync_cores=rs1_sc) if rs1s else {}
             rs1 = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis, lanes=lane("rs1"),
-                                         **sy("rs1"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,
-                                         **split, **rs1e, **rs1x)  # fmt: skip
+                                         **sy("rs1"), wait=rs1_wait, cons=rs1_cons, link_base=1, after=MK.SEM_FSA,
+                                         **split1, **rs1e, **rs1x)  # fmt: skip
             # both scatters signal the roots' SEM_RSC and the root reads it ordinally (wait_min 1 = round 1 landed,
             # 2 = round 2 landed): sound because rs2's waiter is its own lane BRISC, which signals after that lane's
             # sends, and those sends wait on rs2_sem, which the root raises only past its round-1 wait -- the second
             # +1 cannot precede the first wait. A second rs2 lane core or a waiter off the sending RISC breaks this:
-            # give rs2 its own consumer semaphore then.
+            # give rs2 its own consumer semaphore then. RS1_PIPE (a root raises rs2_sem for its half-1 tokens only
+            # past its RS1_PIPE_BOTH wait) also needs rs2's gate to count every token, t x groups: a gate on fewer
+            # could open behind the half-0 scatters, and rs2's +1 then pass a root's RS1_PIPE_BOTH wait before rs1a
+            # landed (asserted below with the consumer weights).
             rs2 = FS.FabricStreamScatter(mesh, rsa["rs2"]["rows"], rsa["rs2"]["width"], axis=geo.line_axis, lanes=lane("rs2"),
                                          **sy("rs2"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,
                                          **rsa["rs2"]["extra"])  # fmt: skip
@@ -356,8 +379,8 @@ class TPMlaShard(TPM.TPMla):
                 # past the round-1 wait for both)
                 rs1a = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis,
                                               lanes=lane(SP.RS1S_NAME), sync=rs1.sync, sync_cores=rs1_sc, y=rs1.y,
-                                              wait=(MK.SEM_FSA, rs_wait[1]), cons=(MK.SEM_RSC, roots), link_base=0,
-                                              after=MK.SEM_FSW, **split, **rs1e, **half(0))  # fmt: skip
+                                              wait=(MK.SEM_FSA, rs1a_n), cons=(MK.SEM_RSC, roots), link_base=0,
+                                              after=MK.SEM_FSW, **split0, **rs1e, **half(0))  # fmt: skip
                 rs1a.released_by = SP.RS1S_RELEASED_BY
                 assert rs1a.y is rs1.y
                 if rs1t:  # the two spans cover each block chunk's staged pages exactly once: rs1 [0, h), rs1a [h, spc)
@@ -370,6 +393,24 @@ class TPMlaShard(TPM.TPMla):
                     assert rs1a.sub == rs1.sub, (rs1a.sub, rs1.sub)
                 objs[SP.RS1S_NAME], xs[SP.RS1S_NAME] = rs1a, x_rs1
                 rs1s_keys = dict(rs1_split=True, rs1_tsplit=rs1t, rs1a_lane=rs1a.lane_noc()[0], rs1a_sem=MK.SEM_FSA)
+                if pipe:  # rev 82: MkMla's MLA_DSA_SHARD_RS1_PIPE (mk_mla._shard_line_defs) and MLA_REV
+                    # the roots' SEM_RSC waits (dsa_shard.hpp RS1 PIPE) hold only for these streams: rs1's waiter
+                    # names every root twice, rs1a's and rs2's once; the halves' gates sum to the full count in both
+                    # fields; rs2 is one lane with one gate (no early destinations) on the full count t x groups
+                    n_all = t * self.mk.groups
+                    assert rs1.cons[0] == MK.SEM_RSC and set(rs1.cons[1]) == set(roots), (rs1.cons, roots)
+                    assert len(rs1.cons[1]) == SP.RS1_PIPE_W["rs1"] * len(roots) == 2 * len(roots), rs1.cons
+                    assert rs1a.cons == rs2.cons == (MK.SEM_RSC, roots), (rs1a.cons, rs2.cons)
+                    assert rs1.wait[1] + rs1a.wait[1] == rs1.wait2 + rs1a.wait2 == rs_wait[1] == n_all, (
+                        rs1.wait,
+                        rs1a.wait,
+                        rs1.wait2,
+                        rs1a.wait2,
+                        n_all,
+                    )
+                    assert rs2.wait == (MK.SEM_FSW, n_all) and len(rs2.lanes) == 1, (rs2.wait, rs2.lanes)
+                    assert rs2.first is None and rs2.wait2 is None, "rs2: one gate on the full count"
+                    rs1s_keys["rs1_pipe"] = True
             assert int(ag1.y.shape[-2]) == geo.n * rows1
             pages = lambda ten: int(ten.shape[-2]) * int(ten.shape[-1]) // 1024  # noqa: E731
             # the scatters' x / y hold the knob-off pages (RSB: the same page ids in block chunks)

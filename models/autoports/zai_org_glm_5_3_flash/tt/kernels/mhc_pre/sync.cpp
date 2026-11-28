@@ -7,7 +7,7 @@
 // Round 1  K core   CB_PART (M, S) -> leader CB_GATHER slot y (8 KB; MHC_MS1: the combined tile, 4 KB) + leader SEM_G1
 //          leader   SEM_G1 == 8 -> push CB_GATHER (16; MHC_MS1: 8); CB_GSUM -> root slot x + root SEM_G1
 //          root     SEM_G1 == 8 -> push; CB_RED (z) -> CB_PLANE (plane layout); CB_COEF -> mailbox (pre, 4 x 32
-//                   fp32) to the 8 leaders + their SEM_M1; post / comb output tiles
+//                   fp32; MHC_MSG_TRIM: 4 x T) to the 8 leaders + their SEM_M1; post / comb output tiles
 //          leader   SEM_M1 -> mailbox relayed to its 7 members + their SEM_M1
 //          K core   SEM_M1 -> CB_PRE (pre_s in column 0 of tile s, rows = tokens)
 // Round 2  same path with CB_S2 / one-tile slots / SEM_G2, the root's CB_INVR -> mailbox (1/rms(h), 32 fp32) ->
@@ -95,6 +95,16 @@ void kernel_main() {
     DeviceZoneScopedN("MH-SYNC");  // device-profiler zone (no-op without the profiler)
     constexpr uint32_t PC_MODE = get_compile_time_arg_val(PH_CT0 + 0);
     const uint32_t T = get_arg_val<uint32_t>(ph_rt0 + 0);
+    // round-1 message layout: pre_s(t) at msg[R1_MSG_ROW * s + t]. MHC_MSG_TRIM (GLM53_MHC_MSG_TRIM): rows of T words,
+    // only the 4 T words sent and no zero fill (every reader reads t < T only); else rows of 32 and the whole mailbox
+#if defined(MHC_MSG_TRIM)
+    ASSERT(T <= TILE);  // (4 T words <= the 128-word mailbox; the host bounds t at 32)
+    const uint32_t R1_MSG_ROW = T;
+    const uint32_t R1_MSG_BYTES = N_STREAMS * T * 4;
+#else
+    constexpr uint32_t R1_MSG_ROW = TILE;
+    constexpr uint32_t R1_MSG_BYTES = MSG_FLOATS * 4;
+#endif
     const uint32_t gather_l1 = get_write_ptr(CB_GATHER);
     const uint32_t msg_l1 = get_write_ptr(CB_MSG);
 #if defined(MHC_RMS_EARLY) && defined(MHC_COEF_PLANE)
@@ -172,7 +182,7 @@ void kernel_main() {
     cb_pop_front(CB_GSUM, R1_TILES);
 #endif
 
-    // ---- round-1 message: pre_s(t) at msg[32 s + t]
+    // ---- round-1 message: pre_s(t) at msg[32 s + t] (MHC_MSG_TRIM: msg[T s + t], 4 T words sent)
     noc_semaphore_wait(sem_ptr(SEM_M1), 1);
     MHC_SMARK();                            // s3: the pre message in
     noc_semaphore_set(sem_ptr(SEM_M1), 0);  // reset for a later instance in the same program
@@ -184,7 +194,7 @@ void kernel_main() {
                 get_arg_val<uint32_t>(ph_rt0 + MEMBER_ARGS + 2 * m),
                 get_arg_val<uint32_t>(ph_rt0 + MEMBER_ARGS + 2 * m + 1),
                 msg_l1),
-            MSG_FLOATS * 4);
+            R1_MSG_BYTES);
     }
     noc_async_write_barrier();
     for (uint32_t m = 0; m < GROUP - 1; ++m) {
@@ -204,9 +214,9 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* tile = words(pre_l1 + s * FP32_TILE_BYTES);
             for (uint32_t t = 0; t < T; ++t) {
 #if defined(MHC_FPU_COLLAPSE)
-                tile[tile_off(t, t)] = msg[s * TILE + t];  // diag(pre_s): the collapse is D_s @ x_s on the FPU
+                tile[tile_off(t, t)] = msg[R1_MSG_ROW * s + t];  // diag(pre_s): the collapse is D_s @ x_s on the FPU
 #else
-                tile[tile_off(t, 0)] = msg[s * TILE + t];
+                tile[tile_off(t, 0)] = msg[R1_MSG_ROW * s + t];
 #endif
             }
         }
@@ -370,12 +380,14 @@ void kernel_main() {
     {
         volatile tt_l1_ptr uint32_t* coef = words(get_read_ptr(CB_COEF));
         volatile tt_l1_ptr uint32_t* msg = words(msg_l1);
+#if !defined(MHC_MSG_TRIM)
         for (uint32_t i = 0; i < MSG_FLOATS; ++i) {
             msg[i] = 0;
         }
+#endif
         for (uint32_t s = 0; s < N_STREAMS; ++s) {
             for (uint32_t t = 0; t < T; ++t) {
-                msg[s * TILE + t] = coef[plane_off(s, t)];
+                msg[R1_MSG_ROW * s + t] = coef[plane_off(s, t)];
             }
         }
         for (uint32_t g = 0; g < N_GROUPS; ++g) {
@@ -385,7 +397,7 @@ void kernel_main() {
                     get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g),
                     get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g + 1),
                     msg_l1),
-                MSG_FLOATS * 4);
+                R1_MSG_BYTES);
         }
         noc_async_write_barrier();
         for (uint32_t g = 0; g < N_GROUPS; ++g) {
@@ -414,12 +426,14 @@ void kernel_main() {
 #endif
 #if !defined(MHC_PRE_EARLY)
         volatile tt_l1_ptr uint32_t* msg = words(msg_l1);
+#if !defined(MHC_MSG_TRIM)
         for (uint32_t i = 0; i < MSG_FLOATS; ++i) {
             msg[i] = 0;
         }
+#endif
         for (uint32_t s = 0; s < N_STREAMS; ++s) {
             for (uint32_t t = 0; t < T; ++t) {
-                msg[s * TILE + t] = coef[plane_off(s, t)];
+                msg[R1_MSG_ROW * s + t] = coef[plane_off(s, t)];
             }
         }
         for (uint32_t g = 0; g < N_GROUPS; ++g) {
@@ -429,7 +443,7 @@ void kernel_main() {
                     get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g),
                     get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g + 1),
                     msg_l1),
-                MSG_FLOATS * 4);
+                R1_MSG_BYTES);
         }
         noc_async_write_barrier();
         for (uint32_t g = 0; g < N_GROUPS; ++g) {

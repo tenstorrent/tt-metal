@@ -43,6 +43,9 @@
 //   destinations (tt/shard_plan.py rs1_split_link) -- after x_rs2b / y_rs2b the rs1a lane core (x, y) + its wait
 //   semaphore id (sh + 20 .. 22): the root raises both lanes' counts at every RS1 signal, and round 1 has landed once
 //   BOTH waiters signalled RS_SEM (round 2's signal: the third, still ordinal -- tt/tp_dsa_shard.py).
+// Rev 82, RS1 PIPE (MLA_DSA_SHARD_RS1_PIPE, dsa_shard.hpp): the root raises only the RS1 lane that carries the token's
+//   TSPLIT half, lands / combines / scatters its half-0 tokens once rs1's waiter signalled (RS_SEM >= 2: rs1 names
+//   every root twice) and the rest once rs1a's did too (>= 3); round 2 has landed at >= 4.
 
 #include <cstdint>
 
@@ -1079,12 +1082,24 @@ void kernel_main() {
                     cb_pop_front(CB_ASENDO, DT);
 #if defined(MLA_DSA_SHARD_RS1_EARLY)
                     {  // dsa_shard.hpp RS1 early: after each pass, into its own field of the lane's count (rev 67)
+#if defined(MLA_DSA_SHARD_RS1_PIPE)  // rev 82 (dsa_shard.hpp RS1 PIPE): only the RS1 lane carrying token t's slices
+                        if (mlashard::rs1_pipe_half0(t, t_rows)) {
+                            noc_semaphore_inc(
+                                get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)),
+                                pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
+                        } else {
+                            noc_semaphore_inc(
+                                get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem)),
+                                pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
+                        }
+#else
                         noc_semaphore_inc(
                             get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
 #if defined(MLA_DSA_SHARD_RS1_SPLIT)  // rev 76: the link-0 RS1 lane, the same field
                         noc_semaphore_inc(
                             get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem)),
                             pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
+#endif
 #endif
                         noc_async_atomic_barrier();
                     }
@@ -1397,16 +1412,29 @@ void kernel_main() {
         };
 #endif
         // the column scatter's waiter: every column peer's slices landed in y_rs1. The row scatter signals the same
-        // semaphore later (wait_min 2 below; 3 under MLA_DSA_SHARD_RS1_SPLIT, after both column-scatter waiters): its
-        // waiter runs on the rs2 lane BRISC after that lane's sends, which wait on rs2_sem, raised by this root only
-        // past this wait -- so the count is ordinal (tp_dsa_shard.py, the streams)
-#if defined(MLA_DSA_SHARD_RS1_SPLIT)
+        // semaphore later (wait_min 2 below; 3 under MLA_DSA_SHARD_RS1_SPLIT, after both column-scatter waiters; 4
+        // under MLA_DSA_SHARD_RS1_PIPE, after rs1's two and rs1a's one): its waiter runs on the rs2 lane BRISC after
+        // that lane's sends, which wait on rs2_sem, raised by this root only past this wait -- so the count is ordinal
+        // (tp_dsa_shard.py, the streams). Under MLA_DSA_SHARD_RS1_PIPE this root raises rs2_sem for its half-1 tokens
+        // only past the RS1_PIPE_BOTH wait below, so the order also needs rs2's gate to count every token (t x groups,
+        // half 1's too): on fewer it could open behind the half-0 scatters, and rs2's +1 pass RS1_PIPE_BOTH before
+        // rs1a landed (tp_dsa_shard.py asserts the gate and the consumer weights)
+#if defined(MLA_DSA_SHARD_RS1_PIPE)
+        // rev 82 (dsa_shard.hpp RS1 PIPE): rs1's waiter (+2) -- the half-0 tokens' slices landed; probe 6 below then
+        // marks half 0 landed, not round 1 (rs1a may still be in flight)
+        noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_HALF0);
+#elif defined(MLA_DSA_SHARD_RS1_SPLIT)
         noc_semaphore_wait_min(rsc, 2);  // rev 76: both column-scatter waiters (the link-1 and link-0 halves)
 #else
         noc_semaphore_wait_min(rsc, 1);
 #endif
         MK_MARK();                       // probe 6: RS round 1 landed (8x4 root)
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
+#if defined(MLA_DSA_SHARD_RS1_PIPE)  // rev 82: before the lane's first half-1 token, rs1a's waiter too
+            if (t >= t_rows / 2 && t < t_rows / 2 + mlaatt::LANES) {
+                noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_BOTH);
+            }
+#endif
 #if defined(MLA_DSA_SHARD_COMB)
             land_fold1(t);  // rev 65: the fold combine's row-packed landings (the compute: att_c.cpp fold1)
 #else
@@ -1458,7 +1486,9 @@ void kernel_main() {
             }
         }
         MK_MARK();                       // probe: the row scatter shipped
-#if defined(MLA_DSA_SHARD_RS1_SPLIT)
+#if defined(MLA_DSA_SHARD_RS1_PIPE)
+        noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_ROUND2);  // rev 82: rs1 (2) + rs1a (1), then the row scatter's
+#elif defined(MLA_DSA_SHARD_RS1_SPLIT)
         noc_semaphore_wait_min(rsc, 3);  // rev 76: the two column-scatter waiters, then the row scatter's
 #else
         noc_semaphore_wait_min(rsc, 2);  // the row scatter's waiter: every row peer's 2-row slices landed in y_rs2b

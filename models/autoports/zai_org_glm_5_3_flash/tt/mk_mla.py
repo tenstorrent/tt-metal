@@ -97,13 +97,24 @@ MLA_REV_MFAST = 77
 # MSPLIT); the same integers and survivor array. Only the knob-on builds carry 81 (the define's value = CB_AKEY's index
 # for the BRISC): with the knob off every define and instruction is rev 77's
 MLA_REV_MSPLIT = 81
+# 82 (GLM53_DSA_SHARD_RS1_PIPE=1, default 0; on in tt/galaxy_defaults.py; rides on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT;
+# the builds of tt/shard_plan.py rs1_pipe_engaged: t 16 at 8 lanes, RS1_PIPE_SHAPES, the device-validated shape):
+# the split RS1's lanes each gated by their own token half's root signals, rs1's waiter signalling the roots
+# twice, the roots landing / combining half 0 while rs1a is in flight (kernels/mla/dsa_shard.hpp RS1 PIPE; same pages,
+# order and compute messages). Only the engaged builds carry 82: every other build keeps its define, arguments and
+# instructions
+MLA_REV_RS1_PIPE = 82
 
 
 def mla_rev(shard=None) -> int:
-    """the MLA_REV define of a build: MLA_REV_MSPLIT for a GLM53_DSA_SHARD_MSPLIT shard build, MLA_REV_MFAST for a
-    GLM53_DSA_SHARD_MFAST one, MLA_REV_RS1_SPLIT for a GLM53_DSA_SHARD_RS1_SPLIT one, else MLA_REV"""
+    """the MLA_REV define of a build: MLA_REV_RS1_PIPE for a GLM53_DSA_SHARD_RS1_PIPE shard build (the engaged t),
+    MLA_REV_MSPLIT for a GLM53_DSA_SHARD_MSPLIT one, MLA_REV_MFAST for a GLM53_DSA_SHARD_MFAST one, MLA_REV_RS1_SPLIT
+    for a GLM53_DSA_SHARD_RS1_SPLIT one, else MLA_REV"""
     from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
 
+    if shard and shard.get("rs1_pipe"):  # rev 82 (tt/tp_dsa_shard.py sets it on the engaged builds only)
+        assert SP.RS1_PIPE_REV == MLA_REV_RS1_PIPE
+        return MLA_REV_RS1_PIPE
     if SP.msplit_build(shard):  # rev 81 (KPH 2 / 4 only; KPH 1 builds keep the rev below)
         assert SP.MSPLIT_REV == MLA_REV_MSPLIT
         return MLA_REV_MSPLIT
@@ -219,6 +230,8 @@ def _shard_line_defs(shard) -> list:
     from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
 
     msplit = SP.msplit_build(shard)
+    rs1p = bool((shard or {}).get("rs1_pipe"))  # rev 82: dsa_shard.hpp RS1 PIPE (att_dsa_shard_dm1.cpp)
+    assert not rs1p or (pair > 2 and early and rs1s), ("rev 82 RS1 pipe: the 8x4 with RS1 early + split", early, rs1s)
     assert pair > 2 or not (comb or early or agk or r8 or local_all or rmarks or sel2 or prefilter), (
         "rev 65 COMB / RS1 early, rev 68 AGK, rev 70 R8, rev 72 LOCAL_ALL / ROUND_MARKS, rev 73 SEL2, rev 75 PREFILTER: the 8x4",
         pair,
@@ -244,6 +257,7 @@ def _shard_line_defs(shard) -> list:
             + ([("MLA_DSA_SHARD_MFAST", "1")] if mfast else [])  # rev 77: dsa_shard.hpp MFAST
             # rev 81: dsa_shard.hpp MSPLIT, the value = CB_AKEY's index (the BRISC's go / L pages)
             + SP.msplit_defines(shard, DCB["AKEY"])
+            + ([("MLA_DSA_SHARD_RS1_PIPE", "1")] if rs1p else [])  # rev 82: dsa_shard.hpp RS1 PIPE
         )
     assert line in (1, 4), line
     return [("MLA_DSA_SHARD_LINE", str(line))] if line > 1 else []
@@ -2148,9 +2162,7 @@ class MkMla(_MlaBase):
                      (list(pct), {xy: [int(v) for v in prt[xy]] for xy in mine})]  # fmt: skip
             ct, rt, bases = concat_args(parts, mine)
             defs = list(mrole["defines"]) + [d for d in pdefs if d not in mrole["defines"]]
-            rev_now = mla_rev(
-                getattr(self, "_shard_now", None)
-            )  # (77 with MFAST, else 76 with RS1_SPLIT, else MLA_REV)
+            rev_now = mla_rev(getattr(self, "_shard_now", None))  # the build's shard knobs' revision (mla_rev)
             defs += [("MK_PA_CT", str(bases[1][0])), ("MK_PA_RT", str(bases[1][1])), ("MK_PP_CT", str(bases[2][0])),
                      ("MK_PP_RT", str(bases[2][1])), ("MLA_REV", str(rev_now)), ("MLA_SRC", "0x" + mla_src()[:8])]  # fmt: skip
             if self.dsa is not None:

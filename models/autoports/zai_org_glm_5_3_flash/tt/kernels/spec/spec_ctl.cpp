@@ -54,9 +54,20 @@
 // SPEC_PARTIAL (GLM53_SPEC_PARTIAL, SPEC_REV 5; with SPEC_GROUPS): a group whose base position is < 0 (BOOT: the plain
 //   cur_pos row ro; ACCEPT: pos_v row ro) is inactive -- its rows keep positions -1, no token / ring write, record n 0
 //   and c -1; GATHER skips a record with c < 0. Without the define every group is live (batch 2's fixed G).
+// SPEC_ACCEPT_BATCH = B (GLM53_ACCEPT_BATCH, default 0; on in tt/galaxy_defaults.py; ACCEPT and RING only): the same
+//   reads and writes, fewer waits.
+//   ACCEPT reads a user's record page (single user: and the position page), verify rows and draft rows behind one
+//   barrier, and moves its DSA ring rows of all B = R ring tensors in one round trip (every read, one barrier, every
+//   write, one barrier) instead of a read barrier and a write barrier per ring tile (2 x 88 waits per moving user at
+//   11 layers); RING's row moves read all 8 tiles behind one barrier and wait for their writes once. The same bytes go
+//   to the same addresses, so the outputs are the knob-off outputs. Scratch past the slots above: ACCEPT 1 KB of token
+//   rows, then B x 2 KB of ring pieces; RING (B 1) 2 KB of ring pieces (tt/shard_plan.py spec_ctl_scratch).
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#if defined(SPEC_ACCEPT_BATCH)
+#include "api/debug/assert.h"
+#endif
 
 namespace {
 constexpr uint32_t TOK_PAGE = 256;  // [32, 64] uint32 row
@@ -79,6 +90,21 @@ constexpr uint32_t RING_SAVE_ROW = 8;  // SPEC_MODE 4: the canonical rows' copy 
 FORCE_INLINE void ring_rows(uint32_t base, uint32_t page0, uint32_t src, uint32_t dst, uint32_t buf) {
     const uint32_t so = (src >> 4) * 1024 + (src & 15) * 32;  // kernels/mla/mla_common.hpp row_off
     const uint32_t dof = (dst >> 4) * 1024 + (dst & 15) * 32;
+#if defined(SPEC_ACCEPT_BATCH)
+    // buf: 8 x 256 B; ends with a write barrier: the next call (the save after the move) reads the rows these land
+    for (uint32_t i = 0; i < RING_TILES; ++i) {
+        const uint64_t a = dram(base, RING_PAGE, page0 + i);
+        noc_async_read(a + so, buf + i * 256, 128);
+        noc_async_read(a + so + 512, buf + i * 256 + 128, 128);
+    }
+    noc_async_read_barrier();
+    for (uint32_t i = 0; i < RING_TILES; ++i) {
+        const uint64_t a = dram(base, RING_PAGE, page0 + i);
+        noc_async_write(buf + i * 256, a + dof, 128);
+        noc_async_write(buf + i * 256 + 128, a + dof + 512, 128);
+    }
+    noc_async_write_barrier();
+#else
     for (uint32_t i = 0; i < RING_TILES; ++i) {
         const uint64_t a = dram(base, RING_PAGE, page0 + i);
         noc_async_read(a + so, buf, 128);
@@ -88,7 +114,38 @@ FORCE_INLINE void ring_rows(uint32_t base, uint32_t page0, uint32_t src, uint32_
         noc_async_write(buf + 128, a + dof + 512, 128);
         noc_async_write_barrier();
     }
+#endif
 }
+#if defined(SPEC_ACCEPT_BATCH)
+static_assert(SPEC_ACCEPT_BATCH >= 1 && SPEC_ACCEPT_BATCH <= 16, "1..16 ring tensors");
+// ACCEPT's ring move of one user (slot pages page0 .. page0 + 7 of every ring tensor; rows at byte offset `off` -> rows
+// 0..3) in one round trip into buf (SPEC_ACCEPT_BATCH x 8 x 256 B: the host passes B = the ring count R): no source
+// piece overlaps a destination (rows 4 grp .., grp >= 1, vs rows 0..3), so every read can land before the first write
+FORCE_INLINE void ring_move_batched(uint32_t n_ring, uint32_t page0, uint32_t off, uint32_t buf) {
+    ASSERT(n_ring <= SPEC_ACCEPT_BATCH);
+    const uint32_t nr = n_ring < SPEC_ACCEPT_BATCH ? n_ring : SPEC_ACCEPT_BATCH;
+    for (uint32_t l = 0; l < nr; ++l) {
+        const uint32_t base = get_arg_val<uint32_t>(11 + l);
+        for (uint32_t i = 0; i < RING_TILES; ++i) {
+            const uint64_t a = dram(base, RING_PAGE, page0 + i);
+            const uint32_t b = buf + (l * RING_TILES + i) * 256;
+            noc_async_read(a + off, b, 128);
+            noc_async_read(a + off + 512, b + 128, 128);
+        }
+    }
+    noc_async_read_barrier();
+    for (uint32_t l = 0; l < nr; ++l) {
+        const uint32_t base = get_arg_val<uint32_t>(11 + l);
+        for (uint32_t i = 0; i < RING_TILES; ++i) {
+            const uint64_t a = dram(base, RING_PAGE, page0 + i);
+            const uint32_t b = buf + (l * RING_TILES + i) * 256;
+            noc_async_write(b, a, 128);
+            noc_async_write(b + 128, a + 512, 128);
+        }
+    }
+    noc_async_write_barrier();
+}
+#endif
 #if SPEC_MODE == 4
 #if !defined(SPEC_RING_PHASE) || !defined(SPEC_RING_SAVE)
 #error "SPEC_MODE 4: SPEC_RING_PHASE (1 move, 2 restore) and SPEC_RING_SAVE"
@@ -130,6 +187,25 @@ void kernel_main() {
     // scratch slots (64-B aligned): [0, 256) token row, [256, 512) record, [512, 640) a position page, [640, 768) the
     // words read back, [768, 1024) the token rows' word 0 assembly
     const uint32_t s_tok = scr, s_rec = scr + 256, s_pos = scr + 512, s_aux = scr + 640;
+#if defined(SPEC_ACCEPT_BATCH)
+#if SPEC_MODE != 1 && SPEC_MODE != 4
+#error "SPEC_ACCEPT_BATCH: ACCEPT (1) and RING (4) only"
+#endif
+    static_assert(2 * K + 1 <= 16, "one user's verify + draft rows fit the 1 KB of token rows");
+#if defined(SPEC_GROUPS)
+    constexpr uint32_t BATCH_OFF = 2048;
+#else
+    constexpr uint32_t BATCH_OFF = 1024;
+#endif
+    // past the slots above (header): ACCEPT one user's token rows (64 B each: a_j at j, d_j at K + j), then the ring
+    // pieces; RING the ring pieces only
+#if SPEC_MODE == 1
+    constexpr uint32_t TB_BYTES = 1024;
+#else
+    constexpr uint32_t TB_BYTES = 0;
+#endif
+    [[maybe_unused]] const uint32_t s_tb = scr + BATCH_OFF, s_rb = scr + BATCH_OFF + TB_BYTES;
+#endif
 
 #if defined(SPEC_GROUPS)
     constexpr uint32_t G = SPEC_GROUPS;
@@ -158,6 +234,21 @@ void kernel_main() {
     for (uint32_t u = 0; u < G; ++u) {
         const uint32_t ro = u * W;
         noc_async_read(dram(rec, REC_PAGE, u), s_rec, REC_PAGE);
+#if defined(SPEC_ACCEPT_BATCH)
+        // this user's verify rows a_j (j = 0..K) and draft rows d_j (j = 1..K) behind the record's barrier (a live
+        // group's only: an inactive one reads none, as without the define)
+#if defined(SPEC_PARTIAL)
+        if (i32(s_pos)[ro] >= 0)
+#endif
+        {
+            for (uint32_t j = 0; j <= K; ++j) {
+                noc_async_read(dram(vout, TOK_PAGE, ro + j), s_tb + 64 * j, 64);
+            }
+            for (uint32_t j = 1; j <= K; ++j) {
+                noc_async_read(dram(tin, TOK_PAGE, ro + j), s_tb + 64 * (K + j), 64);
+            }
+        }
+#endif
         noc_async_read_barrier();
         const uint32_t steps = u32(s_rec)[W_STEPS] + 1;
         for (uint32_t w = 0; w < REC_PAGE / 4; ++w) {
@@ -181,6 +272,20 @@ void kernel_main() {
         int32_t c;
 #if SPEC_MODE == 1
         c = i32(s_pos)[ro];  // pos_v row ro = this group's base position
+#if defined(SPEC_ACCEPT_BATCH)
+        for (uint32_t j = 0; j <= K; ++j) {
+            a[j] = u32(s_tb + 64 * j)[0];
+        }
+        bool run = true;
+        for (uint32_t j = 1; j <= K; ++j) {
+            const uint32_t d = u32(s_tb + 64 * (K + j))[0];
+            if (run && a[j - 1] == d) {
+                n = j;
+            } else {
+                run = false;
+            }
+        }
+#else
         for (uint32_t j = 0; j <= K; ++j) {
             noc_async_read(dram(vout, TOK_PAGE, ro + j), s_tok, 64);
             noc_async_read_barrier();
@@ -197,6 +302,7 @@ void kernel_main() {
                 run = false;
             }
         }
+#endif
 #else
         c = i32(s_pos)[ro] - 1;  // the user's slot (the group base ro) after the plain head's advance
         noc_async_read(dram(tin, TOK_PAGE, ro), s_tok, 64);
@@ -216,7 +322,11 @@ void kernel_main() {
         noc_async_write(s_rec, dram(rec, REC_PAGE, u), REC_PAGE);
         u32(s_aux)[0] = a[n];
         noc_async_write(s_aux, dram(tin, TOK_PAGE, ro), 64);
+#if defined(SPEC_ACCEPT_BATCH)
+        noc_async_writes_flushed();  // s_rec / s_aux are reused by the next user; the final barrier orders the writes
+#else
         noc_async_write_barrier();
+#endif
         u32(s_sel)[u] = ro + n;
         for (uint32_t j = 0; j <= K; ++j) {
             i32(s_pv)[ro + j] = c + static_cast<int32_t>(n + 1 + j);
@@ -232,6 +342,9 @@ void kernel_main() {
         if (grp > 0 && n_ring > 0) {
             const uint32_t r0 = 4 * grp;
             const uint32_t off = (r0 >> 4) * 1024 + (r0 & 15) * 32;  // kernels/mla/mla_common.hpp row_off
+#if defined(SPEC_ACCEPT_BATCH)
+            ring_move_batched(n_ring, ro * RING_TILES, off, s_rb);  // user u's slot = its group base
+#else
             for (uint32_t l = 0; l < n_ring && l < 16; ++l) {
                 const uint32_t base = get_arg_val<uint32_t>(11 + l);  // layer l's ring tensor (slot 0 at page 0)
                 for (uint32_t i = 0; i < RING_TILES; ++i) {
@@ -244,6 +357,7 @@ void kernel_main() {
                     noc_async_write_barrier();
                 }
             }
+#endif
         }
 #endif
     }
@@ -295,7 +409,11 @@ void kernel_main() {
 #elif SPEC_MODE == 4
     const uint32_t rec = get_arg_val<uint32_t>(0);
     for (uint32_t u = 0; u < G; ++u) {
+#if defined(SPEC_ACCEPT_BATCH)
+        mtp_ring(rec, u, u * W, s_rec, s_rb);
+#else
         mtp_ring(rec, u, u * W, s_rec, s_tok);
+#endif
     }
 #else
 #error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER, 4 RING"
@@ -313,6 +431,15 @@ void kernel_main() {
     // the record's step counter survives (read-modify-write of the whole page)
     noc_async_read(dram(rec, REC_PAGE, 0), s_rec, REC_PAGE);
     noc_async_read(dram(pos_src, POS_PAGE, 0), s_pos, POS_PAGE);
+#if defined(SPEC_ACCEPT_BATCH)
+    // the verify rows a_j (j = 0..K) and draft rows d_j (j = 1..K) behind the same barrier
+    for (uint32_t j = 0; j <= K; ++j) {
+        noc_async_read(dram(vout, TOK_PAGE, j), s_tb + 64 * j, 64);
+    }
+    for (uint32_t j = 1; j <= K; ++j) {
+        noc_async_read(dram(tin, TOK_PAGE, j), s_tb + 64 * (K + j), 64);
+    }
+#endif
     noc_async_read_barrier();
     const uint32_t steps = u32(s_rec)[W_STEPS] + 1;
     for (uint32_t w = 0; w < REC_PAGE / 4; ++w) {
@@ -324,6 +451,20 @@ void kernel_main() {
     int32_t c;
 #if SPEC_MODE == 1
     c = i32(s_pos)[0];  // pos_v row 0 = this step's base position
+#if defined(SPEC_ACCEPT_BATCH)
+    for (uint32_t j = 0; j <= K; ++j) {
+        a[j] = u32(s_tb + 64 * j)[0];
+    }
+    bool run = true;
+    for (uint32_t j = 1; j <= K; ++j) {
+        const uint32_t d = u32(s_tb + 64 * (K + j))[0];
+        if (run && a[j - 1] == d) {
+            n = j;
+        } else {
+            run = false;
+        }
+    }
+#else
     for (uint32_t j = 0; j <= K; ++j) {
         noc_async_read(dram(vout, TOK_PAGE, j), s_tok, 64);
         noc_async_read_barrier();
@@ -340,6 +481,7 @@ void kernel_main() {
             run = false;
         }
     }
+#endif
 #else
     c = i32(s_pos)[0] - 1;  // the plain head advanced pos to the next input's position
     noc_async_read(dram(tin, TOK_PAGE, 0), s_tok, 64);
@@ -399,6 +541,9 @@ void kernel_main() {
     if (grp > 0 && n_ring > 0) {
         const uint32_t r0 = 4 * grp;
         const uint32_t off = (r0 >> 4) * 1024 + (r0 & 15) * 32;  // kernels/mla/mla_common.hpp row_off
+#if defined(SPEC_ACCEPT_BATCH)
+        ring_move_batched(n_ring, 0, off, s_rb);
+#else
         for (uint32_t l = 0; l < n_ring && l < 16; ++l) {
             const uint32_t base = get_arg_val<uint32_t>(11 + l);
             for (uint32_t i = 0; i < RING_TILES; ++i) {
@@ -411,6 +556,7 @@ void kernel_main() {
                 noc_async_write_barrier();
             }
         }
+#endif
     }
 #endif
 #elif SPEC_MODE == 3
@@ -441,7 +587,11 @@ void kernel_main() {
     noc_async_write(s_rec, dram(rec, REC_PAGE, 0), REC_PAGE);
     noc_async_write_barrier();
 #elif SPEC_MODE == 4
+#if defined(SPEC_ACCEPT_BATCH)
+    mtp_ring(get_arg_val<uint32_t>(0), 0, 0, s_rec, s_rb);
+#else
     mtp_ring(get_arg_val<uint32_t>(0), 0, 0, s_rec, s_tok);
+#endif
 #else
 #error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER, 4 RING"
 #endif

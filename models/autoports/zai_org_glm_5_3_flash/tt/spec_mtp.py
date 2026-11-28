@@ -52,6 +52,7 @@ TILE = 32
 HIDDEN = 4096
 KDIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels")
 _LAZY_CAPTURE_LOGGED: list = []  # SpecMTP._replay's lazy-capture warning, once per process
+_ACCEPT_BATCH_LOGGED: list = []  # GLM53_ACCEPT_BATCH: its "active" line once per process
 SPEC_REV = 6  # 6: SPEC_MODE 4 RING (GLM53_SPEC_MTP_SPARSE: the MTP layer's own DSA ring around the catch-up / chain); 5: SPEC_PARTIAL (an inactive group: rows -1, record c -1); 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
 SEM_HEAD, SEM_HN = 0, 4  # kernels/head/head_common.hpp roles (owners: partial-sum all-gather; readers: hcat landed)
 
@@ -448,6 +449,16 @@ class SpecCtl:
         self.partial = bool(partial) and self.groups > 0
         assert self.groups == 0 or 1 <= self.groups * (K + 1) <= 32, (self.groups, K)
         self.core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        # GLM53_ACCEPT_BATCH (default 0; on in tt/galaxy_defaults.py; shard_plan.accept_batch, spec_ctl.cpp
+        # SPEC_ACCEPT_BATCH): ACCEPT / RING issue a user's reads behind one barrier and move the DSA ring rows of all
+        # its layers in one round trip -- the same bytes, fewer waits
+        from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import accept_batch
+
+        self.batch = accept_batch()
+        if self.batch and not _ACCEPT_BATCH_LOGGED:
+            _ACCEPT_BATCH_LOGGED.append(True)
+            print("GLM53_ACCEPT_BATCH active (spec_ctl.cpp SPEC_ACCEPT_BATCH: ACCEPT's token reads behind one barrier, "
+                  "the DSA ring move one round trip per user, RING's row moves one round trip)", flush=True)  # fmt: skip
 
     NARGS = 27  # 10 + the DSA ring count + 16 ring bases (ACCEPT; kernels/spec/spec_ctl.cpp; SPEC_GROUPS alike)
 
@@ -471,7 +482,12 @@ class SpecCtl:
             defs.append(("SPEC_GROUPS", str(self.groups)))
         if self.partial:
             defs.append(("SPEC_PARTIAL", "1"))
-        scr = 2048 if self.groups else 1024  # (SPEC_GROUPS: the assembled pages past the single-user slots)
+        from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import spec_ctl_scratch
+
+        # (SPEC_GROUPS: the assembled pages past the single-user slots; GLM53_ACCEPT_BATCH: token rows + ring pieces)
+        scr, nb = spec_ctl_scratch(mode, self.groups, per, self.batch)
+        if nb is not None:
+            defs.append(("SPEC_ACCEPT_BATCH", str(nb)))
         kd = ttnn.KernelDescriptor(
             kernel_source=os.path.join(KDIR, "spec", "spec_ctl.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, core_ranges=self.core,

@@ -41,6 +41,7 @@ SEM_HEAD = 0  # owners: the partial-sum all-gather
 SEM_HN = 4  # readers: h landed (64 owners)
 SEM_TOPK = 0  # the select core: one increment per reader
 TOPK_CB = 37  # readers: the top-K record scratch (no reader phase uses 37)
+_SEL_FAST_LOGGED: list = []  # GLM53_HEAD_SELECT_FAST: its "active" line once per process
 KDIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels")
 
 
@@ -262,14 +263,26 @@ class MkHead:
             r_cbs = list(r_cbs) + [ttnn.CBDescriptor(total_size=scratch, core_ranges=rd.cores, format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=TOPK_CB, data_format=ttnn.uint32, page_size=scratch)])]  # fmt: skip
             land_cb, out_cb = 0, 1
+            # GLM53_HEAD_SELECT_FAST (shard_plan.head_select_fast, topk_select.cpp TOPK_SEL_FAST): one 256-B staging page
+            # per row (one write barrier after the last row) and the heap merge of the chips' candidates
+            from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import head_select_fast
+
+            fast = head_select_fast()
+            if fast and not _SEL_FAST_LOGGED:
+                _SEL_FAST_LOGGED.append(True)
+                print("GLM53_HEAD_SELECT_FAST active (topk_select.cpp TOPK_SEL_FAST: a staging page per row, one write "
+                      "barrier for all rows, the heap merge with ids decoded on demand)", flush=True)  # fmt: skip
+            out_pages = max(1, int(t)) if fast else 1
             cbs += [ttnn.CBDescriptor(total_size=land_bytes, core_ranges=sel, format_descriptors=[
                         ttnn.CBFormatDescriptor(buffer_index=land_cb, data_format=ttnn.uint32, page_size=land_bytes)]),
-                    ttnn.CBDescriptor(total_size=256, core_ranges=sel, format_descriptors=[
+                    ttnn.CBDescriptor(total_size=256 * out_pages, core_ranges=sel, format_descriptors=[
                         ttnn.CBFormatDescriptor(buffer_index=out_cb, data_format=ttnn.uint32, page_size=256)])]  # fmt: skip
             srt = ttnn.RuntimeArgs()
             s_args = [t, self.topk_out.buffer_address(), land, self.sampled.buffer_address(),
                       pos.buffer_address() if pos is not None else 0] + [c_.buffer_address() for c_ in copies]  # fmt: skip
             cdefs = [("TOPK_POS_COPIES", str(len(copies))), ("TOPK_POS_COPY_RT", "5")] if copies else []
+            if fast:
+                cdefs.append(("TOPK_SEL_FAST", "1"))
             if self.sample:  # the sampler pages' addresses after every other select arg (TOPK_SAMPLE_RT per path)
                 cbs.append(ttnn.CBDescriptor(total_size=1152, core_ranges=sel, format_descriptors=[
                     ttnn.CBFormatDescriptor(buffer_index=3, data_format=ttnn.uint32, page_size=1152)]))  # fmt: skip

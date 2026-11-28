@@ -1413,6 +1413,202 @@ def rs1_tsplit_header_check() -> None:
         assert 'sd += [("FS_SPAN0", str(self.sub[3])), ("FS_SPANN", str(self.sub[4]))]' in f.read()
 
 
+# ------------------------------------------------------------------ rev 82: the split RS1 by token halves (GLM53_DSA_SHARD_RS1_PIPE)
+RS1_PIPE_REV = 82  # tt/mk_mla.py MLA_REV_RS1_PIPE (the engaged builds' MLA_REV)
+# the increments each waiter adds to a root's SEM_RSC (rs1's consumer list names every root twice; tt/tp_dsa_shard.py)
+# and the roots' three waits on it (dsa_shard.hpp RS1_PIPE_HALF0 / _BOTH / _ROUND2): half 0 landed, both halves
+# landed, round 2 landed
+RS1_PIPE_W = {"rs1": 2, RS1S_NAME: 1, "rs2": 1}
+RS1_PIPE_WAITS = (HDR["RS1_PIPE_HALF0"], HDR["RS1_PIPE_BOTH"], HDR["RS1_PIPE_ROUND2"])
+assert RS1_PIPE_WAITS == (2, 3, 4) and RS1_PIPE_WAITS[2] == sum(RS1_PIPE_W.values()), RS1_PIPE_WAITS
+
+
+def shard_rs1_pipe(pair: int, early: bool = True, rs1s: bool = True, rs1t: bool = True) -> bool:
+    """rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0; on in tt/galaxy_defaults.py; the 8x4): the lane tokens pipelined
+    through the split RS1. Under RS1_TSPLIT the two RS1 lanes carry the halves of every destination block -- whole token
+    halves (rs1_pipe_halves: rs1 the tokens [0, t / 2), every lane's first token at 8 lanes x 2) -- but both counted
+    every token's root signals, so both opened behind the last pass-0 slice and landed together, and a root combined
+    round 1 of its lane tokens only after both. With the knob each lane counts its own half's signals (rs1_pipe_waits:
+    rs1 opens a token pass earlier) and rs1's waiter signals the roots with weight 2 (RS1_PIPE_W), so a root lands /
+    combines / scatters its half-0 tokens while rs1a is still in flight (dsa_shard.hpp RS1 PIPE, the kernels'
+    MLA_DSA_SHARD_RS1_PIPE; rs1_pipe_gates / rs1_pipe_root emulate it). The same pages, landing order and compute
+    messages: bit-exact. Which builds take it: rs1_pipe_engaged. Needs RS1_EARLY (the per-pass fields), RS1_SPLIT and
+    RS1_TSPLIT; the pair / the 2x4 never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_RS1_PIPE")
+    if on and not (early and rs1s and rs1t):
+        raise ValueError(
+            "GLM53_DSA_SHARD_RS1_PIPE=1 needs GLM53_DSA_SHARD_RS1_EARLY=1, GLM53_DSA_SHARD_RS1_SPLIT=1 and "
+            "GLM53_DSA_SHARD_RS1_TSPLIT=1 (the split RS1's two halves)"
+        )
+    return on
+
+
+def rs1_pipe_halves(t: int) -> dict | None:
+    """{link: the launch tokens whose RS1 slices that lane carries} when the RS1_TSPLIT spans (rs1_tsplit_spans) are
+    whole tokens: link 1 (rs1) [0, t / 2), link 0 (rs1a) [t / 2, t) -- att_dsa_shard_dm1.cpp's rs1_pipe_half0; None
+    when the span boundary splits a token's RS1_DATA_PAGES pages (t % 4 != 0: t 1 / 2 / 6 ..)"""
+    h = rs1_tsplit_spans(t)[1][1]
+    if t % 2 or h != (t // 2) * RS1_DATA_PAGES:
+        return None
+    return {1: list(range(t // 2)), 0: list(range(t // 2, t))}
+
+
+# the (t, lanes) builds RS1_PIPE engages on: t 16 at 8 lanes, the one shape with a device identity run (the served B 16
+# steps at the default lanes of mk_mla att_lanes)
+RS1_PIPE_SHAPES = ((16, 8),)
+
+
+def rs1_pipe_engaged(t: int, lanes: int, on: bool) -> bool:
+    """whether a t-row build (token t on lane t % lanes) takes MLA_DSA_SHARD_RS1_PIPE: the knob on and (t, lanes) in
+    RS1_PIPE_SHAPES. The protocol needs whole-token halves and >= 2 tokens per lane (t >= 2 lanes: every lane then
+    holds tokens of both halves -- its first < lanes <= t / 2, its last >= t - lanes >= t / 2), asserted for every
+    listed shape. Every other build keeps the knob-off kernels and streams: one token per lane (t 8 at 8 lanes, t 4 at
+    4: the CI pins, the lone 1 x 3 verify, the MTP drafter; no half-0 work to run behind half 1), t 1 and every shape
+    without a device identity run -- t 32 at 8 lanes, GLM53_MLA_DSA_LANES=4 (t 8 / 16 on 4), GLM53_MLA_DSA_LANES_AT
+    (e.g. 16:2), GLM53_MLA_DSA_LANES_T4=1 / 2 (t 4 on 1 / 2 lanes)"""
+    if not on or (int(t), int(lanes)) not in RS1_PIPE_SHAPES:
+        return False
+    assert t >= 2 * lanes and rs1_pipe_halves(t) is not None, ("RS1_PIPE_SHAPES: whole-token halves, >= 2 per lane", t)
+    return True
+
+
+def rs1_pipe_waits(t: int, groups: int = 1) -> dict:
+    """{link: (wait, wait2)} -- the RS1 lanes' FS_WAIT / FS_WAIT2 counts under RS1_PIPE: each lane counts the root
+    signals of its half's tokens (one per token, pass and head group); knob off both lanes count all t x groups"""
+    hv = rs1_pipe_halves(t)
+    assert hv is not None, ("RS1 pipe: whole-token halves", t)
+    return {link: (len(toks) * groups, len(toks) * groups) for link, toks in hv.items()}
+
+
+def rs1_pipe_gates(done0: list, done1: list, t: int, *, mutate: str | None = None) -> dict:
+    """fs_read.cpp FS_WAIT2's two gates on each RS1 lane under RS1_PIPE as the roots' signals land in time order (a
+    pass-0 signal before a pass-1 one at the same time): done0[l] / done1[l] = lane l's root's pass-0 / pass-1 ship
+    times of its tokens l, l + lanes, .. (rs1_lane_ships); a root signals only the lane of the token's half (pass 0
+    into bits [0, 16), pass 1 RS1_PASS1_INC) and each lane's gates open at rs1_pipe_waits. -> {link: (gate 1, gate 2,
+    the last pass-0 ship of its half's tokens, their last pass-1 ship)}: sound iff gate 1 >= that pass-0 ship and gate
+    2 >= that pass-1 ship (the lane stages only its half's pages; None: it never opens -- a hang). mutate (the
+    regression this must expose): "both" -- every signal to both lanes (the knob-off increments) with the halved
+    waits: a lane opens on the other half's signals"""
+    lanes = len(done0)
+    hv, waits = rs1_pipe_halves(t), rs1_pipe_waits(t)
+    assert sum(len(d) for d in done0) == t == sum(len(d) for d in done1), (t, [len(d) for d in done0])
+    half = {tok: link for link, toks in hv.items() for tok in toks}
+    out = {}
+    for link in hv:
+        ev, need0, need1 = [], None, None
+        for l_ in range(lanes):
+            for j, (a, b) in enumerate(zip(done0[l_], done1[l_])):
+                mine = half[l_ + j * lanes] == link
+                if mine:
+                    need0, need1 = max(a, need0 or a), max(b, need1 or b)
+                if mine or mutate == "both":
+                    ev += [(a, 0), (b, 1)]
+        cnt, g1, g2 = 0, None, None
+        for time, pas in sorted(ev):
+            cnt += RS1_PASS1_INC if pas else 1
+            if g1 is None and cnt % RS1_PASS1_INC >= waits[link][0]:
+                g1 = time
+            if g2 is None and cnt // RS1_PASS1_INC >= waits[link][1]:
+                g2 = time
+        out[link] = (g1, g2, need0, need1)
+    return out
+
+
+def rs1_pipe_root(order: list, *, weights: dict | None = None, waits: tuple | None = None) -> list:
+    """one lane root's landing waits (att_dsa_shard_dm1.cpp E under RS1_PIPE) against one arrival order of the round-1
+    increments on its SEM_RSC: order = the waiter of each increment in arrival order -- rs1 weights["rs1"] times (its
+    consumer list names the root twice: every one of them follows rs1's landing), rs1a weights[RS1S_NAME] times; rs2's
+    increments arrive only once the root has passed its second wait (rs2's sends wait for every root's half-1 scatter,
+    which a root ships only past that wait). weights / waits: RS1_PIPE_W / RS1_PIPE_WAITS by default (the regressions:
+    the knob-off unit weights with the ordinal waits (1, 2, 3), a stale round-2 wait). -> [(step, the waiters landed
+    when the root passed that wait)] for "half0" (it lands / combines its tokens < t / 2), "half1" (the rest),
+    "round2" -- sound iff half0 saw rs1, half1 rs1 and rs1a, round2 all three; ("hang", landed) when the root waits for
+    an increment that never comes"""
+    weights = dict(RS1_PIPE_W if weights is None else weights)
+    waits = tuple(RS1_PIPE_WAITS if waits is None else waits)
+    assert sorted(order) == sorted(["rs1"] * weights["rs1"] + [RS1S_NAME] * weights[RS1S_NAME]), (order, weights)
+    pend, landed, steps = list(order), [], []
+    for k, name in enumerate(("half0", "half1", "round2")):
+        while len(landed) < waits[k] and pend:
+            landed.append(pend.pop(0))
+        if len(landed) < waits[k]:
+            steps.append(("hang", tuple(sorted(set(landed)))))
+            break
+        steps.append((name, tuple(sorted(set(landed)))))
+        if name == "half1":  # every root's half-1 scatter shipped: rs2 may send, its waiter signals later
+            pend += ["rs2"] * weights["rs2"]
+    return steps
+
+
+# att_dsa_shard_dm1.cpp's round-1 loop of a lane root (t0 = its lane, right after the RS1_PIPE_HALF0 wait) and its
+# first statement under RS1_PIPE, the second wait's condition: rs1_pipe_root_waits evaluates the same loop and
+# condition, rs1_pipe_header_check asserts both strings and their place in the kernel
+RS1_PIPE_ROOT_LOOP = "for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {"
+RS1_PIPE_HALF1_IF = "if (t >= t_rows / 2 && t < t_rows / 2 + mlaatt::LANES) {"
+
+
+def rs1_pipe_root_waits(t_rows: int, lanes: int, *, mutate: str | None = None) -> dict:
+    """the roots' RS1_PIPE second wait as att_dsa_shard_dm1.cpp runs it (RS1_PIPE_ROOT_LOOP / RS1_PIPE_HALF1_IF,
+    unsigned division): root l walks its tokens l, l + lanes, .. < t_rows and waits SEM_RSC >= RS1_PIPE_BOTH before a
+    token t with t_rows / 2 <= t < t_rows / 2 + lanes. -> {l: [the launch tokens before which root l waits]}: sound iff
+    every lane waits exactly once, before its first half-1 token (rs1_pipe_halves[0]; tokens ascend, so every earlier
+    one is in half 0). mutate (the off-by-ones this must expose): "le" -- <= for the upper bound (a second wait at
+    t_rows / 2 + lanes when a lane holds > 2 tokens), "minus1" -- the boundary at t_rows / 2 - 1 (lane (t_rows / 2 - 1)
+    % lanes waits before a half-0 token and lands its first half-1 token without the wait)"""
+    assert mutate in (None, "le", "minus1"), mutate
+    lo = t_rows // 2 - int(mutate == "minus1")
+    hi = lo + lanes + int(mutate == "le")  # (t < hi: the kernel's t < t_rows / 2 + mlaatt::LANES)
+    return {l_: [t for t in range(l_, t_rows, lanes) if lo <= t < hi] for l_ in range(lanes)}
+
+
+def rs1_pipe_round1_end(land: dict, work: float, tokens: int, on: bool) -> float:
+    """when a lane root has shipped its round-1 row scatters (att_dsa_shard_dm1.cpp E): land[link] = when that RS1 lane
+    landed here, work = the root's round-1 work per token (land_fold1 + the fold combine + the 2-row scatter ship),
+    `tokens` its lane tokens, the first half of them in half 0 (rs1). Knob off one wait for both halves; RS1_PIPE the
+    half-0 tokens behind rs1 alone: the gain is min(land[0] - land[1], the half-0 work) when rs1 lands first"""
+    n0 = tokens // 2
+    if not on:
+        return max(land[0], land[1]) + work * tokens
+    return max(land[1] + work * n0, land[0]) + work * (tokens - n0)
+
+
+def rs1_pipe_header_check() -> None:
+    """GLM53_DSA_SHARD_RS1_PIPE's host plan vs the kernels' / builders' text: the roots' half rule, lane signals and
+    three waits (dsa_shard.hpp, att_dsa_shard_dm1.cpp), rs1's doubled consumer list and the halves' gate counts
+    (tt/tp_dsa_shard.py), the define (tt/mk_mla.py)"""
+    with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
+        assert "inline bool rs1_pipe_half0(uint32_t t, uint32_t t_rows) { return t < t_rows / 2; }" in f.read()
+    with open(os.path.join(KDIR, "mla", "att_dsa_shard_dm1.cpp")) as f:
+        dm1 = f.read()
+    for line_ in ("if (mlashard::rs1_pipe_half0(t, t_rows)) {",
+                  "noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_HALF0);",
+                  RS1_PIPE_HALF1_IF,
+                  "noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_BOTH);",
+                  "noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_ROUND2);"):  # fmt: skip
+        assert line_ in dm1, ("att_dsa_shard_dm1.cpp", line_)
+    # rs1_pipe_root_waits' loop and condition: the root's round-1 loop right after the half-0 wait, the second wait's
+    # test its first statement (only the define's #if between them), the only such test in the kernel
+    i0 = dm1.index("noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_HALF0);")
+    i1 = dm1.index(RS1_PIPE_ROOT_LOOP, i0)
+    i2 = dm1.index(RS1_PIPE_HALF1_IF, i1)
+    gap = [ln.strip() for ln in dm1[i1 + len(RS1_PIPE_ROOT_LOOP) : i2].splitlines() if ln.strip()]
+    assert len(gap) == 1 and gap[0].startswith("#if defined(MLA_DSA_SHARD_RS1_PIPE)"), gap
+    assert dm1.count(RS1_PIPE_HALF1_IF) == 1 and "for (" not in dm1[i0:i1], "att_dsa_shard_dm1.cpp RS1 pipe loop"
+    with open(os.path.join(os.path.dirname(KDIR), "tp_dsa_shard.py")) as f:
+        tds = f.read()
+    for line_ in ('rs1_cons = (MK.SEM_RSC, roots * SP.RS1_PIPE_W["rs1"])',
+                  "assert rs1a.cons == rs2.cons == (MK.SEM_RSC, roots), (rs1a.cons, rs2.cons)",
+                  "assert rs2.wait == (MK.SEM_FSW, n_all) and len(rs2.lanes) == 1, (rs2.wait, rs2.lanes)",
+                  "pw = SP.rs1_pipe_waits(t, self.mk.groups)",
+                  "rs1_wait, rs1a_n = (rs_wait[0], pw[1][0]), pw[0][0]",
+                  "split1, split0 = dict(split, wait2=pw[1][1]), dict(split, wait2=pw[0][1])",
+                  "pipe = SP.rs1_pipe_engaged(t, nl, SP.shard_rs1_pipe(self.P, early, rs1s, rs1t))"):  # fmt: skip
+        assert line_ in tds, ("tp_dsa_shard.py", line_)
+    assert RS1_PIPE_W[RS1S_NAME] == RS1_PIPE_W["rs2"] == 1  # (rs1a / rs2 keep cons=(MK.SEM_RSC, roots))
+    with open(os.path.join(os.path.dirname(KDIR), "mk_mla.py")) as f:
+        assert '[("MLA_DSA_SHARD_RS1_PIPE", "1")] if rs1p else []' in f.read()
+
+
 def rs1_split_window_check(rs1_split: bool, dense_window: bool | None = None) -> None:
     """rev 76 x GLM53_DSA_DENSE_WINDOW: refused at build (tt/tp_dsa_shard.py, tt/mk_mla.py). In an ALL-DENSE launch
     (every row's context inside the dense window) the roots skip the split-K exchange and only signal the RS lanes
@@ -1471,8 +1667,9 @@ def rs1_split_header_check() -> None:
                   "noc_semaphore_wait_min(rsc, 2);  // rev 76: both column-scatter waiters",
                   "noc_semaphore_wait_min(rsc, 3);  // rev 76: the two column-scatter waiters, then the row scatter's"):  # fmt: skip
         assert line_ in dm1, ("att_dsa_shard_dm1.cpp RS1 split", line_)
-    # every RS1 signal of the 8x4 roots (the dense launch's two fields, RS1 early's per-pass one, the late form's)
-    assert dm1.count("get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem))") == 4, "att_dsa_shard_dm1.cpp rs1a signals"
+    # every RS1 signal of the 8x4 roots (the dense launch's two fields, RS1 early's per-pass one, the late form's; rev
+    # 82 RS1 PIPE's per-half one)
+    assert dm1.count("get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem))") == 5, "att_dsa_shard_dm1.cpp rs1a signals"
     with open(os.path.join(os.path.dirname(KDIR), "mk_mla.py")) as f:
         mk = f.read()
     for line_ in ('dm1_rt[xy] += [*shard["rs1a_lane"], int(shard["rs1a_sem"])]',
@@ -2642,6 +2839,357 @@ def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, pla
                 want = geo.block(name, t, r, c, **pk)
                 if got != {k: want[k] for k in got}:
                     raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
+
+
+SPEC_CTL_BATCH_TOK = 1024  # spec_ctl.cpp SPEC_ACCEPT_BATCH: one user's token rows (64 B each; 2 K + 1 <= 16)
+SPEC_CTL_RING_PIECES = 2048  # ... and per ring tensor the 4-row pieces of a slot's 8 tiles (8 x 256 B)
+SPEC_RING_SAVE_ROW = 8  # spec_ctl.cpp RING_SAVE_ROW: RING's copy of the canonical rows across the MTP chain
+
+
+def accept_batch() -> bool:
+    """GLM53_ACCEPT_BATCH (default 0; on in tt/galaxy_defaults.py): kernels/spec/spec_ctl.cpp SPEC_ACCEPT_BATCH on
+    ACCEPT and RING (tt/spec_mtp.py SpecCtl) -- a user's token reads behind one barrier, its DSA ring move in one round
+    trip, RING's row moves in one. Not a GLM53_SPEC_* name: apply_spec takes any GLM53_SPEC_* variable as an explicit
+    speculation config"""
+    return _flag("GLM53_ACCEPT_BATCH")
+
+
+def kda_verify_flat() -> bool:
+    """GLM53_KDA_VERIFY_FLAT (default 0; on in tt/galaxy_defaults.py; on GLM53_KDA_VERIFY_PIPE):
+    kernels/kda_pre/reader.cpp KDA_VERIFY_FLAT in the speculative verify's kda_pre (KDA_VERIFY_GROUPS) -- every group's
+    pre-conv and slot-history reads behind one barrier, then the same windows, pushes and write-backs group by group"""
+    return _flag("GLM53_KDA_VERIFY_FLAT")
+
+
+def kda_verify_rsplit() -> bool:
+    """GLM53_KDA_VERIFY_RSPLIT (default 0; on in tt/galaxy_defaults.py; on GLM53_KDA_VERIFY_FLAT):
+    kernels/kda_pre/reader.cpp KDA_VERIFY_RSPLIT in the speculative verify's kda_pre (KDA_VERIFY_GROUPS = G) -- the G
+    groups over G row groups of the column cores, one group per core, the history write-backs after P6
+    (kernels/mk/owner_dm0.cpp); see kda_verify_rsplit_rows"""
+    return _flag("GLM53_KDA_VERIFY_RSPLIT")
+
+
+def kda_verify_rsplit_rows(G: int, n_cols: int, n_cores: int, *, rsplit: int = 1, pipe: bool = False,
+                           flat: bool = False, prefetch: bool = False) -> int:  # fmt: skip
+    """tt/kda_pre.py KdaPre's row groups for a verify-groups width under GLM53_KDA_VERIFY_RSPLIT: G (the verify's user
+    groups, one per row group: row group g = user group g's row pairs, so no group straddles two cores) when the knob is
+    on and G > 1, else 1 (knob off, a lone verify, a plain width). n_cols = the kda_pre column cores (heads x spread),
+    n_cores = the owner cores the program places it on. ValueError: the knob without the FLAT reader (it is a FLAT
+    variant), with GLM53_KDA_RSPLIT (the plain row split), with GLM53_KDA_PREFETCH, or more row-group cores than owners
+    """
+    on = kda_verify_rsplit()
+    if not on or G <= 1:
+        return 1
+    if not (pipe and flat):
+        raise ValueError("GLM53_KDA_VERIFY_RSPLIT=1 needs GLM53_KDA_VERIFY_PIPE=1 and GLM53_KDA_VERIFY_FLAT=1 (it splits "
+                         "the FLAT verify reader)")  # fmt: skip
+    if rsplit != 1:
+        raise ValueError(f"GLM53_KDA_VERIFY_RSPLIT=1 with GLM53_KDA_RSPLIT={rsplit}: one row split at a time")
+    if prefetch:
+        raise ValueError("GLM53_KDA_VERIFY_RSPLIT=1 with GLM53_KDA_PREFETCH=1: not supported (kda_pre reader.cpp)")
+    if G * n_cols > n_cores:
+        raise ValueError(f"GLM53_KDA_VERIFY_RSPLIT=1: {G} row groups x {n_cols} column cores > {n_cores} owner cores")
+    return G
+
+
+KDA_O_PHASE = 2  # the readers' o_proj phase index (MkLayer / MkSparseLayer / MkStepB) and its MK_FAB_MASK bit
+
+
+def kda_verify_rsplit_order_check(cons: dict, n_pre: int, n_rec: int, o_wait: tuple, o_signal: int, post_wait: tuple,
+                                  readers: int, sem_on: int, sem_a: int) -> None:  # fmt: skip
+    """GLM53_KDA_VERIFY_RSPLIT's hand-off chain on a megakernel build (MkLayer / MkSparseLayer / MkStepB, asserted at
+    build when the knob engages): an owner runs its deferred kda_pre history write-backs after P6's hand-off wait
+    (kernels/mk/owner_dm0.cpp), so that wait must imply every kda_pre core's slot reads on the chip landed. The chain:
+    every active kda_pre core kk < n_pre signals kda_rec cores after its last write (cons = KdaPre.consumers():
+    cons[kk] non-empty, each < n_rec, the kda_rec cores that raise SEM_ON); every o_proj reader waits for all n_rec
+    of them (its MMPhase wait o_wait = (sem_on, n_rec): heads x spread x user groups) before it signals sem_a
+    (o_signal); P6 waits for every reader (post_wait = (sem_a, readers): MK_POST_WAIT_SEM / _COUNT) -- on the TP builds
+    the lanes take that last link (kda_verify_rsplit_lanes_check). Host asserts only; AssertionError names the break"""
+    quiet = [kk for kk in range(n_pre) if not cons.get(kk)]
+    assert not quiet, ("KDA_VERIFY_RSPLIT: active kda_pre cores that signal no kda_rec core", quiet)
+    far = sorted({h for kk in range(n_pre) for h in cons[kk] if not 0 <= h < n_rec})
+    assert not far, ("KDA_VERIFY_RSPLIT: kda_pre consumers outside the kda_rec cores", far, n_rec)
+    assert tuple(o_wait) == (sem_on, n_rec) and o_signal == sem_a, ("KDA_VERIFY_RSPLIT: o_proj", o_wait, o_signal)
+    assert tuple(post_wait) == (sem_a, readers), ("KDA_VERIFY_RSPLIT: P6 waits", post_wait, readers)
+
+
+def kda_verify_rsplit_lanes_check(post_wait: tuple, lane_sem: int, lanes: int, lane_prod: int, readers: int,
+                                  fab_mask: int) -> None:  # fmt: skip
+    """kda_verify_rsplit_order_check's last link on the TP builds (the o_proj all-reduce; tt/tp8_layer.py
+    _hooked_rsplit_check in every owner rewrite: the per-layer launches of tt/tp8_layer.py / tt/tp8_sparse.py and the
+    stacks of tt/tp_stack.py): P6 waits for the all-reduce lanes (post_wait = the owner's (MK_POST_WAIT_SEM,
+    MK_POST_WAIT_COUNT) = (lane_sem, lanes): every lane signals lane_sem on every owner), and every lane waits for every
+    o_proj reader of its chip (the o_proj phase in the readers' fab_mask: they hand their partial rows to the lanes;
+    lane_prod = the lanes' producer count = readers). Host asserts only"""
+    assert fab_mask >> KDA_O_PHASE & 1, ("KDA_VERIFY_RSPLIT: o_proj is not on the all-reduce", fab_mask)
+    assert tuple(post_wait) == (lane_sem, lanes), ("KDA_VERIFY_RSPLIT: P6 waits", post_wait, lane_sem, lanes)
+    assert lane_prod == readers, ("KDA_VERIFY_RSPLIT: the lanes' producers", lane_prod, readers)
+
+
+def kda_verify_rsplit_pages(G: int, gp: int, R: int, rg: int) -> dict:
+    """reader.cpp KDA_VERIFY_RSPLIT's addressing on row group rg of R (G groups of gp row pairs; kda_pre_common.hpp
+    rsplit_range over the G gp pairs): pairs [p0, p1), groups g0 .. g0 + ng - 1, local page lp = gi gp + lu holds global
+    pair p0 + lp of local group gi, its slot pair lands on page gi gp + gp - 1 (selector word g0 + gi). -> dict(p0, p1,
+    g0, ng, pages [(lp, global pair, global group, landing page)])"""
+    pairs = G * gp
+    per = -(-pairs // R)
+    p0 = min(rg * per, pairs)
+    p1 = min(p0 + per, pairs)
+    units = p1 - p0
+    gp_k = pairs // G  # the kernel's gp = ((B + 1) / 2) / G
+    g0, ng = p0 // gp_k, units // gp_k
+    pages = [
+        (gi * gp_k + lu, p0 + gi * gp_k + lu, g0 + gi, gi * gp_k + gp_k - 1) for gi in range(ng) for lu in range(gp_k)
+    ]
+    return dict(p0=p0, p1=p1, g0=g0, ng=ng, pages=pages)
+
+
+def kda_verify_schedule(G: int, gp: int, selw: list, variant: str, active=None, R: int = 1, order=None) -> tuple:
+    """kernels/kda_pre/reader.cpp's verify readers as an event schedule over the DRAM history, row by row: G groups of gp
+    row pairs (rows 2 gp g .. of group g, one user's consecutive tokens), selw[g] = the absolute row whose 3 history rows
+    are group g's window rows i < 0. A slot read takes hist[sl][sel] at the time it is issued; the window of group-local
+    row j is H_sl[j] = src(j - 3 + sl) (i < 0: the slot's history row 3 + i, i >= 0: this launch's pre-conv row
+    2 gp g + i); a group's write-back sets hist[0..2][row] = (H1, H2, Q) of its active rows. variant: "groups" (the
+    knob-off GROUPS reader: per group slot read + build, every write-back after the last group), "pipe" (PIPE: group it's
+    slot read, then group it - 1's build + write-back, a write-back deferred to the end when a later group's slot lies in
+    its rows), "flat" (KDA_VERIFY_FLAT: every slot read, then per group build + write-back), "pipe_no_late" (PIPE
+    without the deferral: the negative control), "rsplit" (KDA_VERIFY_RSPLIT on R row groups, one core each, run in
+    `order` (default 0 .. R - 1): each core's reads into its local pages (kda_verify_rsplit_pages), its builds there,
+    every core's write-back of its local pages to their global rows after every core's reads -- the owner's P6), and
+    "rsplit_eager" (the same cores writing back right after their own builds, in `order`: the negative control without
+    the deferral). -> (windows {row: (H0, H1, H2)}, final hist)"""
+    assert variant in ("groups", "pipe", "flat", "pipe_no_late", "rsplit", "rsplit_eager"), variant
+    rows = 2 * G * gp
+    hist = [[("h", sl, r) for r in range(rows)] for sl in range(3)]
+    q = [("q", r) for r in range(rows)]
+    act = [True] * rows if active is None else list(active)
+    slot, win = {}, {}
+    if variant in ("rsplit", "rsplit_eager"):
+        # every core's pages: per local page lp the H0..H2 window rows and the qkv rows (2 per pair), its slot rows on the
+        # landing page -- the kernel's data flow (reads -> landing / qkv pages; builds from them; write-back from H1 /
+        # H2 / the qkv page of lp to the rows of global pair p0 + lp)
+        cores = [kda_verify_rsplit_pages(G, gp, R, rg) for rg in range(R)]
+        assert sorted(u for c in cores for _, u, _, _ in c["pages"]) == list(
+            range(G * gp)
+        ), "row groups cover the pairs"
+        pg = [{} for _ in range(R)]
+
+        def c_read(rg):
+            c, p = cores[rg], pg[rg]
+            for lp, u, g, land in c["pages"]:
+                p[("q", lp)] = (q[2 * u], q[2 * u + 1])
+                if lp == land:  # the landing page: the slot's 3 history rows (pair selw / 2, row selw & 1 below)
+                    p[("slot", lp)] = [hist[sl][selw[g]] for sl in range(3)]
+
+        def c_build(rg):
+            c, p = cores[rg], pg[rg]
+            for lp, u, g, land in c["pages"]:
+                lu = u - (u // gp) * gp
+                for j in (2 * lu, 2 * lu + 1):
+                    src = []
+                    for i in (j - 3, j - 2, j - 1):
+                        if i < 0:
+                            src.append(p[("slot", land)][3 + i])
+                        else:
+                            src.append(p[("q", lp - lu + i // 2)][i % 2])
+                    p[("w", lp, j % 2)] = tuple(src)
+                    win[2 * u + j % 2] = tuple(src)
+
+        def c_write_back(rg):  # reader.cpp kda_verify_write_back: a pair with an active row, both rows
+            c, p = cores[rg], pg[rg]
+            for lp, u, g, land in c["pages"]:
+                r0 = 2 * (c["p0"] + lp)  # global rows of local page lp (pair p0 + lp)
+                if not (act[r0] or act[r0 + 1]):
+                    continue
+                for jj in range(2):
+                    w = p[("w", lp, jj)]
+                    hist[0][r0 + jj], hist[1][r0 + jj], hist[2][r0 + jj] = w[1], w[2], p[("q", lp)][jj]
+
+        seq = list(range(R)) if order is None else list(order)
+        assert sorted(seq) == list(range(R)), order
+        if variant == "rsplit":
+            for rg in seq:
+                c_read(rg)
+                c_build(rg)
+            for rg in seq:
+                c_write_back(rg)
+        else:
+            for rg in seq:
+                c_read(rg)
+                c_build(rg)
+                c_write_back(rg)
+        return win, hist
+
+    def read(g):
+        slot[g] = [hist[sl][selw[g]] for sl in range(3)]
+
+    def build(g):
+        for j in range(2 * gp):
+            win[2 * gp * g + j] = tuple(slot[g][3 + i] if i < 0 else q[2 * gp * g + i] for i in (j - 3, j - 2, j - 1))
+
+    def write_back(g):
+        for j in range(2 * gp):
+            r = 2 * gp * g + j
+            if act[r]:
+                hist[0][r], hist[1][r], hist[2][r] = win[r][1], win[r][2], q[r]
+
+    if variant == "groups":
+        for g in range(G):
+            read(g)
+            build(g)
+        for g in range(G):
+            write_back(g)
+    elif variant == "flat":
+        for g in range(G):
+            read(g)
+        for g in range(G):
+            build(g)
+            write_back(g)
+    else:
+        late = 0
+        for gj in range(1, G):
+            gs = selw[gj] // 2 // gp
+            if gs < gj:
+                late |= 1 << gs
+        if variant == "pipe_no_late":
+            late = 0
+        for it in range(G + 1):
+            if it < G:
+                read(it)
+            if it > 0:
+                build(it - 1)
+                due = ((1 << (it - 1)) & ~late) | (late if it == G else 0)
+                for g in range(G):
+                    if (due >> g) & 1:
+                        write_back(g)
+    return win, hist
+
+
+def head_select_fast() -> bool:
+    """GLM53_HEAD_SELECT_FAST (default 0; on in tt/galaxy_defaults.py): kernels/head/topk_select.cpp TOPK_SEL_FAST on
+    every MkHead select core (the plain head, the verify head, the MTP heads) -- a staging page per row with one write
+    barrier for all rows, and TOPK_FAB's cross-chip merge as a heap with each candidate's id decoded on a key tie or a
+    take; the same rows"""
+    return _flag("GLM53_HEAD_SELECT_FAST")
+
+
+def topk_chip_merge(lists: list, k: int, heap: bool, stale_id: bool = False) -> list:
+    """topk_select.cpp TOPK_FAB's cross-chip merge of one row, line for line: lists[q] = chip q's candidates [(key, id)]
+    in descending order (a chip's slots past its list are invalid) -> the first k of the union by (larger key, then the
+    lower id). heap=False: the knob-off linear scan over the chips' heads. heap=True: TOPK_SEL_FAST -- an array heap of
+    the m live chips, sift(i), better_q comparing ids through id_of, which decodes a head's id on demand into hid (NO_ID
+    until then), load setting the next head's key and resetting hid. stale_id=True keeps the previous head's id in load
+    (a broken kernel, the test's negative control)"""
+    nq = len(lists)
+    head = [0] * nq
+    hkey = [0] * nq
+    hid = [None] * nq
+    out = []
+    if not heap:
+
+        def load_lin(q):
+            if head[q] >= k or head[q] >= len(lists[q]):
+                hkey[q], hid[q] = 0, None
+                return
+            hkey[q], hid[q] = lists[q][head[q]]
+
+        for q in range(nq):
+            load_lin(q)
+        for _ in range(k):
+            best = None
+            for q in range(nq):
+                if hid[q] is None:
+                    continue
+                if best is None or hkey[q] > hkey[best] or (hkey[q] == hkey[best] and hid[q] < hid[best]):
+                    best = q
+            if best is None:
+                break
+            out.append((hkey[best], hid[best]))
+            head[best] += 1
+            load_lin(best)
+        return out
+    NO_ID = -1
+
+    def load(q):
+        if head[q] >= k or head[q] >= len(lists[q]):
+            return False
+        hkey[q] = lists[q][head[q]][0]
+        if not stale_id:
+            hid[q] = NO_ID
+        return True
+
+    def id_of(q):
+        if hid[q] is None or hid[q] == NO_ID:
+            hid[q] = lists[q][head[q]][1]
+        return hid[q]
+
+    def better_q(a, b):
+        return hkey[a] > hkey[b] or (hkey[a] == hkey[b] and id_of(a) < id_of(b))
+
+    heap_ = [0] * nq
+    m = 0
+
+    def sift(i):
+        x = heap_[i]
+        while True:
+            c = 2 * i + 1
+            if c >= m:
+                break
+            if c + 1 < m and better_q(heap_[c + 1], heap_[c]):
+                c = c + 1
+            if not better_q(heap_[c], x):
+                break
+            heap_[i] = heap_[c]
+            i = c
+        heap_[i] = x
+
+    for q in range(nq):
+        head[q] = 0
+        if load(q):
+            heap_[m] = q
+            m += 1
+    for i in range(m // 2 - 1, -1, -1):
+        sift(i)
+    while len(out) < k and m > 0:
+        q = heap_[0]
+        out.append((hkey[q], id_of(q)))
+        head[q] += 1
+        if not load(q):
+            m -= 1
+            heap_[0] = heap_[m]
+        sift(0)
+    return out
+
+
+def spec_ctl_scratch(mode: str, groups: int, rings: int, batch: bool) -> tuple:
+    """SpecCtl's CB 0 scratch bytes (before its 64-B alignment slack) and the SPEC_ACCEPT_BATCH value (None: no define):
+    1 KB of single-user slots (2 KB with SPEC_GROUPS); with the batch, ACCEPT + 1 KB of token rows + 2 KB of ring pieces
+    per ring tensor (all R in one round trip: B = R), RING + the 2 KB of one tensor's pieces (it moves one tensor at a
+    time: B 1)"""
+    scr = 2048 if groups else 1024
+    if not (batch and mode in ("accept", "ring")):
+        return scr, None
+    if mode == "ring":
+        return scr + SPEC_CTL_RING_PIECES, 1
+    nb = max(1, int(rings))
+    assert nb <= 16, ("at most 16 ring tensors", nb)
+    return scr + SPEC_CTL_BATCH_TOK + SPEC_CTL_RING_PIECES * nb, nb
+
+
+def ring_row_pieces(src: int, dst: int) -> list:
+    """one ring tile's 4-row move rows src .. src + 3 -> rows dst .. dst + 3 (spec_ctl.cpp ring_rows / ACCEPT's move):
+    [(src byte, dst byte, bytes)] for faces 0 / 1 (kernels/mla/mla_common.hpp row_off; 4-row groups stay in one face
+    row band)"""
+    off = lambda r: (r >> 4) * 1024 + (r & 15) * 32  # noqa: E731
+    return [(off(src), off(dst), 128), (off(src) + 512, off(dst) + 512, 128)]
+
+
+def accept_ring_pieces(c: int, n: int) -> list:
+    """ACCEPT's ring move in one ring tile: rows 4 grp .. 4 grp + 3 -> rows 0..3, grp = (c + n + 1) / 4 - c / 4; [] = no
+    move. A batch reads every piece before its first write: the per-tile order's result iff no source overlaps a
+    destination"""
+    grp = 0 if c < 0 else (c + n + 1) // 4 - c // 4
+    return ring_row_pieces(4 * grp, 0) if grp > 0 else []
 
 
 def spec_ring_emulate(K: int, G: int, steps: int, *, seed: int = 0, variant: str = "ours", plain_p: float = 0.0,

@@ -29,7 +29,7 @@ constexpr uint32_t X_TILES = N_STREAMS * COLS_PER_CORE;  // x / fn tiles per K c
 constexpr uint32_t GROUP = 8;                            // K cores per leader (one logical column)
 constexpr uint32_t N_GROUPS = 8;
 constexpr uint32_t N_MIX = 24;        // m values per token: pre 4 | post 4 | comb 16
-constexpr uint32_t MSG_FLOATS = 128;  // mailbox: 4 planes x 32 tokens (round 1) / 32 tokens (round 2)
+constexpr uint32_t MSG_FLOATS = 128;  // mailbox: 4 planes x 32 tokens (round 1; MHC_MSG_TRIM: 4 x T) / 32 (round 2)
 
 // circular buffers (uniform indices on every core; the first two are defined on every core so that their L1
 // addresses are equal everywhere: remote cores write into them)

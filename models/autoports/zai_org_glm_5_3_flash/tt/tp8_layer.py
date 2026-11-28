@@ -95,6 +95,29 @@ def _src_is(kd, name: str) -> bool:
     return str(kd.kernel_source).replace("\\", "/").endswith(name)
 
 
+def _hooked_rsplit_check(kernels: list, reader_src: str, lane_sem: int, lanes: int, lane_prod: int) -> None:
+    """GLM53_KDA_VERIFY_RSPLIT on a fabric-hooked program, called by every place that rewrites the owners' P6 wait to
+    the all-reduce lanes (TPDenseKDALayer._hooked, tt/tp8_sparse.py TPSparseKDALayer._hooked_sparse, tt/tp_stack.py
+    TPStack / TPSparseStack.layer_hook): when an owner_dm0.cpp kernel of `kernels` carries KDA_VERIFY_RSPLIT=1,
+    shard_plan.kda_verify_rsplit_lanes_check on its (MK_POST_WAIT_SEM, MK_POST_WAIT_COUNT), with lane_sem = the cons_sem
+    the caller hands fabric_ar lane_parts, lanes = the lane count, lane_prod = the readers it hands lane_parts, and the
+    o_proj readers = the reader_src kernels' cores under their one MK_FAB_MASK. Host asserts only"""
+    own = [k for k in kernels if _src_is(k, "mk/owner_dm0.cpp") and dict(k.defines).get("KDA_VERIFY_RSPLIT") == "1"]
+    if not own:
+        return
+    from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import kda_verify_rsplit_lanes_check
+
+    rdr = [k for k in kernels if _src_is(k, reader_src)]
+    masks = {int(dict(k.defines)["MK_FAB_MASK"]) for k in rdr}
+    assert len(masks) == 1, ("KDA_VERIFY_RSPLIT: one MK_FAB_MASK on the o_proj readers", reader_src, masks)
+    (mask,) = masks
+    readers = sum(len(_cores_of(k.core_ranges)) for k in rdr)
+    for k in own:
+        pw = dict(k.defines)
+        kda_verify_rsplit_lanes_check((int(pw["MK_POST_WAIT_SEM"]), int(pw["MK_POST_WAIT_COUNT"])), lane_sem, lanes,
+                                      lane_prod, readers, mask)  # fmt: skip
+
+
 class TPDenseKDALayer:
     """One dense_kda layer, TP over every chip of `mesh`, decode rows t <= 4 (7a's megakernel range)."""
 
@@ -266,6 +289,8 @@ class TPDenseKDALayer:
             else:
                 kernels.append(_kernel(kd, defines=list(kd.defines) + self.rev_defs) if self.rev_defs else kd)
         assert reader_seen == 1 and post_seen >= 1, (reader_seen, post_seen)
+        # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
+        _hooked_rsplit_check(kernels, "mk/reader_a.cpp", cons_sem, len(fab.lanes), self.n_readers)
         mpd = ttnn.MeshProgramDescriptor()
         for r in range(self.R):
             for c in range(self.C):
