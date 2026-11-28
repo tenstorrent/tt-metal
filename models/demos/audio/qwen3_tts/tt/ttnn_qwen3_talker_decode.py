@@ -42,7 +42,12 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_tts import weights as checkpoint
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, causal_mask, rotary_tables
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import (
+    _compute_config,
+    _rms_norm_config,
+    causal_mask,
+    rotary_tables,
+)
 
 # sdpa_decode miscomputes at an odd tile count; keep the cache an even number of tiles.
 CACHE_TILE_MULTIPLE = 64
@@ -209,6 +214,7 @@ class TtTalkerCachedDecoder:
         self.p = parameters
         self.config = parameters["config"]
         self.compute_config = _compute_config(device)
+        self.norm_config = _rms_norm_config(device)
 
         self.heads = self.config["num_attention_heads"]
         self.kv_heads = self.config["num_key_value_heads"]
@@ -277,7 +283,7 @@ class TtTalkerCachedDecoder:
     def _norm(self, x, layer, key):
         """Width-sharded RMSNorm when the plan fits, otherwise the interleaved one."""
         if self._norm_plan is None:
-            return ttnn.rms_norm(x, weight=layer[key], epsilon=self.eps)
+            return ttnn.rms_norm(x, weight=layer[key], epsilon=self.eps, compute_kernel_config=self.norm_config)
         memory_config, program_config = self._norm_plan
         sharded = ttnn.interleaved_to_sharded(x, memory_config)
         out = ttnn.rms_norm(
@@ -382,12 +388,22 @@ class TtTalkerCachedDecoder:
         step = fill_step_tiles(self.kv_heads, cores)
 
         for index, layer in enumerate(self.p["layers"]):
-            normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
+            normed = ttnn.rms_norm(
+                x, weight=layer["input_layernorm"], epsilon=self.eps, compute_kernel_config=self.norm_config
+            )
             qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
             query, key, value = self._split_qkv(qkv, length)
 
-            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
-            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos_tt, sin_tt)
+            query = self._rotate(
+                ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps, compute_kernel_config=self.norm_config),
+                cos_tt,
+                sin_tt,
+            )
+            key = self._rotate(
+                ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps, compute_kernel_config=self.norm_config),
+                cos_tt,
+                sin_tt,
+            )
 
             self._seed_cache(index, key, value, length, tiles, single_shot, step)
 
@@ -408,10 +424,12 @@ class TtTalkerCachedDecoder:
             attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (1, length, self.heads * self.head_dim))
 
             x = ttnn.add(x, ttnn.linear(attended, layer["o_proj"], compute_kernel_config=self.compute_config))
-            normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=self.eps)
+            normed = ttnn.rms_norm(
+                x, weight=layer["post_attention_layernorm"], epsilon=self.eps, compute_kernel_config=self.norm_config
+            )
             x = ttnn.add(x, self._mlp(normed, layer))
 
-        return ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
+        return ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps, compute_kernel_config=self.norm_config)
 
     def _seed_cache(self, index, key, value, length, tiles, single_shot, step):
         """Write positions 0..length-1 of one layer's cache."""
@@ -444,8 +462,16 @@ class TtTalkerCachedDecoder:
             # the norm and the rotation, then K and V are resharded for the cache write.
             query = ttnn.sharded_to_interleaved(query)
             key = ttnn.sharded_to_interleaved(key)
-            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), self._cos, self._sin)
-            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), self._cos, self._sin)
+            query = self._rotate(
+                ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps, compute_kernel_config=self.norm_config),
+                self._cos,
+                self._sin,
+            )
+            key = self._rotate(
+                ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps, compute_kernel_config=self.norm_config),
+                self._cos,
+                self._sin,
+            )
 
             # The cache therefore stores post-norm, post-rotation K, which is what attention
             # over the prefix expects to find there. One kernel writes both, which needs them
