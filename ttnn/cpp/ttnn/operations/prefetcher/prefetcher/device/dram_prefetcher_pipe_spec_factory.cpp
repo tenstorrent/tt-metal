@@ -10,7 +10,7 @@
 
 #include <fmt/format.h>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -52,6 +52,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     const ttsl::Span<const Tensor> weight_tensors(input_tensors.data(), input_tensors.size() - 1);
     const uint32_t num_tensors = weight_tensors.size();
     const uint32_t num_layers = operation_attributes.num_layers;
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*tensor_addrs.device()).node_local_mem_alignment();
 
     const uint32_t num_readers = weight_tensors[0].shard_spec()->grid.num_cores();
     // Reader i is the sender of prefetcher_pipes[i].
@@ -84,7 +86,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
         // meaning, so one entry of the smallest size.
         DataflowBufferSpec{
             .unique_id = SYNC_DFB,
-            .entry_size = tt::tt_metal::hal::get_l1_alignment(),
+            .entry_size = l1_alignment,
             .num_entries = 1,
         },
     };

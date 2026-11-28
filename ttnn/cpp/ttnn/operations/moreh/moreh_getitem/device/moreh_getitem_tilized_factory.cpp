@@ -11,7 +11,7 @@
 
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 namespace {
@@ -41,6 +41,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     auto TILE_HEIGHT = constants::TILE_HEIGHT;
     auto TILE_WIDTH = constants::TILE_WIDTH;
     auto* device = input.device();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
@@ -155,8 +156,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
         // The reader reads one whole DRAM read granule per element into in0.
-        auto rounded_input_page_size =
-            tt::round_up(tt::round_up(input_unit_size, 32u), tt::tt_metal::hal::get_dram_alignment());
+        auto rounded_input_page_size = tt::round_up(tt::round_up(input_unit_size, 32u), dram_alignment);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0,
             .entry_size = rounded_input_page_size,
@@ -528,7 +528,6 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         .data_format_metadata = src_cb_data_format,
     });
 
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCRATCH,
         .entry_size = tt::round_up(input_unit_size, dram_alignment) + dram_alignment,

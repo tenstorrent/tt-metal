@@ -5,6 +5,7 @@
 #include "convert_to_hwc.hpp"
 #include "device/convert_to_hwc_device_operation.hpp"
 #include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace {
@@ -27,7 +28,9 @@ tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(
 
     // Per-core output height is B times the per-core HW width (i.e., sticks)
     const int output_shard_height = B * input_shard_width;
-    const int alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(output_dtype);
+    const int alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(
+        output_dtype,
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment());
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     const int output_shard_width = tt::round_up(C, alignment_elements);
 
@@ -48,6 +51,7 @@ namespace ttnn::experimental {
 
 ttnn::Tensor convert_to_hwc(
     const Tensor& input, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
+    TT_FATAL(input.device() != nullptr, "convert_to_hwc requires an allocated device tensor");
     const auto output_dtype = dtype.value_or(input.dtype());
     const auto& input_memory_config = input.memory_config();
     const bool is_dram_input = input_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -71,7 +75,8 @@ ttnn::Tensor convert_to_hwc(
         "Output memory config must be height sharded with a shard spec, got layout {} (shard spec present: {})",
         output_memory_config.memory_layout(),
         output_memory_config.shard_spec().has_value());
-    const auto alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(output_dtype);
+    const auto alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(
+        output_dtype, tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment());
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
         output_memory_config.shard_spec()->shape[1] % alignment_elements == 0,

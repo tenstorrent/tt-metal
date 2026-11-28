@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "tt-metalium/utils/work_split.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -139,6 +139,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const auto output_data_format = tt_metal::datatype_to_dataformat_converter(out_mesh_tensor.dtype());
 
     auto* const device = a.device();
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
     const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
     // With get_batch_from_reader, the in0 kernel on each node (the sender or a receiver) tells the
     // compute kernel on that node, batch by batch, whether to skip the batch. WH/BH do that through the
@@ -152,7 +153,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // 64B alignment) are padded to it in DRAM. in0/in1 are interleaved here, so the reader copies
     // tiles at the padded stride; the buffers must hold entries at the aligned stride and the unpacker
     // walks tiles at the same stride. No-op when already aligned. Replaces the staging-buffer workaround.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment = device_props.dram_alignment();
     const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
@@ -509,7 +510,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         // let an in0 kernel run up to two batches ahead of compute, for example past a skipped batch.
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BATCH_VALID_DFB,
-            .entry_size = tt::tt_metal::hal::get_l1_alignment(),
+            .entry_size = device_props.node_local_mem_alignment(),
             .num_entries = 2,
             .data_format_metadata = tt::DataFormat::RawUInt16,
         });

@@ -10,7 +10,7 @@
 
 #include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -32,13 +32,14 @@ namespace {
 
 constexpr std::string_view kKernelDir = "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/";
 
-uint32_t buffer_alignment(BufferType buffer_type) {
-    return buffer_type == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                           : tt::tt_metal::hal::get_l1_alignment();
+uint32_t buffer_alignment(const tt::tt_metal::distributed::MeshDevice& device, BufferType buffer_type) {
+    const auto props = tt::tt_metal::experimental::get_device_properties(device);
+    return buffer_type == BufferType::DRAM ? props.dram_alignment() : props.node_local_mem_alignment();
 }
 
-uint32_t aligned_page_size(uint32_t raw_bytes, BufferType buffer_type) {
-    return tt::round_up(raw_bytes, buffer_alignment(buffer_type));
+uint32_t aligned_page_size(
+    const tt::tt_metal::distributed::MeshDevice& device, uint32_t raw_bytes, BufferType buffer_type) {
+    return tt::round_up(raw_bytes, buffer_alignment(device, buffer_type));
 }
 
 // One unit of work: up to 32 consecutive queries of a single (batch, head).
@@ -454,14 +455,15 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
         (s.weights_packed ? s.num_levels * s.num_points : s.num_points) * attn.element_size();
     const uint32_t loc_stick_raw = (s.locations_packed ? s.num_levels * s.num_points * 2u : 2u) * loc.element_size();
 
-    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value_buffer_type);
-    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
-    const uint32_t loc_stick_aligned = aligned_page_size(loc_stick_raw, loc.buffer()->buffer_type());
+    const auto& device = *value.device();
+    const uint32_t value_stick_aligned = aligned_page_size(device, value_stick_raw, value_buffer_type);
+    const uint32_t attn_stick_aligned = aligned_page_size(device, attn_stick_raw, attn.buffer()->buffer_type());
+    const uint32_t loc_stick_aligned = aligned_page_size(device, loc_stick_raw, loc.buffer()->buffer_type());
 
     uint32_t ref_stick_aligned = 0;
     if (attrs.from_offsets) {
         const auto& ref = *args.reference_points;
-        ref_stick_aligned = aligned_page_size(2u * ref.element_size(), ref.buffer()->buffer_type());
+        ref_stick_aligned = aligned_page_size(device, 2u * ref.element_size(), ref.buffer()->buffer_type());
     }
 
     const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
@@ -557,12 +559,12 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     }
     if (attrs.device_valid_counts) {
         const uint32_t counts_page =
-            tt::round_up(s.batch * static_cast<uint32_t>(sizeof(uint32_t)), tt::tt_metal::hal::get_l1_alignment());
+            tt::round_up(s.batch * static_cast<uint32_t>(sizeof(uint32_t)), buffer_alignment(device, BufferType::L1));
         push(reader_counts_cb, 1, counts_page, tt::DataFormat::UInt32);
         push(writer_counts_cb, 1, counts_page, tt::DataFormat::UInt32);
         // UInt32: compute reads the count with read_tile_value, whose indexing
         // follows the CB format; a float format would misread the raw word.
-        push(tile_count_cb, 1, tt::tt_metal::hal::get_l1_alignment(), tt::DataFormat::UInt32);
+        push(tile_count_cb, 1, buffer_alignment(device, BufferType::L1), tt::DataFormat::UInt32);
     }
     return plan;
 }
@@ -602,12 +604,15 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // Not read back from the plan: the tiled geometry allocates no attn / offset
     // arena, but its reader still reads sticks of these sizes.
     const uint32_t attn_stick_aligned = aligned_page_size(
+        *device,
         (s.weights_packed ? s.num_levels * s.num_points : s.num_points) * attn.element_size(),
         attn.buffer()->buffer_type());
     const uint32_t loc_stick_aligned = aligned_page_size(
-        (s.locations_packed ? s.num_levels * s.num_points * 2u : 2u) * loc.element_size(), loc.buffer()->buffer_type());
+        *device,
+        (s.locations_packed ? s.num_levels * s.num_points * 2u : 2u) * loc.element_size(),
+        loc.buffer()->buffer_type());
     const uint32_t ref_stick_aligned = attrs.from_offsets ? page_size_for_cb(cb_plan, ref_scratch_cb) : 0;
-    const uint32_t output_page_aligned = aligned_page_size(output_page_raw, output.buffer()->buffer_type());
+    const uint32_t output_page_aligned = aligned_page_size(*device, output_page_raw, output.buffer()->buffer_type());
 
     // Packed value stores the heads back to back in one (b, s) page, so head h
     // is read at byte offset h * D * elem_size, which must be a multiple of
@@ -622,7 +627,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
             "fused_msda: packed value (B, S, H*D) reads head h at byte offset h * {} B, which must be a multiple "
             "of value's {} B buffer alignment; pass value as (B, S, H, D) or place it in L1",
             value_stick_raw,
-            buffer_alignment(value.buffer()->buffer_type()));
+            buffer_alignment(*device, value.buffer()->buffer_type()));
     }
     if (s.value_layout == ValueLayout::HeadMajor) {
         // Keys sit back to back inside a page, so a key's read starts at a
@@ -632,7 +637,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
             "fused_msda: head-major value stores keys back to back, so each key's D*2 = {} B must be a multiple of "
             "value's {} B buffer alignment; place value in L1, or pass it as (B, S, H, D)",
             value_stick_raw,
-            buffer_alignment(value.buffer()->buffer_type()));
+            buffer_alignment(*device, value.buffer()->buffer_type()));
     }
 
     // ---- circular buffers (see README.md §6) ----

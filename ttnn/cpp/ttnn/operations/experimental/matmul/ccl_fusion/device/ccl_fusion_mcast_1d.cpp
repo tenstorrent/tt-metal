@@ -28,7 +28,7 @@
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -142,7 +142,7 @@ void create_program_mcast_in0_descriptor(
     // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
     // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
     // tensor buffer and keep their natural page size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(device).dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size =

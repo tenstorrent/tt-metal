@@ -10,7 +10,7 @@
 
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
@@ -249,9 +249,10 @@ MSDAShapes derive_shapes(
             s.batch,
             s.num_queries,
             s.num_heads * per_head);
+        const auto props = tt::tt_metal::experimental::get_device_properties(*loc.device());
         const uint32_t alignment = loc.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                       ? tt::tt_metal::hal::get_dram_alignment()
-                                       : tt::tt_metal::hal::get_l1_alignment();
+                                       ? props.dram_alignment()
+                                       : props.node_local_mem_alignment();
         TT_FATAL(
             (per_head * loc.element_size()) % alignment == 0,
             "fused_msda: heads-packed {} needs each head's L*P*2 values ({} B) to be a multiple of the buffer's "

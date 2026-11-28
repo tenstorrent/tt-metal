@@ -11,7 +11,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
@@ -237,7 +237,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
         // cb_loop_count: reader -> compute mailbox for the device-computed num_blocks (see read_tile_value).
         // one uint32 (num_blocks), rounded up to the L1 alignment
-        const uint32_t loop_count_page_bytes = tt::align(sizeof(uint32_t), hal::get_l1_alignment());
+        const uint32_t loop_count_page_bytes = tt::align(
+            sizeof(uint32_t), tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment());
         CircularBufferConfig cb_loop_count_cfg =
             CircularBufferConfig(loop_count_page_bytes, {{cb_loop_count_idx, fp32_df}})
                 .set_page_size(cb_loop_count_idx, loop_count_page_bytes);

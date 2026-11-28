@@ -17,7 +17,7 @@
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "kernels/hybrid_rt_table.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.hpp"
 
@@ -92,9 +92,8 @@ uint32_t overlay_circular_buffers(
     ProgramDescriptor& unified,
     bool run_fused_pass,
     tt::tt_metal::Buffer* l1_arena,
+    uint32_t alignment,
     ProgramDescriptor& out) {
-    const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
-
     // Fused pass off: its buffers are never touched, so they are not placed and no arena is needed.
     // Every remaining CB is the unified half's and is allocated the ordinary way.
     if (!run_fused_pass) {
@@ -429,6 +428,7 @@ std::map<size_t, const KernelDescriptor*> index_by_role(const ProgramDescriptor&
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor merge_halves(
+    const tt::tt_metal::distributed::MeshDevice& device,
     ProgramDescriptor fused,
     ProgramDescriptor unified,
     const MergedKernelSources& sources,
@@ -441,10 +441,12 @@ tt::tt_metal::ProgramDescriptor merge_halves(
         !run_fused_pass || l1_arena != nullptr,
         "the fused pass runs, so both halves' circular buffers need the shared L1 arena to be laid over");
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(device);
     ProgramDescriptor merged;
     report.barrier_semaphore_id = merge_semaphores(fused, unified, merged);
     report.semaphore_count = static_cast<uint32_t>(merged.semaphores.size());
-    report.arena_bytes_per_core = overlay_circular_buffers(fused, unified, run_fused_pass, l1_arena, merged);
+    report.arena_bytes_per_core = overlay_circular_buffers(
+        fused, unified, run_fused_pass, l1_arena, device_props.node_local_mem_alignment(), merged);
 
     // The weight table's page goes PAST both halves' buffers, not over them: it is loaded once,
     // before the first pass, and read by both. Its index is the next one up, so the program's CB
@@ -461,9 +463,9 @@ tt::tt_metal::ProgramDescriptor merge_halves(
         }
         weight_table_cb = highest + 1;
         TT_FATAL(
-            weight_table_cb < tt::tt_metal::hal::get_num_dataflow_buffers(),
+            weight_table_cb < device_props.num_dataflow_buffers(),
             "no circular-buffer index is left for the weight table");
-        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t dram_alignment = device_props.dram_alignment();
         weight_table_bytes =
             (3 * weight_table.experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)) + dram_alignment - 1) /
             dram_alignment * dram_alignment;

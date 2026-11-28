@@ -12,7 +12,7 @@
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -182,7 +182,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
 
     // Row-byte alignment for the ROW-MAJOR DMAs (q rows, index rows, output rows). K/V are TILE tensors (the
     // reader reads whole tiles, which are inherently aligned), so no row-byte check applies to them.
-    const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_align = tt::tt_metal::experimental::get_device_properties(*q.device()).dram_alignment();
     TT_FATAL((d * q.element_size()) % dram_align == 0, "q row bytes must be {}B aligned", dram_align);
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
     TT_FATAL((v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
@@ -268,7 +268,7 @@ SparseSDPAMsaOperation::Geometry SparseSDPAMsaOperation::derive_kernel_geometry(
 }
 
 std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
-    const Geometry& g, bool causal, bool block_cache_serves_kv) {
+    const Geometry& g, bool causal, bool block_cache_serves_kv, uint32_t l1_alignment) {
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr uint32_t tile_bytes = tt::tile_size(bf);  // intermediates are bf16
     std::vector<CbSpec> cbs = {
@@ -286,11 +286,12 @@ std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
         {cb_out_im, tile_bytes, g.Sqt * g.vDHt, bf},  // bf16 accumulator, full precision
         {cb_out_rm, tt::tile_size(g.out_df), g.Sqt * g.vDHt, g.out_df},
         {cb_idx, g.idx_row_bytes, 1, bf},
-        {cb_ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT), 2, bf},  // active block count + causal control
+        // active block count + causal control
+        {cb_ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT, l1_alignment), 2, bf},
         {cb_col_identity, tile_bytes, 1, bf},
         {cb_recip_scratch, tile_bytes, 1, bf},
-        {cb_kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT), 2, bf},
-        {cb_kack, message_page_bytes(1), 2, bf},
+        {cb_kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT, l1_alignment), 2, bf},
+        {cb_kack, message_page_bytes(1, l1_alignment), 2, bf},
     };
     // Streamed K/V: one block, single-buffered -- the reader reserves it and the writer fills its half into the
     // same L1. Absent when the block cache serves K/V (compute then reads the cache CBs in place).
@@ -306,9 +307,8 @@ std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
     return cbs;
 }
 
-uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
-    const uint32_t quantum =
-        std::max<uint32_t>(tt::tt_metal::hal::get_l1_alignment(), CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
+uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words, uint32_t l1_alignment) {
+    const uint32_t quantum = std::max<uint32_t>(l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
     return tt::align(words * static_cast<uint32_t>(sizeof(uint32_t)), quantum);
 }
 
@@ -335,10 +335,12 @@ uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
     if (device == nullptr) {  // host or deallocated q: validation runs after this and reports it
         return 0;
     }
-    const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
-    uint64_t base_bytes =
-        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
-    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
+    const uint64_t cb_align = device_props.dram_alignment();
+    const uint32_t l1_alignment = device_props.node_local_mem_alignment();
+    uint64_t base_bytes = tt::align(
+        static_cast<uint64_t>(message_page_bytes(1, l1_alignment)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
+    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true, l1_alignment)) {
         base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
     }
     const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);

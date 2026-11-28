@@ -7,7 +7,7 @@
 #include "fold_device_operation.hpp"
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
@@ -84,7 +84,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     // For DRAM reads, we need DRAM-aligned size
     bool src_is_dram = input.memory_config().buffer_type() == BufferType::DRAM;
     bool is_blackhole = (device->arch() == tt::ARCH::BLACKHOLE);
-    uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);
 
     // The scratch DFB (legacy c_1) is only needed for a two-step DRAM-aligned read:

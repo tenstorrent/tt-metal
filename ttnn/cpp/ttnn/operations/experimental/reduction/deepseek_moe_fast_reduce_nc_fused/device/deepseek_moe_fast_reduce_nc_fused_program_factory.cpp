@@ -11,7 +11,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/device/deepseek_moe_fast_reduce_nc_fused_program_factory.hpp"
@@ -160,14 +160,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
     const uint32_t output_page_size = output_tensors.at(0).mesh_buffer().page_size();
     const uint32_t scores_page_size = scores_tensor.mesh_buffer().page_size();
-    const uint32_t scores_cb_rm_page_size =
-        round_up(scores_tensor.mesh_buffer().aligned_page_size(), hal::get_l1_alignment());
+    const uint32_t l1_alignment = tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment();
+    const uint32_t scores_cb_rm_page_size = round_up(scores_tensor.mesh_buffer().aligned_page_size(), l1_alignment);
     const uint32_t expert_indices_page_size = expert_indices_tensor.mesh_buffer().page_size();
     const uint32_t expert_mapping_page_size = expert_mapping_tensor.mesh_buffer().page_size();
     const uint32_t expert_indices_cb_page_size =
-        round_up(expert_indices_tensor.mesh_buffer().aligned_page_size(), hal::get_l1_alignment());
+        round_up(expert_indices_tensor.mesh_buffer().aligned_page_size(), l1_alignment);
     const uint32_t expert_mapping_cb_page_size =
-        round_up(expert_mapping_tensor.mesh_buffer().aligned_page_size(), hal::get_l1_alignment());
+        round_up(expert_mapping_tensor.mesh_buffer().aligned_page_size(), l1_alignment);
     const uint32_t expert_indices_num_pages = expert_indices_tensor.mesh_buffer().num_pages();
     const uint32_t expert_mapping_num_pages = expert_mapping_tensor.mesh_buffer().num_pages();
 

@@ -6,7 +6,7 @@
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -77,7 +77,8 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeInterleavedProgr
     // holds, switch the kernel to a DRAM-aligned scratch+memcpy path; otherwise the original
     // direct-read fast path runs unchanged. Sharded inputs do not go through this factory.
     const bool is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).dram_alignment();
     const bool use_aligned_path = is_dram && (sub_tile_line_bytes < dram_alignment);
     // On Quasar (Gen2) a DM kernel cannot self-loop a DFB (bind it PRODUCER+CONSUMER); the aligned-path
     // staging scratch is exactly such a self-loop, so it becomes a node-local Scratchpad there. WH/BH keep

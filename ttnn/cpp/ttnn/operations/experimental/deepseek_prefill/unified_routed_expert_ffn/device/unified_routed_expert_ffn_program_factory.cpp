@@ -17,7 +17,7 @@
 #include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
@@ -398,7 +398,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (op.output_row_major) {
         // Each core's row segment starts at its first column (per_core_N_d * 64 B steps) and every
         // page at a DRAM-aligned address; a segment start off the DRAM alignment would be misaddressed.
-        const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t dram_align = tt::tt_metal::experimental::get_device_properties(*t.x.device()).dram_alignment();
         TT_FATAL(
             (per_core_N_d * TILE * 2) % dram_align == 0 && rm_out_row_bytes % dram_align == 0,
             "unified_routed_expert_ffn: ROW_MAJOR output row segments ({} B) must be {}-B aligned",

@@ -18,7 +18,7 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 #include "ttnn/config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -295,7 +295,7 @@ std::optional<Call> describe(
     }
     call.arch = *arch;
     call.hw = HardwareDesc::blackhole(grid.x, grid.y, 0);
-    call.hw.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    call.hw.dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
 
     // The pick cache key: an exact binary encoding of everything the pick depends on (the encoding the program
     // cache uses). Built on every call, so it must stay cheap: no text formatting.

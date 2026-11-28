@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -393,7 +393,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
     const uint32_t activation_slice =
         activations_are_row_major ? kr_pad * geo::TILE * tensor_arguments.activations.element_size() : bfp8_tile;
-    const uint32_t l1_max = hal::get_max_worker_l1_unreserved_size();
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
+    const uint32_t l1_max = device_props.max_worker_node_local_mem_unreserved_size();
     TT_FATAL(l1_max > geo::L1_CB_RESERVE, "moe_fused_swiglu: invalid worker L1 budget");
 
     geo::Blocking blocking(
@@ -414,7 +415,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
-    const uint32_t dram_alignment = hal::get_dram_alignment();
+    const uint32_t dram_alignment = device_props.dram_alignment();
     const uint32_t idx_page =
         std::max<uint32_t>(tensor_arguments.global_expert_idx_table.mesh_buffer().aligned_page_size(), dram_alignment);
     const uint32_t start_page = std::max<uint32_t>(start_tensor.mesh_buffer().aligned_page_size(), dram_alignment);

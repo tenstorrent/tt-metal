@@ -21,7 +21,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
@@ -441,9 +441,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*output.device());
     auto dst_buffer_alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? device_props.dram_alignment()
+                                    : device_props.node_local_mem_alignment();
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,
         "Output row size {} must be aligned to the destination buffer {} alignment {}",

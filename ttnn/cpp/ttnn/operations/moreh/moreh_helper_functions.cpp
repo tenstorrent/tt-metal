@@ -14,7 +14,6 @@
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/utils/math.hpp>
 
-#include "tt-metalium/discovery/hal.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -99,6 +98,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
     Program& program,
+    tt::ARCH arch,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args,
@@ -109,13 +109,14 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(hal::get_arch()),
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(arch),
             .compile_args = compile_args,
             .defines = std::move(defines)});
 }
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
     Program& program,
+    tt::ARCH arch,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args,
@@ -126,7 +127,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(hal::get_arch()),
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(arch),
             .compile_args = compile_args,
             .defines = std::move(defines)});
 }

@@ -6,7 +6,7 @@
 
 #include <bit>
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -83,7 +83,7 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     // Each per-token tid2eid row lookup is a separate DRAM->L1 NoC read; the destination L1 offset
     // must be DRAM-aligned or the read silently drops (odd rows landing at 32B offsets read as zero).
     // Stride the scratch by the aligned row size so every token's destination is aligned.
-    uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
     uint32_t tid2eid_row_stride = tt::align(tid2eid_page_size, dram_alignment);
 
     // --- Circular buffers (only the activation/normalize/scale + fused-lookup subset) ---
