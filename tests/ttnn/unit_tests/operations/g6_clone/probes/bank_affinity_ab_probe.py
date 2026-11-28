@@ -65,7 +65,7 @@ def test_bank_affinity_ab(device, shape, dtype, layout, variant, monkeypatch):
     monkeypatch.setattr(op, "_DESCRIPTOR_CACHE", {})
     base, _, ablation = variant.partition("_")
     if base == "flat":
-        monkeypatch.setattr(pd, "BANK_AFFINE_MIN_CORE_PAGES", 1 << 30)
+        monkeypatch.setattr(pd, "BANK_AFFINE_CORES_PER_BANK", 0)
     elif base in PLACEMENTS:
         monkeypatch.setattr(pd, "BANK_AFFINE_PLACEMENT", PLACEMENTS[base])
     if ablation.startswith("b"):

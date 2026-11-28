@@ -155,9 +155,9 @@ def test_g6_clone_repeat_other_address(device):
 @pytest.mark.parametrize(
     "regime,core_pages,block_pages",
     [
-        # 192 pages per bank over dram_rows groups of 6 / 5 cores: 32 / 38-39 pages per core in bank
-        # runs of 13, 13, 6 / 13, 13, 12-13.
-        ("bank_affine_runs", (32, 39), 13),
+        # 192 pages per bank over BANK_AFFINE_CORES_PER_BANK = 2 row cores: 96 pages per core in bank
+        # runs of 32, 32, 32.
+        ("bank_affine_runs", (96, 96), 32),
         # 14 / 13 pages per core in blocks of 5, 5, 4 / 5, 5, 3.
         ("flat_page_range", (13, 14), 5),
     ],
@@ -175,7 +175,7 @@ def test_g6_clone_multi_block_ring(device, monkeypatch, regime, core_pages, bloc
 
     monkeypatch.setattr(descriptor_module, "BLOCKS_PER_CORE_KNOB", 3)
     if regime == descriptor_module.REGIME_FLAT:
-        monkeypatch.setattr(descriptor_module, "BANK_AFFINE_MIN_CORE_PAGES", 1 << 30)
+        monkeypatch.setattr(descriptor_module, "BANK_AFFINE_CORES_PER_BANK", 0)
     # The knobs are process constants outside the cache key; isolate the cache so the forced plan is
     # built here and never served to another test.
     monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})

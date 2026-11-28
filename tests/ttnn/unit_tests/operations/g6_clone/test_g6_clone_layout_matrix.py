@@ -156,13 +156,12 @@ def test_g6_clone_poisoned_padding_kinds(device, shape, dtype, poison_bits):
         ((1, 1, 1, 62080), ttnn.float32, ttnn.TILE_LAYOUT, "logical_rows_partial_tile", (1, [(0, 64), (1024, 64)])),
         # The one page of [1, 1] is the last tile row and column (kind 3).
         ((1, 1), ttnn.float32, ttnn.TILE_LAYOUT, "logical_rows_partial_tile", (3, [(0, 64)])),
-        # Full pages with at least one page per core of every bank's group run bank_affine_runs
-        # (11x10 Blackhole grid, 8 banks, dram_rows groups of 5 or 6 cores: 48 pages and up).
+        # Full pages run bank_affine_runs (11x10 Blackhole grid, 8 banks, dram_rows groups).
         ((1, 1, 32, 62080), ttnn.bfloat16, ttnn.TILE_LAYOUT, "bank_affine_runs", None),
         ((16, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT, "bank_affine_runs", None),
         ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
-        # Small plans (some bank holds fewer pages than its row has cores) run bank_affine_runs on
-        # SMALL_PLAN_BANK_CORES cores per bank; a one-page full-page plan is one core on bank 0's row.
+        # Every full-page plan runs bank_affine_runs on up to BANK_AFFINE_CORES_PER_BANK cores per
+        # bank; a one-page plan is one core on bank 0's row.
         ((40, 32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
         ((1,), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
     ],
@@ -189,8 +188,8 @@ def test_g6_clone_plan_regime(device, shape, dtype, layout, regime, kind_pieces)
 
 def test_g6_clone_plan_bank_affine_rows(device):
     """bank_affine_runs under dram_rows: every core takes a run of one bank's pages, sits on that
-    bank's anchor row on the anchor's side, and both kernels address that NoC's endpoints; the
-    cores form one rectangle per bank (BB-17)."""
+    bank's anchor row on the anchor's side, at most BANK_AFFINE_CORES_PER_BANK per bank, and both
+    kernels address that NoC's endpoints; the cores form one rectangle per bank (BB-17)."""
     x = ttnn.from_torch(
         torch.zeros((16, 12, 128, 128), dtype=torch.float32),
         dtype=ttnn.float32,
@@ -207,9 +206,12 @@ def test_g6_clone_plan_bank_affine_rows(device):
     assert (plan["bank_vc_directions"], plan["bank_noc_split"]) == ((), "none")
     endpoint_noc = ttnn.NOC.NOC_0 if descriptor_module.BANK_AFFINE_ENDPOINT_NOC == 0 else ttnn.NOC.NOC_1
     anchors = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, endpoint_noc)
+    bank_cores = {}
     for core, _, start_page, _ in plan["roles"]:
         anchor = anchors[start_page % num_banks]
         assert core.y == anchor.y and core.x >= anchor.x, (core, anchor)
+        bank_cores[start_page % num_banks] = bank_cores.get(start_page % num_banks, 0) + 1
+    assert set(bank_cores.values()) == {descriptor_module.BANK_AFFINE_CORES_PER_BANK}, bank_cores
     # Banks on the two DRAM columns may share an anchor row, which merges their runs.
     assert len(plan["core_ranges"].ranges()) <= num_banks
     assert plan["core_ranges"].num_cores() == plan["num_cores"]
@@ -222,7 +224,7 @@ def test_g6_clone_plan_bank_affine_rows(device):
         # logical_rows: the rotated walk resets PartialTileWalk where it wraps.
         ((1, 1, 1, 62080), ttnn.bfloat16, ttnn.TILE_LAYOUT),
         ((4, 100, 1000), ttnn.float32, ttnn.TILE_LAYOUT),
-        # flat_page_range (bank_affine_runs gated off).
+        # flat_page_range (BANK_AFFINE_CORES_PER_BANK = 0).
         ((8, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT),
         ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     ],
@@ -231,7 +233,7 @@ def test_g6_clone_bank_stagger(device, monkeypatch, shape, dtype, layout, blocks
     """FLAT_BANK_STAGGER (off by default) stays bit-exact: each core's consecutive-page walk starts
     `rotate` pages in and wraps once, also inside a block of the depth-2 ring."""
     monkeypatch.setattr(descriptor_module, "FLAT_BANK_STAGGER", True)
-    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_MIN_CORE_PAGES", 1 << 30)
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_CORES_PER_BANK", 0)
     monkeypatch.setattr(descriptor_module, "BLOCKS_PER_CORE_KNOB", blocks_per_core)
     monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
     torch.manual_seed(7)
