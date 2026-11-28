@@ -9,49 +9,47 @@
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
 namespace ttnn::operations::complex_unary_backward {
 
 // polar
-// grad_abs = torch.real(grad_conj * torch.sgn(result))
-// result_mul_1_j = result * torch.tensor(0.0 + 1.0j)
-// grad_angle = torch.real(grad_conj * result_mul_1_j)
-// polar fwd op uses sin and cos hence input_b range is (0, 2*pi)
+// z = r * cos(theta) + i * r * sin(theta)
+// grad_abs = Re(conj(grad) * sgn(z)) = sign(r) * (grad_r * cos(theta) + grad_i * sin(theta))
+// grad_angle = Re(conj(grad) * i * z) = r * (grad_i * cos(theta) - grad_r * sin(theta))
 std::vector<ComplexTensor> _polar_bw(
     const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    ComplexTensor result = ttnn::polar(input, output_mem_config);
-    Tensor abs_result = ttnn::abs(result, output_mem_config);
-    Tensor sgn_result_r = ttnn::where(
-        ttnn::eqz(abs_result, output_mem_config),
-        0.0f,
-        ttnn::multiply(result.real(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config),
+
+    const Tensor& r = input.real();
+    const Tensor& theta = input.imag();
+    const Tensor& grad_r = grad.real();
+    const Tensor& grad_i = grad.imag();
+
+    Tensor cos_theta = ttnn::cos(theta, output_mem_config);
+    Tensor sin_theta = ttnn::sin(theta, output_mem_config);
+
+    Tensor unit_proj = ttnn::add(
+        ttnn::multiply(grad_r, cos_theta, std::nullopt, output_mem_config),
+        ttnn::multiply(grad_i, sin_theta, std::nullopt, output_mem_config),
+        std::nullopt,
         output_mem_config);
-    Tensor sgn_result_i = ttnn::where(
-        ttnn::eqz(abs_result, output_mem_config),
-        0.0f,
-        ttnn::multiply(result.imag(), ttnn::reciprocal(abs_result, output_mem_config), std::nullopt, output_mem_config),
+    Tensor sign_r = ttnn::sign(r, output_mem_config);
+    Tensor grad_abs = ttnn::multiply(unit_proj, sign_r, std::nullopt, output_mem_config);
+    sign_r.deallocate();
+    unit_proj.deallocate();
+
+    Tensor ortho_proj = ttnn::subtract(
+        ttnn::multiply(grad_i, cos_theta, std::nullopt, output_mem_config),
+        ttnn::multiply(grad_r, sin_theta, std::nullopt, output_mem_config),
+        std::nullopt,
         output_mem_config);
-    abs_result.deallocate();
-    ComplexTensor sgn_result = ComplexTensor({sgn_result_r, sgn_result_i});
-    sgn_result_r.deallocate();
-    sgn_result_i.deallocate();
-    Tensor grad_abs = ttnn::real(
-        ttnn::operations::complex_binary::multiply(ttnn::conj(grad, output_mem_config), sgn_result, output_mem_config),
-        output_mem_config);
-    sgn_result.deallocate();
-    ComplexTensor flip_tensor = ComplexTensor(
-        {ttnn::zeros_like(input.real(), input.real().dtype(), input.real().layout(), std::nullopt, output_mem_config),
-         ttnn::ones_like(input.imag(), input.imag().dtype(), input.imag().layout(), std::nullopt, output_mem_config)});
-    Tensor grad_angle = ttnn::real(
-        ttnn::operations::complex_binary::multiply(
-            ttnn::conj(grad, output_mem_config),
-            ttnn::operations::complex_binary::multiply(result, flip_tensor, output_mem_config),
-            output_mem_config),
-        output_mem_config);
-    result.deallocate();
-    flip_tensor.deallocate();
+    cos_theta.deallocate();
+    sin_theta.deallocate();
+    Tensor grad_angle = ttnn::multiply(r, ortho_proj, std::nullopt, output_mem_config);
+    ortho_proj.deallocate();
+
     ComplexTensor grad_result = ComplexTensor({grad_abs, grad_angle});
     grad_abs.deallocate();
     grad_angle.deallocate();
@@ -88,41 +86,51 @@ std::vector<ComplexTensor> _real_bw(
     return grad_tensor;
 }
 
-// angle at::where(self == 0.0, at::zeros({}, self.options()), grad * self / self.abs().pow(2)
+// angle: at::where(self == 0.0, at::zeros({}, self.options()), grad * (-y, x) / (x^2 + y^2))
+// Evaluated via Smith's scaled division so |z| > 2^63 and 0 < |z| < 2^-63 stay in normal range.
 std::vector<ComplexTensor> _angle_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
+
     const Tensor& inp_r = input.real();
     const Tensor& inp_i = input.imag();
     Tensor condition_zero = ttnn::logical_and(
-        ttnn::eqz(input.real(), output_mem_config),
-        ttnn::eqz(input.imag(), output_mem_config),
+        ttnn::eqz(inp_r, output_mem_config),
+        ttnn::eqz(inp_i, output_mem_config),
         std::nullopt,
         output_mem_config);
-    Tensor abs_squared = ttnn::reciprocal(
-        ttnn::add(
-            ttnn::square(inp_r, output_mem_config),
-            ttnn::square(inp_i, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
+    Tensor abs_r = ttnn::abs(inp_r, output_mem_config);
+    Tensor abs_i = ttnn::abs(inp_i, output_mem_config);
+    Tensor r_ge_i = ttnn::ge(abs_r, abs_i, std::nullopt, output_mem_config);
+    abs_r.deallocate();
+    abs_i.deallocate();
+
+    Tensor big = ttnn::where(r_ge_i, inp_r, inp_i, output_mem_config);
+    Tensor small = ttnn::where(r_ge_i, inp_i, inp_r, output_mem_config);
+    Tensor ratio = ttnn::divide(small, big, std::nullopt, output_mem_config);
+    Tensor denom =
+        ttnn::add(big, ttnn::multiply(small, ratio, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    big.deallocate();
+    small.deallocate();
+    Tensor scaled_grad = ttnn::divide(grad, denom, std::nullopt, output_mem_config);
+    denom.deallocate();
+    Tensor scaled_ratio = ttnn::multiply(scaled_grad, ratio, std::nullopt, output_mem_config);
+    ratio.deallocate();
+
     Tensor res_real = ttnn::where(
         condition_zero,
         0.0f,
-        ttnn::multiply(
-            grad,
-            ttnn::multiply(ttnn::neg(inp_i, output_mem_config), abs_squared, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
+        ttnn::neg(ttnn::where(r_ge_i, scaled_ratio, scaled_grad, output_mem_config), output_mem_config),
         output_mem_config);
     Tensor res_imag = ttnn::where(
         condition_zero,
         0.0f,
-        ttnn::multiply(
-            grad, ttnn::multiply(inp_r, abs_squared, std::nullopt, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::where(r_ge_i, scaled_grad, scaled_ratio, output_mem_config),
         output_mem_config);
     condition_zero.deallocate();
-    abs_squared.deallocate();
+    r_ge_i.deallocate();
+    scaled_grad.deallocate();
+    scaled_ratio.deallocate();
     ComplexTensor grad_result = ComplexTensor({res_real, res_imag});
     res_real.deallocate();
     res_imag.deallocate();
