@@ -12,6 +12,7 @@
 - Report schema (metric columns derive from the shared engine): [tests/python_tests/helpers/perf/schema.py](../../tests/python_tests/helpers/perf/schema.py)
 - RISC-V performance monitor (CSRs, event tables, metal option): [riscv_pmc.md](riscv_pmc.md)
 - NoC interface counters (event tables, metal option): [noc_counters.md](noc_counters.md)
+- NoC router counters (per port and virtual channel packet and flit counts, metal option): [router_counters.md](router_counters.md)
 - DRAM tile traffic counters (NIU registers, metal option, decode): [dram_counters.md](dram_counters.md)
 - Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
 - Host-side derived metrics adapter: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)

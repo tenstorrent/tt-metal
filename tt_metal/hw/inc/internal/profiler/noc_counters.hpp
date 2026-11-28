@@ -85,16 +85,6 @@ inline __attribute__((always_inline)) void reserve() { stackSize += kReservedWor
 // One header marker and kPairs pair markers behind one room check and one timestamp; the counters are read as the
 // pairs are written.
 __attribute__((noinline)) void end() {
-#if !defined(ARCH_QUASAR)
-    // The window spans the launch, so the BRISC kernel waits for NCRISC and the TRISCs as the firmware does after it.
-    auto* sync = reinterpret_cast<volatile tt_l1_ptr subordinate_map_t*>(GET_MAILBOX_ADDRESS_DEV(subordinate_sync.map));
-    while (sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
-#if defined(ARCH_WORMHOLE)
-        asm volatile("nop; nop; nop; nop; nop");
-#endif
-        invalidate_l1_cache();
-    }
-#endif
     stackSize -= kReservedWords;
     // The firmware marks a launch that runs no kernel on this core as invalid, and such a launch publishes nothing.
     if (get_profiler_zone_invalid() || !bufferHasRoom(kReservedWords - 1)) {

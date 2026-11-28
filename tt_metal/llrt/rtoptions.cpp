@@ -159,6 +159,7 @@ enum class EnvVarID {
     TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
     TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_PROFILE_NOC_COUNTERS,                 // Per-launch NoC interface event counters
+    TT_METAL_PROFILE_ROUTER_COUNTERS,              // Per-launch NoC router packet and flit counters
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -454,6 +455,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         !(get_profiler_noc_counters_enabled() && get_streaming_profiler_enabled()),
         "TT_METAL_PROFILE_NOC_COUNTERS writes into the device profiler buffers and cannot be combined with "
         "TT_METAL_STREAMING_PROFILER.");
+    TT_FATAL(
+        !(get_profiler_router_counters_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_PROFILE_ROUTER_COUNTERS writes into the device profiler buffers and cannot be combined with "
+        "TT_METAL_STREAMING_PROFILER.");
     // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
     // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
     // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
@@ -478,6 +483,9 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_profiler_noc_counters_enabled() && get_profiler_trace_only()),
         "TT_METAL_PROFILE_NOC_COUNTERS cannot be combined with TT_METAL_TRACE_PROFILER.");
+    TT_FATAL(
+        !(get_profiler_router_counters_enabled() && get_profiler_trace_only()),
+        "TT_METAL_PROFILE_ROUTER_COUNTERS cannot be combined with TT_METAL_TRACE_PROFILER.");
     TT_FATAL(
         !get_profiler_dram_controller_enabled() || get_profiler_dram_counters_enabled(),
         "TT_METAL_PROFILE_DRAM_CONTROLLER needs TT_METAL_PROFILE_DRAM_COUNTERS, which opens the capture window.");
@@ -1405,6 +1413,41 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             if (mask != 0) {
                 this->profiler_noc_counters_groups = mask;
+                this->profiler_enabled = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILE_ROUTER_COUNTERS
+        // Per-launch deltas of the NoC router counters of each Tensix tile, captured by one core per tile. Value is
+        // "on" (every virtual channel summed per port, every port) or an integer mask, hex or decimal: bits 0-15 select
+        // virtual channels, bits 16-23 select ports (banks of the architecture's table), bit 24 keeps the selected
+        // virtual channels apart instead of adding them up. See
+        // tt_metal/tt-llk/docs/performance_counters/router_counters.md. Default: disabled Usage: export
+        // TT_METAL_PROFILE_ROUTER_COUNTERS=0x30002
+        case EnvVarID::TT_METAL_PROFILE_ROUTER_COUNTERS: {
+            constexpr unsigned long kVcBits = 0x0000FFFFul;
+            constexpr unsigned long kBankBits = 0x00FF0000ul;
+            constexpr unsigned long kPerVc = 0x01000000ul;
+            unsigned long mask = kVcBits | kBankBits;
+            if (std::strcmp(value, "on") != 0) {
+                mask = parse_u32_list("TT_METAL_PROFILE_ROUTER_COUNTERS", value, 1)[0];
+                if (mask > (kVcBits | kBankBits | kPerVc)) {
+                    TT_THROW(
+                        "TT_METAL_PROFILE_ROUTER_COUNTERS=\"{}\" is not an option mask. Expected \"on\" or an "
+                        "integer of virtual channel bits 0-15, port bits 16-23 and the keep-apart bit 24.",
+                        value);
+                }
+                if (mask != 0 && ((mask & kVcBits) == 0 || (mask & kBankBits) == 0)) {
+                    TT_THROW(
+                        "TT_METAL_PROFILE_ROUTER_COUNTERS={:#x} selects {}. Set at least one of the bits 0-15 and one "
+                        "of the bits 16-23.",
+                        mask,
+                        (mask & kVcBits) == 0 ? "no virtual channel" : "no port");
+                }
+            }
+            if (mask != 0) {
+                this->profiler_router_counters_mask = static_cast<uint32_t>(mask);
                 this->profiler_enabled = true;
             }
             break;
