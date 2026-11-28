@@ -35,7 +35,9 @@ class SubBcastColCustomFpu(EltwiseFpu):
         block: BlockData,
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        return configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        ) + (
             "_llk_math_eltwise_binary_init_custom_<ckernel::EltwiseBinaryType::ELWSUB, ckernel::BroadcastType::COL>"
             f"({tensor_shape});\n"
         )

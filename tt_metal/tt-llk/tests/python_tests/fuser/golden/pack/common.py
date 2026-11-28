@@ -14,13 +14,10 @@ def prepare_tile(src, state, pack_node, operation, config):
     if reduce_dim in (ReduceDimension.Column, ReduceDimension.Scalar):
         tile[1:, :] = 0
     if pack_node.pack_relu != PackerReluType.NoRelu:
-        data_format = config.sentinel.golden_pack_src
-        key = (id(pack_node), data_format)
-        if key not in state.relu_configs:
-            state.relu_configs[key] = PackGolden.generate_relu_config(
-                pack_node.pack_relu, pack_node.relu_threshold, data_format
-            )
-        relu_config = state.relu_configs[key]
+        data_format = pack_node.pack_src_format
+        relu_config = PackGolden.generate_relu_config(
+            pack_node.pack_relu, pack_node.relu_threshold, data_format
+        )
         tile = PackGolden.apply_relu(tile, relu_config, data_format)
     return tile
 

@@ -89,12 +89,3 @@ class UnpackerTilizeA(Unpacker):
         l1_tile_idx = f"{tile_id} / {full_ct_dim} * {full_ct_dim * tile_rows} + {tile_id} % {full_ct_dim}"
 
         return f"_llk_unpack_tilize_<p_unpacr::UNP_A>({l1_tile_idx}, {block.block_cols}, {tensor_shape});\n"
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

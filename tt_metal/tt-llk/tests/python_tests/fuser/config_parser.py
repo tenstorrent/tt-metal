@@ -8,12 +8,9 @@ from pathlib import Path
 from textwrap import indent
 from typing import Annotated, Dict, List, Optional, Tuple
 
-import pytest
 import yaml
-from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
-from helpers.logger import logger
 from helpers.stimuli_generator import resolve_intervals
 from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
@@ -25,9 +22,10 @@ from pydantic import (
     model_validator,
 )
 
+from .format_inference import supported_operand_formats
 from .fuser_config import FuserConfig, GlobalConfig
 from .operand import OperandRegistry
-from .validator import IndexesSchema
+from .validator import INDEX_SLOT_NAMES, IndexesSchema, validate_pipeline
 
 FUSER_CONFIG_DIR = (
     Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser" / "tests"
@@ -200,6 +198,13 @@ class OperandDefinition(BaseModel):
                 pass
         return v
 
+    @field_validator("format")
+    @classmethod
+    def validate_data_format(cls, value):
+        if value not in supported_operand_formats(arch):
+            raise ValueError(f"{value.name} is not supported by the {arch.value} fuser")
+        return value
+
 
 class FuserConfigSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -212,63 +217,26 @@ class FuserConfigSchema(BaseModel):
     operands: List[OperandDefinition] = Field(..., min_length=1)
     operations: List[OperationSchema] = Field(..., min_length=1)
 
-    @staticmethod
-    def _declared_format(formats: dict, name: str) -> DataFormat:
-        if name not in formats:
-            raise ValueError(
-                f"Operand '{name}' is not declared in the 'operands' section"
-            )
-        return formats[name]
-
     @model_validator(mode="after")
     def validate_config(self) -> "FuserConfigSchema":
-        formats = {op_def.name: op_def.format for op_def in self.operands}
+        declared = {op_def.name for op_def in self.operands}
         seen_operands: set[str] = set()
 
         for op in self.operations:
-            src_a_name = None
-            for node in op.math:
-                for operand_name in (
-                    getattr(node, "in0", None),
-                    getattr(node, "in1", None),
-                ):
-                    if operand_name is None:
-                        continue
-                    self._declared_format(formats, operand_name)
-                    seen_operands.add(operand_name)
-                if src_a_name is None:
-                    src_a_name = getattr(node, "in0", None)
-
-            pack_schemas = op.pack_schemas
-
-            for pack_entry in pack_schemas:
-                if pack_entry.output in seen_operands:
+            inputs = [
+                getattr(node, slot, None) for node in op.math for slot in ("in0", "in1")
+            ]
+            outputs = [entry.output for entry in op.pack_schemas]
+            for name in filter(None, inputs + outputs):
+                if name not in declared:
                     raise ValueError(
-                        f"cannot use '{pack_entry.output}' as output twice"
+                        f"Operand '{name}' is not declared in the 'operands' section"
                     )
-                seen_operands.add(pack_entry.output)
-
-                if src_a_name is not None:
-                    input_fmt = self._declared_format(formats, src_a_name)
-                    output_fmt = self._declared_format(formats, pack_entry.output)
-                    if is_format_combination_outlier(
-                        input_fmt, output_fmt, self.dest_acc
-                    ):
-                        raise ValueError(
-                            f"Dest Accumulation must be enabled for {input_fmt.name} input and {output_fmt.name} output"
-                        )
-
-            if len(pack_schemas) > 1:
-                pack_formats = [
-                    self._declared_format(formats, e.output) for e in pack_schemas
-                ]
-                first_exp_b = pack_formats[0].is_exponent_B()
-                if any(f.is_exponent_B() != first_exp_b for f in pack_formats[1:]):
-                    names = [e.output for e in pack_schemas]
-                    logger.warning(
-                        f"Pack outputs {names} have mixed exponent families, "
-                        f"unpack/math format inference will use {pack_schemas[0].output} as reference",
-                    )
+            seen_operands.update(filter(None, inputs))
+            for name in outputs:
+                if name in seen_operands:
+                    raise ValueError(f"cannot use '{name}' as output twice")
+                seen_operands.add(name)
 
         self._resolve_index_refs()
         return self
@@ -286,7 +254,7 @@ class FuserConfigSchema(BaseModel):
             base = self.indexes[index_spec.ref]
             merged = {
                 slot: getattr(base, slot)
-                for slot in ("in0", "in1", "dest", "out", "src0", "src1", "src2")
+                for slot in INDEX_SLOT_NAMES
                 if getattr(base, slot) is not None
             }
             for slot, value in index_spec.slot_overrides().items():
@@ -350,27 +318,21 @@ class FuserConfigSchema(BaseModel):
                 i + 1 < num_stages and pipeline[i + 1].needs_pack_sync
             )
 
+        config = GlobalConfig(
+            architecture=arch,
+            dest_acc=self.dest_acc,
+            test_name=test_name,
+            loop_factor=self.loop_factor,
+            quasar_use_dvalid=self.quasar_use_dvalid,
+            skip_for_perf=self.skip_for_perf,
+        )
+        plans = validate_pipeline(pipeline, config, self.operations)
         return FuserConfig(
             pipeline=pipeline,
-            global_config=GlobalConfig(
-                dest_acc=self.dest_acc,
-                test_name=test_name,
-                loop_factor=self.loop_factor,
-                quasar_use_dvalid=self.quasar_use_dvalid,
-                skip_for_perf=self.skip_for_perf,
-            ),
+            global_config=config,
             operand_registry=operands,
+            pipeline_plans=plans,
         )
-
-    @classmethod
-    def validate_string(cls, yaml_content: str) -> "FuserConfigSchema":
-        config_dict = yaml.load(yaml_content, Loader=YAML_SAFE_LOADER)
-        try:
-            return cls.model_validate(config_dict)
-        except ValidationError as e:
-            raise ValueError(
-                f"Validation failed:\n{format_validation_error(e)}"
-            ) from None
 
     @staticmethod
     def resolve_definition_path(test_name: str) -> Path:
@@ -396,14 +358,9 @@ class FuserConfigSchema(BaseModel):
         return config_dict
 
     @classmethod
-    def load(cls, test_name: str, config_dict: Optional[dict] = None):
-        if config_dict is None:
-            config_dict = cls.load_definition(test_name)
-        config_dict = config_dict.copy()
-        supported_archs = config_dict.pop("supported_archs", None)
-        if supported_archs is not None:
-            if arch.value not in supported_archs:
-                pytest.skip(f"Test '{test_name}' not supported on {arch.value}")
+    def load(cls, test_name: str, config_dict: dict):
+        # supported_archs is handled by the sweep before loading.
+        config_dict = {k: v for k, v in config_dict.items() if k != "supported_archs"}
 
         try:
             schema = cls.model_validate(config_dict)

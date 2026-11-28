@@ -7,18 +7,13 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Callable, Iterable, Iterator, Mapping
 
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import (
-    BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-    QUASAR_DATA_FORMAT_ENUM_VALUES,
-    WORMHOLE_DATA_FORMAT_ENUM_VALUES,
-)
+from helpers.chip_architecture import get_chip_architecture
 from helpers.logger import logger
 
 from .arch_common import _get_parser
 from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from .format_inference import supported_operand_formats
 from .fuser_config import FuserConfig
-from .operand import L1_PACKERS
 from .validator import SUPPORTED_TILE_SIZES
 
 SweepValue = str | bool | int | float | tuple[int, int]
@@ -55,12 +50,9 @@ def _sfpu_operations(node: dict) -> list[str]:
 
 
 def _operand_formats(_node: dict) -> list[str]:
-    formats = {
-        ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
-        ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-        ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
-    }[get_chip_architecture()]
-    return sorted(fmt.name for fmt in formats if fmt in L1_PACKERS)
+    return sorted(
+        fmt.name for fmt in supported_operand_formats(get_chip_architecture())
+    )
 
 
 _SFPU_OPERATION = SweepParameter(
@@ -77,8 +69,12 @@ _SFPU_APPROXIMATION_MODE = SweepParameter(
 
 # Register new fields here; discovery and expansion are shared by every parameter.
 SWEEP_PARAMETERS: dict[str, dict[str, SweepParameter]] = {
-    "config": {},
-    "operation": {},
+    "config": {
+        "dest_acc": SweepParameter(value_type=bool, all_values=(False, True)),
+    },
+    "operation": {
+        "dest_sync": SweepParameter(all_values=("SyncHalf", "SyncFull")),
+    },
     "math": {
         "operation": _SFPU_OPERATION,
         "approximation_mode": _SFPU_APPROXIMATION_MODE,

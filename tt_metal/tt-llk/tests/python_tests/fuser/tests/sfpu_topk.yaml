@@ -10,26 +10,27 @@ operands:
     format: Float16_b
   - name: indices
     dims: [128, 256]
-    format: UInt16
+    # WH/BH accept only UInt16, Quasar only Int16.
+    format: [UInt16, Int16]
     stimuli: [0, 255]
   - name: values_iter0
     dims: [128, 256]
     format: Float16_b
   - name: indices_iter0
     dims: [128, 256]
-    format: UInt16
+    format: [UInt16, Int16]
   - name: values_iter1
     dims: [128, 256]
     format: Float16_b
   - name: indices_iter1
     dims: [128, 256]
-    format: UInt16
+    format: [UInt16, Int16]
   - name: values_out
     dims: [128, 32]
     format: Float16_b
   - name: indices_out
     dims: [128, 32]
-    format: UInt16
+    format: [UInt16, Int16]
 
 operations:
   # Iteration 0: pairs (0,1), (2,3), (4,5), (6,7) in each tile row.
