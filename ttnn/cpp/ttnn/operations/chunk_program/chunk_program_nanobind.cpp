@@ -27,7 +27,7 @@ void bind_chunk_program_operation(nb::module_& mod) {
         nb::arg("groups"),
         nb::arg("sems"),
         R"doc(The plan of one per-chunk program instance of deepseek_v41_flash_d_p, made once (kinds: 0 page copy,
-        1 glued rows, 2 ids reorder, 3 glued ids, 4 derive, 5 owned send).)doc");
+        1 glued rows, 2 ids reorder, 3 glued ids, 4 derive, 5 owned send, 6 page copies of one page size (NC.9)).)doc");
 
     ttnn::bind_function<"chunk_program">(
         mod,

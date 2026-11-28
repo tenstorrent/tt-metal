@@ -1778,3 +1778,61 @@ install, rc 0). The C++ ops (ttnn/cpp/ttnn/operations/*, nanobind, CMake) are by
   cached native programs; wo_a has none. Program-cache growth 0 on fresh buffers with new values (every case).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.NC --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (op level, ~3 min, no model).
+
+## MB.QB (perf, attempt 1): the batching branch's wq_b bank layout (FIX.42 / QB.1) and NC.9's single-request fusions on model_bringup (WQB_BANK, NATIVE_FUSIONS)
+
+Expected saving a 5120 chunk (written before any device run; perf_guide read: wq_b at 160 rows is weight-read bound,
+DS41-191 / DS41-306, the bank layout removes read time; the fusions only remove launches): device: wq_b today on this
+branch is MB.9's MM_TUNED160 1D config (0.1756 ms a call, the sweep's number) vs FIX.42's bank 151.4 us at 160 rows
+-> ~-24 us x 21 layers = ~-0.5 ms; emb ~-8 us; the replay rotation ~-1..-20 us a pair x 2 a replay layer (replay chunks
+only). Host: wq_b ~-25 us a call x 21 = ~-0.5 ms (C++ op on its program cache vs ttnn.linear's launch, QB.1: 70 -> 42
+us); emb ~-30 us; rotation ~-15 us a pair. Total ~-0.5 ms device, ~-0.6 ms host a steady chunk. Needs no full load:
+op-level checks only (owner); the one model-wide check is MB.QBL.
+
+What was done (MB.QB): the allowed-path parts of FIX.42 47b34099c19, QB.1 3ca2cf6a70d, NC.9 e19a95cdda7 applied in order
+(`git show <c> -- <allowed paths> | git apply -3 --index`, as MB.NC; "cherry-pick -x" not literally: no commit here,
+and the ledger / results / knowledge_use files of those commits are outside this step's paths). The C++ (grouped_matmul,
+chunk_program PAGE_MULTI, the embedding fork) is byte-identical to the batching branch; rebuilt (`cmake build && cmake
+--build build --target install`, rc 0; re-configure for page_multi.cpp).
+- Conflicts resolved for model_bringup: hooks.py (WQB_BANK added to model_bringup's call-time list / batch_call_apply;
+  the batching-only COMMON_VALUE_SLOTS / MHC_POST_V2 not brought); compressor._write_from keeps model_bringup's
+  `pos_dynamic()` condition (no `dyn("replay")` here) with page_copy_many; page_copy.py keeps model_bringup's
+  sp_stride `pages_of`, adds `fused()` / `page_copy_many` / `ServerIds` / `IdsReorder.embed` (no `dyn`).
+- Dropped: NC.9 (4) window carry (model_bringup's `_ring_carry` takes slices; there is no `_ring_carry_pages` page-copy
+  route to fuse); NC.9 (2) history tail (not on the shipped path on either branch). Tests not brought:
+  tests/woa/test_wqb_offon.py (8192 single + packed 4 x 2k model A/B: cannot run here), tests/native/test_native_fusions.py
+  (its 8192 / carry cases; replaced by test_native_mb_qb.py). Brought as op-level tools: tests/woa/test_qbob_bank_probe.py,
+  tests/woa/test_gmm_fork_nsub.py (not run here: the C++ is the batching branch's, 5 passed there).
+- Adapted (agent rule 15, every box): the bank path's L1 per core is PART mt x 12 fp32 tiles + OUT mt x 12 + IN0 / IN1;
+  at 160 rows ~0.6 MB, at 320 (4x4) ~1.1 MB, at 640 / 1280 (2x4 / 2x2 at 5120) over L1. mm_configs.wqb_bank_knobs now
+  returns None for a row count not swept (QB.1 fell back to 256's entry), and tt/attention.wqb_bank_ok (ATTN_SP32_PROJ,
+  a swept row count, a layout that plans on the chip's matmul grid) decides at load: no bank path -> the interleaved
+  copy and call under either WQB_BANK value, said once at load. The 8x4 at 5120 (160 rows) and 8192 (256) take the
+  bank path.
+- Settings: WQB_BANK default on (owner brief), WQB_BANK_COPIES selected (as WOA_BANK_COPIES); NATIVE_FUSIONS default on.
+  Both call-time; off = model_bringup's previous calls.
+- Gate test tests/native/test_native_mb_qb.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads, ~30 s):
+  wqb160 through the model's own `TtWindowAttention._wqb_mm` on a stand-in (both copies; the shipped _q_proj call:
+  bf16 into a preallocated output), emb5120 (two (start, valid) sets, ids past the vocabulary), rot_ckv5120,
+  rot_idx5120, rot_ckv5120_r128.
+- Measured (first gate run, results/MB.QB_layer.md; host a warm call today -> on, device today -> on, slowest chip):
+  wqb160 92.0 -> 53.4 us host, 177.8 -> 152.0 us device, BIT-IDENTICAL to the stock call (max |on - today| 0.0; rel vs
+  fp64 1.6796e-3 both), 88 cores (rule 18: <= 110); emb5120 166.0 -> 136.4 / 42.4 -> 34.5; rot_ckv5120 69.2 -> 51.6 /
+  45.3 -> 31.6; rot_idx5120 67.8 -> 50.8 / 37.0 -> 21.9; rot_ckv5120_r128 70.4 -> 53.5 / 3.3 -> 2.4. A steady 5120
+  chunk (21 wq_b calls, one emb): device ~-0.55 ms, host ~-0.85 ms; a replay chunk adds ~-15..-30 us device and ~-35 us
+  host a replay layer. Expected vs measured: device -0.5 expected -> -0.55; host -0.6 expected -> -0.85.
+- Per-chunk values this change touches (rule 20): wq_b none (x / w / y addresses are the C++ op's program-cache
+  overrides; layout, knobs, cores are load / compile time). emb: start / valid -> the embedding's common runtime args
+  rewritten on every program-cache hit (not in the hash, DS41-407); the engine's input is read in place (no ids tensor,
+  no host work). Rotation: s0 / d0 / n of each segment -> chunk_program PAGE_MULTI runtime-arg slots. Cache growth 0 on
+  new values on fresh buffers (every case).
+- Known issues used: DS41-405 (page copies with sp_stride stay on the Python route: page_copy_many is only called with
+  sp_stride 0 copies), DS41-390 (brought from the batching branch with its id: wq_b judged by rel vs fp64 + repeat, not
+  bytes; the op-level bit-identity on random inputs does not promise it on real chunks: MB.QBL's ladder judges),
+  DS41-392 (bank.upload's host TILE conversion keeps today's bfp8 bytes).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.QB --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (op level, ~1 min, no model).
+- Final gate --check (after the report fix and the hooks): PASS, every native_mismatch / repeat / cache_growth 0;
+  results/MB.QB_layer.md is that run's (wqb160 host 86.2 -> 51.8 us, device 177.7 -> 151.7 us, within ~6 us host of
+  the first run). Not run: `orchestrator measure` (ab_mode none, owner: op-level only, no model load; MB.QBL is the
+  end check), the fork regression suites (the C++ is the batching branch's bytes).

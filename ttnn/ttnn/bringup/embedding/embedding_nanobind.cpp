@@ -36,6 +36,12 @@ void bind_embedding(nb::module_& mod) {
                 ttnn.embedding), default None (the device's whole compute grid, the source op). An interleaved
                 output's work split runs on the rectangle (0, 0) .. (max_grid - 1) of the grid
                 (deepseek_v41_flash_d_p FIX.15: a Galaxy's 110-core cap).
+            server_start, server_valid, clamp_max (int, optional): bring-up option server order (deepseek_v41_flash_d_p
+                NC.9), all three or none (default: the source op). input_tensor is the engine's uint32 ids in the
+                server's row order of every mesh row ([SP, 1, W], the same on every chip, mesh rows = SP); each chip
+                embeds its natural-order rows [r W, (r + 1) W) of the chunk at server_start (mesh row r), positions
+                >= server_valid and ids > clamp_max read as clamp_max (tt/page_copy.IdsReorder's ids, read by the
+                embedding's reader). server_start / server_valid are runtime values (no program per value).
 
         Returns:
             ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
@@ -54,7 +60,10 @@ void bind_embedding(nb::module_& mod) {
         nb::arg("dtype").noconvert() = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor").noconvert() = nb::none(),
-        nb::arg("max_grid") = nb::none());
+        nb::arg("max_grid") = nb::none(),
+        nb::arg("server_start") = nb::none(),
+        nb::arg("server_valid") = nb::none(),
+        nb::arg("clamp_max") = nb::none());
 }
 
 }  // namespace ttnn::operations::bringup::embedding

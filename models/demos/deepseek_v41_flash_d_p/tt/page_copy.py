@@ -34,7 +34,7 @@ from .common import DRAM, SP_AXIS, TP_AXIS
 
 NCORES = 4  # cores a chip (data movement only; a [NCORES, 1] row from (0, 0))
 # NC.7: ttnn.chunk_program kinds (ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation_types.hpp)
-K_PAGE_COPY, K_GLUED_ROWS, K_IDS, K_GLUED_IDS, K_DERIVE, K_OWNED = range(6)
+K_PAGE_COPY, K_GLUED_ROWS, K_IDS, K_GLUED_IDS, K_DERIVE, K_OWNED, K_PAGE_MULTI = range(7)
 
 
 def native_plan(mesh, kind: int, consts, groups=(), sems=()):
@@ -53,6 +53,14 @@ def on() -> bool:
     from .settings import settings
 
     return settings.get("POS_DYNAMIC") == "on"
+
+
+def fused() -> bool:
+    """NATIVE_FUSIONS=on (NC.9, read per call): the ids reorder in the embedding's reader, page copies into one
+    destination in one program (``page_copy_many``)."""
+    from .settings import settings
+
+    return settings.get("NATIVE_FUSIONS") == "on"
 
 
 _KERNEL = r"""
@@ -219,6 +227,41 @@ def page_copy(
         hit[1](src, dst, s0, d0, n, nb, ss, ds)
 
 
+_MANY: dict = {}  # (id(mesh), segments, source geometry, destination geometry) -> (mesh, plan)
+
+
+def page_copy_many(segs: list) -> None:
+    """NC.9: ``page_copy(src, dst, s0, d0, n)`` of every segment (src, dst, s0, d0, n), in ONE ttnn.chunk_program
+    (PAGE_MULTI: one page size; every source one accessor geometry, every destination one; destinations disjoint, no
+    source a destination). The same bytes as the page copies one after the other; NATIVE_FUSIONS=off: those calls."""
+    segs = [s for s in segs if int(s[4]) > 0]
+    if not segs:
+        return
+    if len(segs) == 1 or not fused():
+        for src, dst, s0, d0, n in segs:
+            page_copy(src, dst, s0, d0, n)
+        return
+    src0, dst0 = segs[0][0], segs[0][1]
+    mesh = src0.device()
+    gs, gd = _geo(src0), _geo(dst0)
+    if any(_geo(s[0]) != gs or _geo(s[1]) != gd for s in segs[1:]):  # (another geometry: one program can't take it)
+        for src, dst, s0, d0, n in segs:
+            page_copy(src, dst, s0, d0, n)
+        return
+    key = (id(mesh), len(segs), gs, gd)
+    hit = _MANY.get(key)
+    if hit is None or hit[0] is not mesh:
+        page = _page_bytes(src0)
+        assert page == _page_bytes(dst0), (src0.shape, dst0.shape, src0.dtype, dst0.dtype)
+        batch = max(1, BATCH_BYTES // (-(-page // 64) * 64))
+        hit = _MANY[key] = (mesh, native_plan(mesh, K_PAGE_MULTI, [page, batch, NCORES, len(segs)]))
+    io, vals = [], []
+    for src, dst, s0, d0, n in segs:
+        io += [src, dst]
+        vals += [int(s0), int(d0), int(n)]
+    ttnn.chunk_program(io, hit[1], vals)
+
+
 def pages_of(src: ttnn.Tensor, s0: int, n: int, shape: list, sp_stride: int = 0) -> ttnn.Tensor:
     """A new interleaved DRAM tensor of ``shape`` (src's dtype / layout, n pages) holding src's pages [s0, s0 + n)
     (mesh row r: [s0 + r sp_stride, ..))."""
@@ -309,6 +352,16 @@ void kernel_main() {
 """
 
 
+class ServerIds:
+    """NC.9 (NATIVE_FUSIONS=on): what ``model.reorder_ids`` hands ``model.embed``: the engine's input (not consumed),
+    the chunk's start and valid rows; the embedding reads it in server order (``IdsReorder.embed``)."""
+
+    __slots__ = ("inp", "start", "valid")
+
+    def __init__(self, inp, start: int, valid: int):
+        self.inp, self.start, self.valid = inp, int(start), int(valid)
+
+
 class IdsReorder:
     """POS_DYNAMIC=on: the engine's device input -> each chip's natural-order embedding ids, on the device (module
     docstring). One gather output allocated at first use (load-time shaped), one prepared program for every start."""
@@ -372,6 +425,24 @@ class IdsReorder:
             ]
             md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, 0), ttnn.MeshCoordinate(r, self.tp - 1))] = prog
         return md
+
+    def embed(self, inp: ttnn.Tensor, start: int, valid: int, weight: ttnn.Tensor, **kw) -> ttnn.Tensor:
+        """NC.9 (NATIVE_FUSIONS=on): ``ttnn.bringup.embedding(self(inp, start, valid), weight, **kw)`` in one program
+        after the SP all-gather: the embedding's reader reads each natural unit where this class's kernel reads it
+        (server_start / server_valid runtime values, clamp_max = vocab - 1). Same bytes, no ids tensor."""
+        assert int(inp.shape[-1]) == self.w and inp.dtype == ttnn.uint32, (inp.shape, inp.dtype)
+        src = self._gather(inp)
+        e = ttnn.bringup.embedding(
+            src,
+            weight,
+            server_start=int(start),
+            server_valid=max(0, min(int(valid), self.chunk)),
+            clamp_max=self.vmax,
+            **kw,
+        )
+        if src is not self._gat and src is not inp:
+            ttnn.deallocate(src)
+        return e
 
     def __call__(self, inp: ttnn.Tensor, start: int, valid: int) -> ttnn.Tensor:
         """inp [SP, 1, W] uint32 (the engine's, a mesh row each; not consumed), the chunk at ``start`` with ``valid``

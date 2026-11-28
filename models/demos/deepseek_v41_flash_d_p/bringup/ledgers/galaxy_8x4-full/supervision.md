@@ -742,3 +742,4 @@
 - 06:50 heartbeat: idle by design (MB.NCL done; FIX.42 held for the owner). Resident runner stopped (RAM freed). Heartbeat cron stopped.
 - 07:16 OWNER: the machine must not idle on a non-decision. FIX.42 (wq_b / wo_b C++ bank probe) was already owner-agreed (plan step 4, batching supervision 18:35): switching to batching to run it.
 - 10:02 (model_bringup) skill rule cherry-picked (676b43921c8), rebuilt. QUEUED MB.QB (wq_b bank QB.1 / FIX.42 + the single-request fusions of NC.9; op-level) and MB.QBL (5120 ladder + cold no-rebuild assessment); validate: valid.
+- 10:12 heartbeat (model_bringup): MB.QB agent active; RAM used 79 GB; / 94G free.

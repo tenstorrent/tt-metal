@@ -18,6 +18,9 @@ ttnn::Tensor embedding(
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    std::optional<uint32_t> server_start = std::nullopt,
+    std::optional<uint32_t> server_valid = std::nullopt,
+    std::optional<uint32_t> clamp_max = std::nullopt);
 
 }  // namespace ttnn::bringup

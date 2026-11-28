@@ -161,6 +161,40 @@ ProgramDescriptor page_copy(
     return prog;
 }
 
+// ------------------------------------------------------------------------------------------------ page copy, many
+// NC.9 consts: [page, batch, cores, segments]; io (src, dst) x segments; values (s0, d0, n) x segments: dst's pages
+// [d0, d0 + n) <- src's pages [s0, s0 + n) of every segment, in ONE program (the bytes of the segments' page copies
+// one after the other, on page_copy's cores; the segments' destinations do not overlap and no source is a
+// destination: the model's calls, tt/page_copy.page_copy_many)
+ProgramDescriptor page_multi(
+    const ChunkPlan& p,
+    const std::vector<Tensor>& io,
+    const std::vector<uint32_t>& values,
+    std::vector<SlotRef>& slots) {
+    const uint32_t page = p.consts.at(0), batch = p.consts.at(1), nc = p.consts.at(2), nseg = p.consts.at(3);
+    const CoreRangeSet crs = rect(0, 0, nc - 1, 0);
+    ProgramDescriptor prog;
+    prog.cbs.push_back(byte_cb(64 + (batch * align64(page)), crs));
+    std::vector<uint32_t> ct{page, batch, nc, nseg};
+    append_accessor(ct, io.at(0));
+    append_accessor(ct, io.at(1));
+    KernelDescriptor k = dm_kernel("page_multi.cpp", crs, ct);
+    for (uint32_t c = 0; c < nc; ++c) {
+        Args a{.kernel = 0, .core = CoreCoord{c, 0}, .io = io, .values = values, .slots = slots, .a = {}};
+        a.u(c);
+        for (uint32_t s = 0; s < nseg; ++s) {
+            a.io_addr(2 * s);
+            a.io_addr((2 * s) + 1);
+            for (uint32_t j = 0; j < 3; ++j) {
+                a.value((3 * s) + j);
+            }
+        }
+        a.emit(k);
+    }
+    prog.kernels.push_back(std::move(k));
+    return prog;
+}
+
 // ----------------------------------------------------------------------------------------------------- glued rows
 // consts: [page, pages a unit, batch, cores, values a mesh row, pairs]; io (table, out) x pairs; values: every mesh
 // row's pieces (common args; tt/lane_rows.GluedRows._build, common=True)
@@ -433,6 +467,7 @@ ProgramDescriptor ChunkProgramProgramFactory::create_descriptor(
         case ChunkKind::GLUED_IDS: return ids(p, io, attrs.values, r, slots);
         case ChunkKind::DERIVE: return derive(p, io, attrs.values, q, slots);
         case ChunkKind::OWNED_SEND: return owned_send(p, io, attrs.values, q, slots);
+        case ChunkKind::PAGE_MULTI: return page_multi(p, io, attrs.values, slots);
     }
     TT_THROW("chunk_program: unknown kind {}", static_cast<uint32_t>(p.kind));
 }
@@ -449,6 +484,7 @@ ChunkProgramMeshWorkloadFactory::cached_mesh_workload_t ChunkProgramMeshWorkload
     TT_FATAL(tensor_coords.coords().size() == R * C, "chunk_program: io on every chip of the {}x{} mesh", R, C);
     switch (p.kind) {
         case ChunkKind::PAGE_COPY:
+        case ChunkKind::PAGE_MULTI:
             ranges.emplace_back(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(R - 1, C - 1));
             break;
         case ChunkKind::GLUED_ROWS:

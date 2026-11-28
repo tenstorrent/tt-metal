@@ -5,6 +5,8 @@
 
 #include "ttnn/operation.hpp"
 
+#include <tt-metalium/tensor_accessor_args.hpp>
+
 namespace ttnn::operations::chunk_program {
 
 using namespace tt::tt_metal;
@@ -50,6 +52,13 @@ void check_counts(const ChunkPlan& p, size_t n_io, size_t n_values) {
                 n_io == 2 && n_values == (3 * k.at(6)) + k.at(7),
                 "chunk_program owned_send: io [out, a record buffer], values (buffers, lo, hi, map words)");
             break;
+        case ChunkKind::PAGE_MULTI:
+            TT_FATAL(
+                k.at(3) >= 1 && n_io == 2 * k.at(3) && n_values == 3 * k.at(3),
+                "chunk_program page_multi: io (src, dst) x {}, values (s0, d0, n) x {}",
+                k.at(3),
+                k.at(3));
+            break;
     }
 }
 
@@ -84,6 +93,24 @@ void ChunkProgramDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 mc.buffer_type() == BufferType::DRAM && mc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "chunk_program derive: every output DRAM interleaved");
+        }
+    }
+    if (p.kind == ChunkKind::PAGE_MULTI) {
+        // the kernel's one accessor config for every source and one for every destination (page_multi.cpp)
+        auto ct = [](const Tensor& t) {
+            std::vector<uint32_t> v;
+            TensorAccessorArgs(*t.buffer()).append_to(v);
+            return v;
+        };
+        const auto s0 = ct(io.at(0)), d0 = ct(io.at(1));
+        for (size_t i = 0; i < io.size(); ++i) {
+            TT_FATAL(
+                io[i].buffer()->page_size() == p.consts.at(0),
+                "chunk_program page_multi: every source and destination of one page size {}",
+                p.consts.at(0));
+            TT_FATAL(
+                ct(io[i]) == (i % 2 == 0 ? s0 : d0),
+                "chunk_program page_multi: every source (destination) with the first one's accessor config");
         }
     }
     if (p.kind == ChunkKind::GLUED_ROWS) {

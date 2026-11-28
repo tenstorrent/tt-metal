@@ -205,6 +205,73 @@ def woa_ensure(model, kinds) -> dict:
     return out
 
 
+def wqb_load_kinds() -> tuple:
+    """The wq_b copies a load uploads (WQB_BANK_COPIES, QB.1): only WQB_BANK's (shipped) or both (the A/B, tests)."""
+    if settings.get("WQB_BANK_COPIES") == "both":
+        return ("interleaved", "bank")
+    return ("bank",) if settings.get("WQB_BANK") == "on" else ("interleaved",)
+
+
+_WQB_LAYOUTS: dict = {}
+_WQB_NOTED: list = []  # (the no-bank-layout note: once a process)
+
+
+def wqb_layout(mesh, shape, rows: int) -> "gmm_bank.BankLayout":
+    """The wq_b G = 1 bank layout of the mesh's chip at ``rows`` rows a chip (mm.WQB_BANK_KNOBS' shape / cores, the
+    matmul core cap), one a mesh, shape and row count; none raises (no padding, no fallback; OV-3)."""
+    from .cores import max_grid as _mg
+
+    shape = tuple(int(v) for v in shape)
+    knobs = mm.wqb_bank_knobs(rows)
+    if knobs is None:
+        raise RuntimeError(f"WQB_BANK=on: no wq_b bank knobs at {rows} rows a chip (mm_configs.WQB_BANK_KNOBS)")
+    sh, cores = knobs[:2]
+    cap = _mg(mesh)
+    cap = 10**9 if cap is None else cap.x * cap.y  # (MAX_WORKER_CORES: 110 on a Galaxy, agent rule 18)
+    key = (id(mesh), shape, sh, cores, cap)
+    hit = _WQB_LAYOUTS.get(key)
+    if hit is not None and hit[0] is mesh:
+        return hit[1]
+    _, G, K, N = shape
+    # (grid: the matmul-capped compute grid, as wo_a's: inside a gather-hide region only it is the compute sub-device,
+    # DS41-382)
+    lay = gmm_bank.plan(mesh, G, K, N, cap, cores, shape=sh, grid=_mg(mesh))
+    if lay is None:
+        raise RuntimeError(f"WQB_BANK=on: no bank layout for wq_b {shape} at {rows} rows ({sh} {cores}, cap {cap})")
+    _WQB_LAYOUTS[key] = (mesh, lay)
+    return lay
+
+
+def wqb_bank_ok(mesh, shape, rows: int, sp32: bool) -> bool:
+    """Whether this load's wq_b can take the G = 1 bank path (MB.QB, agent rule 15: a per-box condition read at load):
+    ATTN_SP32_PROJ (every column on every chip), a swept row count (mm_configs.WQB_BANK_KNOBS: 160 / 256 rows a chip)
+    and a layout on the chip's matmul-capped grid. Otherwise WQB_BANK is moot and the interleaved call runs."""
+    if not sp32 or mm.wqb_bank_knobs(rows) is None:
+        return False
+    try:
+        wqb_layout(mesh, shape, rows)
+    except RuntimeError:
+        return False
+    return True
+
+
+def wqb_ensure(model, kinds) -> dict:
+    """Tests / the A/B only (WQB_BANK_COPIES): every attention of the model (and of its decoder tail) holds the wq_b
+    copies of ``kinds``; the missing ones re-read from the checkpoint and uploaded. Returns {kind: seconds, "layers"}.
+    """
+    out = {"layers": 0}
+    for m in (model, getattr(model, "tail", None)):
+        for blk in (getattr(m, "blocks", None) or {}).values():
+            att = getattr(blk, "attention", None)
+            if att is None or not hasattr(att, "wqb_ensure"):
+                continue
+            got = att.wqb_ensure(kinds)
+            out["layers"] += 1 if got else 0
+            for k, v in got.items():
+                out[k] = out.get(k, 0.0) + v
+    return out
+
+
 def _mapper(mesh, dims):
     return ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims)
 
@@ -1565,11 +1632,28 @@ class TtWindowAttention:
         perm = torch.arange(self.d) if self.stock else deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
         # over TP (chip c: heads [c H/TP, (c+1) H/TP)); bf16 exact (e4m3 x 2^k)
-        wq_b = w["wq_b"].float().view(self.heads, self.d, -1)[:, perm].reshape(self.heads * self.d, -1)
-        assert torch.equal(wq_b.bfloat16().float(), wq_b), "wq_b must be bf16-exact"
-        wq_b_t = wq_b.t().reshape(1, 1, -1, self.heads * self.d).contiguous()
+        self._wqb_perm = perm
+        wq_b_t = self._wqb_host(w["wq_b"])
+        self.wq_b_shape = tuple(int(v) for v in wq_b_t.shape)  # (the logical [1, 1, K, N], whichever copy is loaded)
         # DENSE_WEIGHTS (P.13): bf16 (exact fp8 values) or bfloat8_b (the checkpoint's 8-bit width)
-        self.wq_b = _upload(mesh, wq_b_t, dense_dtype(wq_b_t, "attn.wq_b"), ttnn.TILE_LAYOUT, wdim((None, 3)))
+        self.wq_b_dtype = dense_dtype(wq_b_t, "attn.wq_b")
+        self._wqb_out_spec = _ShapeOf(self.wq_b_shape)  # (host_alloc.mm_out reads .shape)
+        # WQB_BANK (QB.1): the interleaved copy (wq_b, today's) and / or the G = 1 per-bank copy (wq_b_bank, its layout
+        # wqb_layout at the load's rows a chip); WQB_BANK_COPIES=selected (shipped): only WQB_BANK's, both: both
+        self.wq_b = self.wq_b_bank = self.wqb_layout = None
+        self.wqb_src = None  # (tt/model.py: a zero-argument re-read of the checkpoint's wq_b, wqb_ensure)
+        # MB.QB (rule 15): the bank path only where this box's rows a chip have a swept layout (wqb_bank_ok); else the
+        # interleaved copy whatever WQB_BANK says
+        self.wqb_bank_ok = wqb_bank_ok(mesh, self.wq_b_shape, self.geo.q_rows, self.sp32)
+        if not self.wqb_bank_ok and settings.get("WQB_BANK") == "on" and not _WQB_NOTED:
+            _WQB_NOTED.append(True)
+            print(
+                f"WQB_BANK=on: no wq_b bank layout at {self.geo.q_rows} rows a chip on this mesh "
+                f"({tuple(mesh.shape)}, sp32 {self.sp32}): the interleaved call (mm_configs.WQB_BANK_KNOBS)",
+                flush=True,
+            )
+        for kind in self._wqb_kinds(wqb_load_kinds()):
+            self._wqb_attach(kind, wq_b_t)
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
         self._woa_perm = perm
         wo_a_t = self._woa_host(w["wo_a"])
@@ -1591,6 +1675,106 @@ class TtWindowAttention:
         # the sink in sparse_sdpa's units (it multiplies by the op's scale, 1 here): every head on every chip
         sink = w["attn_sink"].float().reshape(1, 1, 1, self.heads)
         self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+
+    # ------------------------------------------------------------------ wq_b copies (WQB_BANK, QB.1)
+    def _wqb_host(self, raw: torch.Tensor) -> torch.Tensor:
+        """The checkpoint's wq_b [heads * 512, q_lora] -> each head's rope rows in the load's order -> the uploaded
+        [1, 1, q_lora, heads * 512] (host); bf16 exact (e4m3 x 2^k)."""
+        wq_b = raw.float().view(self.heads, self.d, -1)[:, self._wqb_perm].reshape(self.heads * self.d, -1)
+        assert torch.equal(wq_b.bfloat16().float(), wq_b), "wq_b must be bf16-exact"
+        return wq_b.t().reshape(1, 1, -1, self.heads * self.d).contiguous()
+
+    def _wqb_attach(self, kind: str, wq_b_t: torch.Tensor) -> None:
+        """Upload one wq_b copy: "interleaved" (today's: DRAM interleaved, columns split over TP unless sp32) or "bank"
+        (WQB_BANK=on: grouped_matmul_ttnn/bank.py's G = 1 WIDTH_SHARDED per-bank copy, replicated: needs
+        ATTN_SP32_PROJ)."""
+        if kind == "interleaved":
+            dims = None if self.sp32 else (None, 3)
+            self.wq_b = _upload(self.mesh, wq_b_t, self.wq_b_dtype, ttnn.TILE_LAYOUT, dims)
+            return
+        assert kind == "bank", kind
+        if not self.sp32:
+            raise RuntimeError("WQB_BANK=on needs ATTN_SP32_PROJ=on (every wq_b column on every chip, replicated)")
+        lay = wqb_layout(self.mesh, self.wq_b_shape, self.geo.q_rows)
+        # (bank.upload: the plain host TILE conversion, then the sharded placement: today's bfp8 bytes, DS41-392)
+        self.wq_b_bank = gmm_bank.upload(wq_b_t, lay, self.mesh, self.wq_b_dtype)
+        self.wqb_layout = lay
+
+    def _wqb_kinds(self, kinds) -> tuple:
+        """``kinds`` with "bank" as "interleaved" where this load has no bank path (wqb_bank_ok), deduplicated."""
+        out = []
+        for k in kinds:
+            k = k if (k != "bank" or self.wqb_bank_ok) else "interleaved"
+            if k not in out:
+                out.append(k)
+        return tuple(out)
+
+    def wqb_has(self, kind: str) -> bool:
+        return (self.wq_b if kind == "interleaved" else self.wq_b_bank) is not None
+
+    def wqb_ensure(self, kinds) -> dict:
+        """Tests / the A/B only (WQB_BANK_COPIES): upload the copies of ``kinds`` this load lacks, re-read from the
+        checkpoint (``wqb_src``). Returns {kind: host + upload seconds}."""
+        out = {}
+        for kind in self._wqb_kinds(kinds):
+            if self.wqb_has(kind):
+                continue
+            assert self.wqb_src is not None, "wqb_ensure: no checkpoint re-read (wqb_src) on this attention"
+            t0 = time.perf_counter()
+            self._wqb_attach(kind, self._wqb_host(self.wqb_src()))
+            out[kind] = time.perf_counter() - t0
+        return out
+
+    def wqb_drop(self, kind: str) -> None:
+        """Tests only: free one copy (a held model put back to its load's copies)."""
+        if kind == "interleaved" and self.wq_b is not None:
+            ttnn.deallocate(self.wq_b)
+            self.wq_b = None
+        elif kind == "bank" and self.wq_b_bank is not None:
+            ttnn.deallocate(self.wq_b_bank)
+            self.wq_b_bank = self.wqb_layout = None
+
+    def _wqb_mm(self, xq: ttnn.Tensor, dtype, memory_config, out=None) -> ttnn.Tensor:
+        """xq [1, 1, rows, q_lora] @ wq_b -> [1, 1, rows, N] ``dtype``: WQB_BANK=on the G = 1 bank call (QB.1), off
+        today's mm.linear. ``out``: written in place (HOST_ALLOC)."""
+        if settings.get("WQB_BANK") == "on" and self.wqb_bank_ok:
+            if self.wq_b_bank is None:
+                raise RuntimeError(
+                    "WQB_BANK=on but this load holds no bank copy of wq_b (loaded with WQB_BANK=off and "
+                    "WQB_BANK_COPIES=selected): load with WQB_BANK=on or WQB_BANK_COPIES=both"
+                )
+            rows = int(xq.shape[-2])
+            if rows != self.geo.q_rows:
+                raise RuntimeError(f"WQB_BANK=on: wq_b's bank layout is the load's {self.geo.q_rows} rows, got {rows}")
+            _, _, bw, depth, wi, xa = mm.wqb_bank_knobs(rows)
+            return ttnn.bringup.grouped_matmul(
+                xq,
+                self.wq_b_bank,
+                w_layout=self.wqb_layout,
+                dtype=dtype,
+                compute_kernel_config=self.ckc,
+                output_tensor=out,
+                max_grid=max_grid(),
+                block_w=bw,
+                depth=depth,
+                w_inflight=wi,
+                x_ahead=xa,
+                one_group=True,
+            )
+        if self.wq_b is None:
+            raise RuntimeError(
+                "WQB_BANK=off but this load holds no interleaved copy of wq_b (loaded with WQB_BANK=on and "
+                "WQB_BANK_COPIES=selected): load with WQB_BANK=off or WQB_BANK_COPIES=both"
+            )
+        return mm.linear(
+            xq,
+            self.wq_b,
+            site="attn.wq_b",
+            dtype=dtype,
+            compute_kernel_config=self.ckc,
+            memory_config=memory_config,
+            out=out,
+        )
 
     # ------------------------------------------------------------------ wo_a copies (WOA_BANK, WA.3)
     def _woa_host(self, raw: torch.Tensor) -> torch.Tensor:
@@ -2018,9 +2202,7 @@ class TtWindowAttention:
         """q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd])."""
         rows = q_resid.shape[-2]
         xq = gemm_input(q_resid)  # GEMM_INPUTS (FIX.7)
-        qf = mm.linear(
-            xq, self.wq_b, site="attn.wq_b", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
-        )
+        qf = self._wqb_mm(xq, ttnn.float32, DRAM)
         if xq is not q_resid:
             dealloc(xq)
         q4 = ttnn.transpose(
@@ -2039,9 +2221,7 @@ class TtWindowAttention:
         split by nlp_create_q_heads_split (a data move), RoPE on the [.., 64] tail only, the scale's multiply writing
         bf16 (= ttnn.typecast's RNE), the interleave a PairPerm matmul on the bf16 tail."""
         xq = gemm_input(q_resid)  # GEMM_INPUTS (FIX.7)
-        qf = mm.linear(
-            xq, self.wq_b, site="attn.wq_b", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
-        )
+        qf = self._wqb_mm(xq, ttnn.float32, DRAM)
         if xq is not q_resid:
             dealloc(xq)
         qn, qr = ttnn.bringup.nlp_create_q_heads_split(
@@ -2086,14 +2266,9 @@ class TtWindowAttention:
                 sub_core_grids=sub_cores(q_resid),
             )
             xq = xo
-        qb = mm.linear(
-            xq,
-            self.wq_b,
-            site="attn.wq_b",
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=self.ckc,
-            memory_config=DRAM,
-            out=host_alloc.mm_out(self.mesh, "attn.qb", xq, self.wq_b, ttnn.bfloat16),
+        # WQB_BANK (QB.1, call-time): the G = 1 bank call or today's mm.linear (_wqb_mm)
+        qb = self._wqb_mm(
+            xq, ttnn.bfloat16, DRAM, out=host_alloc.mm_out(self.mesh, "attn.qb", xq, self._wqb_out_spec, ttnn.bfloat16)
         )
         if xq is not q_resid:  # (the step's input: the block frees it)
             dealloc(xq)

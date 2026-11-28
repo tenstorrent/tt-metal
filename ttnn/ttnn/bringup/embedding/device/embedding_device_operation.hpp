@@ -21,8 +21,11 @@ struct EmbeddingsDeviceOperation {
     using tensor_args_t = EmbeddingInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<EmbeddingsFusedProgramFactory, EmbeddingsRMProgramFactory, EmbeddingsTilizedIndicesProgramFactory>;
+    using program_factory_t = std::variant<
+        EmbeddingsFusedProgramFactory,
+        EmbeddingsRMProgramFactory,
+        EmbeddingsTilizedIndicesProgramFactory,
+        EmbeddingsServerOrderProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -42,6 +45,9 @@ Tensor embedding(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<uint32_t>& pad_token = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    std::optional<uint32_t> clamp_max = std::nullopt,
+    uint32_t server_start = 0,
+    uint32_t server_valid = 0);
 
 }  // namespace ttnn::prim::bringup

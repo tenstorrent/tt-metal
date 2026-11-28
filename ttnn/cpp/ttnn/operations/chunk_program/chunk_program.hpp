@@ -30,6 +30,7 @@ std::shared_ptr<const operations::chunk_program::ChunkPlan> chunk_program_plan(
 //   GLUED_IDS    io [input, dst]                        values []
 //   DERIVE       io [header, the sections' outputs]     values [header byte offset, the sections' values]
 //   OWNED_SEND   io [out, a record buffer]              values [record buffers, lo, hi, map words]
+//   PAGE_MULTI   io (src, dst) x segments               values (s0, d0, n) x segments (NC.9)
 Tensor chunk_program(
     const std::vector<Tensor>& io,
     const std::shared_ptr<const operations::chunk_program::ChunkPlan>& plan,

@@ -108,6 +108,26 @@ Source: none (new op), deepseek_v41_flash_d_p P.81 (OWNER 2026-11-18: attention 
 - Files: grouped_matmul.py, bank.py, kernels/gmm_bank_reader.cpp, kernels/gmm_compute.cpp, kernels/gmm_writer.cpp,
   README.md; ../INDEX.md. Used by: deepseek_v41_flash_d_p tt/attention.py `_out_wo` under WOA_BANK=on.
 
+### 2026-11-28: bank-path column sub-blocks (GMM_N_SUB) for G = 1 layouts (deepseek_v41_flash_d_p FIX.42)
+- What: the C++ op's bank path accepts a core whose rt x column tiles exceed DEST: gmm_compute.cpp under define
+  GMM_N_SUB=<SN> cuts the core's PN columns into ceil(PN / SN) sub-blocks (as even as possible, wider first), each its
+  own DST block (rt x width, matmul_block_init on a width change), packed to the same fp32 partial slots; SN = DEST /
+  rt (8 / rt at fp32 DEST; full sync as before). The program sets the define only where the shape was refused before
+  (planner.hpp bank_n_sub, device_operation check_bank_dest_fit, program_factory bank_descriptor), so every shape that
+  ran keeps its compiled kernel unchanged; rt alone over DEST is still refused; the interleaved path is unchanged.
+- Why: OWNER 2026-11-27, the wq_b / wo_b bank-layout probe (G = 1, N split over the 8 banks): wq_b's 1024 column
+  tiles give 12-16 a core under the 110-core cap (> 8): "rt 1 x 13 column tiles exceed DEST" before this.
+- Measured (8x4, tests/woa/test_qbob_bank_probe.py in deepseek_v41_flash_d_p): wq_b 256 rows 238.8 -> 202.9 us, 160
+  rows 195.6 -> 151.4 us vs the stock call; wo_b slower (per-cluster x reads); see README "Measured".
+- Tests: tests/unit/test_grouped_matmul_nsub.py (5 cases: rt 1 vs an rt that needs sub-blocks bit-identical, one and two
+  kernel groups; cores over DEST at rt 1 vs fp64 of the device's inputs and a repeat, wq_b's real shape included): 5
+  passed on the 8x4 (resident runner via tests/woa/test_gmm_fork_nsub.py). Full fork regression not run on the 8x4
+  (OV-25); the gate's NC.1 units (test_acceptance, test_grouped_matmul, test_gmm_native_layer) re-run.
+- Cores: unchanged (the layout's; 88 for row / rect 11, 80 for band 10, <= 110).
+- Files: ttnn/cpp/ttnn/operations/grouped_matmul/device/{kernels/gmm_compute.cpp, grouped_matmul_planner.hpp,
+  grouped_matmul_device_operation.cpp, grouped_matmul_program_factory.cpp}; tests/unit/test_grouped_matmul_nsub.py;
+  README.md; ../INDEX.md. Used by: deepseek_v41_flash_d_p tests only (op-level probe; no model wiring).
+
 ### Brought to model_bringup (2026-11-28, deepseek_v41_flash_d_p MB.NC)
 - What: the bank option (w_layout, bank.py; WA.2 / WA.3) and the native C++ ttnn.grouped_matmul (NC.1), taken as is from dnijemcevic/model_bringup_batching (the entries above); the pre-port Python route stays
   in `generic/` for the op test only.
@@ -115,3 +135,9 @@ Source: none (new op), deepseek_v41_flash_d_p P.81 (OWNER 2026-11-18: attention 
 - Measured (8x4, 5120 chunk shapes, models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.NC_layer.md):
   native == the Python prepared route bit for bit, repeats 0, no program-cache growth on fresh buffers.
 - Files: as the entries above; tests models/demos/deepseek_v41_flash_d_p/tests/native/, tests/woa/test_gmm_native_layer.py.
+
+### Brought to model_bringup (2026-11-28, deepseek_v41_flash_d_p MB.QB)
+- What: the GMM_N_SUB bank-path column sub-blocks (FIX.42 above), taken as is from dnijemcevic/model_bringup_batching (47b34099c19; the C++ op byte-identical to that branch), and its first model caller: wq_b's G = 1 bank call (QB.1 3ca2cf6a70d, WQB_BANK, default on) at 160 rows a chip (row 11 bw 4 depth 3 w_inflight 1).
+- Measured (8x4, models/demos/deepseek_v41_flash_d_p/tests/native/test_native_mb_qb.py, results/MB.QB_layer.md): wq_b at 160 rows device 177.8 -> 152.0 us vs model_bringup's stock call (MM_TUNED160's 1D config), host 92.0 -> 53.4 us; bit-identical to the stock call on these inputs, rel vs fp64 1.680e-3 both; repeat 0; 0 program-cache growth. Cores: 88 (<= 110).
+- Tests: the gate case above; tests/unit/test_grouped_matmul_nsub.py brought (via the model's tests/woa/test_gmm_fork_nsub.py), not re-run here (the C++ is the batching branch's, 5 passed there).
+- Used by: deepseek_v41_flash_d_p tt/attention.py `_wqb_mm` (WQB_BANK=on) and `_out_wo` (WOA_BANK=on).

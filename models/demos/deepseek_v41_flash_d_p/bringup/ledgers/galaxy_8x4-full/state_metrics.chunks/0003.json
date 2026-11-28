@@ -3057,6 +3057,22 @@
   "steady_tok_s_p524288_tagentic_cc": 70041.0,
   "steady_tok_s_p786432_tagentic_cc": 64240.9
  },
+ "MB.QB": {
+  "native_cache_growth_emb5120": 0,
+  "native_cache_growth_rot_ckv5120": 0,
+  "native_cache_growth_rot_ckv5120_r128": 0,
+  "native_cache_growth_rot_idx5120": 0,
+  "native_cache_growth_wqb160": 0,
+  "native_mismatch_emb5120": 0.0,
+  "native_mismatch_rot_ckv5120": 0.0,
+  "native_mismatch_rot_ckv5120_r128": 0.0,
+  "native_mismatch_rot_idx5120": 0.0,
+  "native_repeat_emb5120": 0.0,
+  "native_repeat_rot_ckv5120": 0.0,
+  "native_repeat_rot_ckv5120_r128": 0.0,
+  "native_repeat_rot_idx5120": 0.0,
+  "native_repeat_wqb160": 0.0
+ },
  "P.51": {
   "acks_early": 0,
   "acks_early_decoder_skip": 0,

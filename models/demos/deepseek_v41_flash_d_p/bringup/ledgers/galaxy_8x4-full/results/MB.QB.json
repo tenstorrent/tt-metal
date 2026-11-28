@@ -1,0 +1,193 @@
+{
+ "metrics": {
+  "native_cache_growth_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 0
+  },
+  "native_cache_growth_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 0
+  },
+  "native_cache_growth_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 0
+  },
+  "native_cache_growth_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 0
+  },
+  "native_cache_growth_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 0
+  },
+  "native_device_us_on_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 34.43
+  },
+  "native_device_us_on_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 31.55
+  },
+  "native_device_us_on_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 2.44
+  },
+  "native_device_us_on_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 21.9
+  },
+  "native_device_us_on_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 151.71
+  },
+  "native_device_us_today_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 42.4
+  },
+  "native_device_us_today_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 45.24
+  },
+  "native_device_us_today_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 3.28
+  },
+  "native_device_us_today_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 37.0
+  },
+  "native_device_us_today_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 177.7
+  },
+  "native_host_us_on_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 133.3
+  },
+  "native_host_us_on_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 49.7
+  },
+  "native_host_us_on_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 52.0
+  },
+  "native_host_us_on_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 52.5
+  },
+  "native_host_us_on_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 51.8
+  },
+  "native_host_us_today_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 162.1
+  },
+  "native_host_us_today_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 68.0
+  },
+  "native_host_us_today_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 70.3
+  },
+  "native_host_us_today_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 68.7
+  },
+  "native_host_us_today_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 86.2
+  },
+  "native_launches_on_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 2
+  },
+  "native_launches_on_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 1
+  },
+  "native_launches_on_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 1
+  },
+  "native_launches_on_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 1
+  },
+  "native_launches_on_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 1
+  },
+  "native_launches_today_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 3
+  },
+  "native_launches_today_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 2
+  },
+  "native_launches_today_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 2
+  },
+  "native_launches_today_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 2
+  },
+  "native_launches_today_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 1
+  },
+  "native_mismatch_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 0.0
+  },
+  "native_mismatch_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 0.0
+  },
+  "native_mismatch_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 0.0
+  },
+  "native_mismatch_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 0.0
+  },
+  "native_repeat_emb5120": {
+   "t": "2026-11-28T10:13:05",
+   "value": 0.0
+  },
+  "native_repeat_rot_ckv5120": {
+   "t": "2026-11-28T10:13:07",
+   "value": 0.0
+  },
+  "native_repeat_rot_ckv5120_r128": {
+   "t": "2026-11-28T10:13:09",
+   "value": 0.0
+  },
+  "native_repeat_rot_idx5120": {
+   "t": "2026-11-28T10:13:08",
+   "value": 0.0
+  },
+  "native_repeat_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 0.0
+  },
+  "wqb_maxdiff_vs_today_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 0.0
+  },
+  "wqb_rel_bank_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 0.0016796031220488255
+  },
+  "wqb_rel_today_wqb160": {
+   "t": "2026-11-28T10:13:04",
+   "value": 0.0016796031220488255
+  }
+ },
+ "task": "MB.QB"
+}

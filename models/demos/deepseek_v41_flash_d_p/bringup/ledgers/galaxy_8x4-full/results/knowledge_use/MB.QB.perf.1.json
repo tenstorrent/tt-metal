@@ -1,0 +1,99 @@
+{
+ "used": [
+  {
+   "id": "DS41-405",
+   "how": "page_copy_many (PAGE_MULTI, native) is only given sp_stride-0 copies (the replay rotation); the sp_stride RoPE copies keep pages_of_pair / the Python route",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-390",
+   "how": "wq_b's bank call is judged by rel vs fp64 + repeat + cache growth (not gated on bytes vs the stock call); brought the entry with its batching id so the cited id exists here",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-392",
+   "how": "the test uploads the bank copy through bank.upload (host TILE conversion first), as the model does, so both copies hold the same bfp8 bytes",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-191",
+   "how": "expected saving: wq_b at 160 rows is weight-read bound (config sweeps ~0), so only the bank layout's read time counts",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "QB.1's wqb_bank_knobs fell back to the 256-row entry for any other row count: the bank path's fp32 partials (rows x 12 column tiles a core) overflow L1 at 640 / 1280 rows (2x4 / 2x2 at 5120); a per-box condition is needed (now tt/attention.wqb_bank_ok, DS41-406)",
+  "A dict.get(key, f'...{r[x]}') default is evaluated eagerly: a report line for a case without that key raised after every metric was recorded (the first gate run failed on the report only)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "This step adds no program built per chunk value: wq_b has no per-chunk value (addresses are program-cache overrides; cache growth 0 on fresh buffers, native_cache_growth_wqb160 = 0); the embedding's server_start / server_valid are common runtime args outside the hash (native_cache_growth_emb5120 = 0 on new values) and the ids re-upload stays removed (the engine input is read in place, no ids tensor); the rotation's offsets are PAGE_MULTI runtime-arg slots (growth 0). The slice-based sites OV-57 lists (e.g. _ring_carry's ttnn.slice, attention.py) are unchanged by this step; NC.9's carry fusion has no counterpart here (BREADCRUMBS MB.QB)."
+  }
+ ],
+ "cited_only": [
+  "DS41-406",
+  "DS41-407"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.QB",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T10:13:40",
+  "head": "2907c514b72",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.QB.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.QB_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.QB.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/test_native_mb_qb.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_fork_nsub.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_qbob_bank_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/page_multi.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_planner.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/embedding/CHANGELOG.md",
+   "ttnn/ttnn/bringup/embedding/README.md",
+   "ttnn/ttnn/bringup/embedding/device/embedding_device_operation.cpp",
+   "ttnn/ttnn/bringup/embedding/device/embedding_device_operation.hpp",
+   "ttnn/ttnn/bringup/embedding/device/embedding_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/embedding/device/embeddings_fused_program_factory.cpp",
+   "ttnn/ttnn/bringup/embedding/device/embeddings_fused_program_factory.hpp",
+   "ttnn/ttnn/bringup/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
+   "ttnn/ttnn/bringup/embedding/embedding.cpp",
+   "ttnn/ttnn/bringup/embedding/embedding.hpp",
+   "ttnn/ttnn/bringup/embedding/embedding_nanobind.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/README.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/test_grouped_matmul_nsub.py"
+  ]
+ }
+}

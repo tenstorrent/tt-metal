@@ -1167,12 +1167,13 @@ class TtCompressor:
             dealloc(src)
         n, w, off = rm.shape[-2], rm.shape[-1], (lo - start) // r
         from .page_copy import on as pos_dynamic
-        from .page_copy import page_copy
+        from .page_copy import page_copy_many
 
-        if pos_dynamic():  # MB.2: the rotation as two page copies (the replay offset a runtime value)
+        # MB.2: the rotation as two page copies (the replay offset a runtime value); NC.9 / MB.QB: in one program
+        # (NATIVE_FUSIONS=on; off: the two page copies)
+        if pos_dynamic():
             rot = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, n, w]), rm.dtype, rm.layout, rm.device(), DRAM)
-            page_copy(rm, rot, off, 0, n - off)
-            page_copy(rm, rot, 0, n - off, off)
+            page_copy_many([(rm, rot, off, 0, n - off), (rm, rot, 0, n - off, off)])
         else:
             head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
             tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))

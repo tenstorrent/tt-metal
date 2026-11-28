@@ -70,9 +70,37 @@ void kernel_main() {
     constexpr uint32_t full_chunk_bytes = tiles_per_chunk * bytes_per_tile_row;
     constexpr uint32_t last_chunk_bytes = last_chunk_tiles * bytes_per_tile_row;
 
+#ifdef SERVER_ORDER
+    // NC.9 (deepseek_v41_flash_d_p): the input is every mesh row's ids in the server's order ([SP, 1, W], a page a
+    // row); this chip's block i is natural unit d (32 ids) of the chunk, read where tt/page_copy.IdsReorder's kernel
+    // (chunk_program ids_reorder.cpp) reads it, positions >= valid and ids > clamp_max read as clamp_max.
+    constexpr uint32_t WU = get_arg(args::server_units);  // 32-id units a mesh row (W / 32)
+    constexpr uint32_t SPR = get_arg(args::server_rows);  // mesh rows
+    constexpr uint32_t VMAX = get_arg(args::clamp_max);   // vocab - 1 (the clamp and the pad id)
+    const uint32_t me = get_arg(args::server_me);         // this mesh row
+    const uint32_t iu = get_arg(args::server_iu);         // (start mod W) / 32 (per call)
+    const uint32_t cs = get_arg(args::server_cs);         // (start / W) mod SP (per call)
+    const uint32_t valid = get_arg(args::server_valid);   // natural positions below it are ids (per call)
+    constexpr uint32_t SU = WU * SPR;                     // units a chunk
+    const uint32_t u0 = input_start_offset / input_block_size_bytes;
+#endif
     uint32_t curr_row = input_start_id;
     uint32_t offset = input_start_offset;
     for (uint32_t i = 0; i < num_blocks; ++i) {
+#ifdef SERVER_ORDER
+        const uint32_t d = (me * WU) + u0 + i;  // the natural unit
+        if (d + iu < WU) {                      // the start row's head
+            curr_row = cs;
+            offset = d * input_block_size_bytes;
+        } else if (d + iu >= SU) {  // the start row's tail: the chunk's last iu units
+            curr_row = cs;
+            offset = (d + WU - SU) * input_block_size_bytes;
+        } else {
+            const uint32_t e = d + iu;
+            curr_row = (e / WU + cs) % SPR;
+            offset = (e % WU) * input_block_size_bytes;
+        }
+#endif
 #ifdef ARCH_QUASAR
         noc.async_read(input, index_scratch, input_block_size_bytes, {.page_id = curr_row, .offset_bytes = offset}, {});
 #else
@@ -99,6 +127,11 @@ void kernel_main() {
                     auto index_lock = index_scratch.scoped_lock(k, 1);
                     token = index_scratch[k];
                 }
+#ifdef SERVER_ORDER
+                if ((d * tile_height) + k >= valid || token > VMAX) {
+                    token = VMAX;
+                }
+#endif
                 read_token_async(
                     noc, token, weights, l1_write_addr, weight_chunk_size, weight_chunk_offset, weight_offset);
                 l1_write_addr += weight_chunk_size;
@@ -107,10 +140,12 @@ void kernel_main() {
             dfb_in0.push_back(this_chunk_tiles);
         }
 
+#ifndef SERVER_ORDER
         offset += input_block_size_bytes;
         if (offset == input_page_size) {
             offset = 0;
             curr_row++;
         }
+#endif
     }
 }

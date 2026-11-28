@@ -823,6 +823,35 @@ TABLE = {
         "= today's within noise (84.3 vs 80.2 us at 256 rows, 53.9 vs 51.2 at 160; two groups 113.1 / 73.7), device "
         "130.3 / 114.2 us (two groups 130.0 / 113.6)",
     ),
+    "WQB_BANK": Setting(
+        "on",
+        ("off", "on"),
+        "QB.1 (OWNER 2026-11-27, plan step 4: wq_b on the per-bank C++ grouped_matmul, G = 1; FIX.42's op probe, "
+        "tests/woa/test_qbob_bank_probe.py, DS41-406 (the batching branch's DS41-405)), read per call (CALL-TIME, bringup/hooks.py batch_call_settings "
+        "/ batch_call_apply). on = the attention's wq_b (ATTN_SP32_PROJ: [rows, 1280] @ [1280, 32768] bfp8 -> bf16, "
+        "replicated) runs ttnn.bringup.grouped_matmul with a G = 1 bank layout (grouped_matmul_ttnn/bank.py: the 1024 "
+        "column tiles split evenly over the 8 DRAM banks, each bank's columns over 11 cores next to it, K-major in its "
+        "own bank, x multicast in each cluster; GMM_N_SUB DEST sub-blocks), layout and knobs by the load's rows a chip "
+        "(tt/mm_configs.WQB_BANK_KNOBS: 256 rows rect 11 bw 4 depth 4, 160 rows row 11 bw 4 depth 3). Op level (8x4, "
+        "the matmul-capped 11 x 10 grid): 238.8 -> 202.9 us a call at 256 rows, 195.6 -> 151.4 at 160; rel vs fp64 "
+        "equal to the stock call's; NOT bit-identical to it (another K order, DS41-390: judged by the reference gate, "
+        "repeats exact). off = today's interleaved weight through mm_configs (minimal / 1D). A layout this load did not "
+        "upload (WQB_BANK_COPIES) raises. Per box (agent rule 15, MB.QB): the bank copy only where the load's rows a chip "
+        "have a swept entry in WQB_BANK_KNOBS (160: the 8x4 at 5120; 256: 8192) and the layout plans on the chip's "
+        "matmul grid; any other row count (4x4 320, 2x4 640, 2x2 1280 at 5120: the bank path's fp32 partials, rows x "
+        "12 column tiles a core, overflow L1) keeps the interleaved call under either value, said once at load. "
+        "MB.QB (model_bringup, 5120): default on (owner brief), op level 160 rows: see results/MB.QB_layer.md",
+    ),
+    "WQB_BANK_COPIES": Setting(
+        "selected",
+        ("selected", "both"),
+        "QB.1 (as WOA_BANK_COPIES, OV-77), read at load. selected = upload only the wq_b copy of the layout WQB_BANK "
+        "selects at load (serving, the shipped default: one copy, 42.5 MiB bfp8 a layer a chip); both = the interleaved "
+        "AND the bank copy (+42.5 MiB a layer a chip) so WQB_BANK switches per call in one load: only for the off / on "
+        "A/B and tests. A held model switched to a layout it lacks gets that copy added between runs "
+        "(bringup/hooks.batch_call_apply, tt/attention.wqb_ensure: re-read from the checkpoint), never on the request "
+        "path",
+    ),
     "WO_A_GMM_BLOCK_W": Setting(
         4,
         (1, 2, 4, 8, 16, 32),
@@ -1556,6 +1585,16 @@ TABLE = {
         "keeps its readback for the engram hash); adapter.compile warms the finite set of shapes (a cold chunk, a "
         "continued one, a pulled-back partial last chunk with a replay). Bit-identical to off. off = the slices (one "
         "program a position / slot / history length) and the host ids re-upload",
+    ),
+    "NATIVE_FUSIONS": Setting(
+        "on",
+        ("on", "off"),
+        "NC.9 (OWNER 2026-11-28, the remaining tiny-op fusions), read per call (a call-time switch). on = the engine's "
+        "ids put into natural order by the embedding's own reader (ttnn.bringup.embedding server_start / server_valid "
+        "/ clamp_max: no IdsReorder kernel, no ids tensor), and the page copies into one destination done in one "
+        "ttnn.chunk_program (tt/page_copy.page_copy_many: the replay rotation's two). MB.QB (model_bringup): the "
+        "window carry's pair is not here (this branch's _ring_carry takes slices, no page-copy route). "
+        "Bit-identical to off. off = NC.7's sequence (IdsReorder then the embedding; one page copy a piece)",
     ),
 }
 

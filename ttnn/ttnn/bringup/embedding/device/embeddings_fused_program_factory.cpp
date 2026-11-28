@@ -20,8 +20,19 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_program_artifacts(
-    const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
+namespace {
+
+const KernelSpecName kReader{"reader"};
+const TensorParamName kInputParam{"input"};
+const TensorParamName kWeightsParam{"weights"};
+const TensorParamName kOutputParam{"output"};
+
+// The fused program; ``server_row`` (NC.9 server order): this program's mesh row.
+ttnn::device_operation::ProgramArtifacts build_fused(
+    const EmbeddingParams& operation_attributes,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value,
+    std::optional<uint32_t> server_row) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
@@ -53,7 +64,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     // weights shape is [1, 1, num_embeddings, num_dim]
 
-    uint32_t batch_size = a.padded_shape()[0];
+    // NC.9 server order: the input holds every mesh row's ids ([SP, 1, 1, W]); a chip embeds its own W rows
+    const bool server_order = operation_attributes.clamp_max.has_value();
+    uint32_t batch_size = server_order ? 1 : a.padded_shape()[0];
     uint32_t num_output_rows_per_batch = a.padded_shape()[-1];
     uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
     // Note: num_blocks is just blocks along height
@@ -177,7 +190,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // -----------------------------------------------------------------------
     // Resource names
     // -----------------------------------------------------------------------
-    const KernelSpecName READER{"reader"};
+    const KernelSpecName& READER = kReader;
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE_G1{"compute_group_1"};
     const KernelSpecName COMPUTE_G2{"compute_group_2"};
@@ -190,9 +203,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // back out of it, both over the NoC.
     const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
 
-    const TensorParamName INPUT_PARAM{"input"};
-    const TensorParamName WEIGHTS_PARAM{"weights"};
-    const TensorParamName OUTPUT_PARAM{"output"};
+    const TensorParamName& INPUT_PARAM = kInputParam;
+    const TensorParamName& WEIGHTS_PARAM = kWeightsParam;
+    const TensorParamName& OUTPUT_PARAM = kOutputParam;
 
     ProgramSpec spec;
     spec.name = "embeddings_fused";
@@ -304,6 +317,23 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (embeddings_type == EmbeddingsType::PADDED) {
         reader_rta_names.push_back("pad_token");
     }
+    KernelSpec::CompileTimeArgs reader_cta = {
+        {"input_page_size", input_page_size},
+        {"weight_block_size", weight_block_size},
+        {"tiles_per_chunk", tiles_per_chunk},
+        {"input_block_size_bytes", TILE_HEIGHT * input_element_size_bytes},
+        {"num_chunks", num_chunks},
+        {"last_chunk_tiles", last_chunk_tiles},
+    };
+    Group<std::string> reader_crta_names;
+    if (server_order) {
+        // NC.9: tt/page_copy.IdsReorder's kernel as the reader's index read (units of 32 ids, the clamp)
+        embedding_defines.emplace("SERVER_ORDER", "1");
+        reader_cta.emplace("server_units", num_output_rows_per_batch / TILE_HEIGHT);
+        reader_cta.emplace("server_rows", a.padded_shape()[0]);
+        reader_cta.emplace("clamp_max", *operation_attributes.clamp_max);
+        reader_crta_names = {"server_me", "server_iu", "server_cs", "server_valid"};
+    }
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
@@ -316,16 +346,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
                 TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
             },
-        .compile_time_args =
-            {
-                {"input_page_size", input_page_size},
-                {"weight_block_size", weight_block_size},
-                {"tiles_per_chunk", tiles_per_chunk},
-                {"input_block_size_bytes", input_block_size_bytes},
-                {"num_chunks", num_chunks},
-                {"last_chunk_tiles", last_chunk_tiles},
-            },
-        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
+        .compile_time_args = std::move(reader_cta),
+        .runtime_arg_schema =
+            {.runtime_arg_names = std::move(reader_rta_names),
+             .common_runtime_arg_names = std::move(reader_crta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
@@ -510,6 +534,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         }
     }
 
+    if (server_order) {
+        const auto v = server_order_values(operation_attributes, a.padded_shape()[0], num_output_rows_per_batch);
+        reader_run_args.common_runtime_arg_values = {
+            {"server_me", server_row.value()}, {"server_iu", v.iu}, {"server_cs", v.cs}, {"server_valid", v.valid}};
+    }
+
     ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     if (!output_sharded) {
@@ -520,6 +550,54 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     run_args.tensor_args.emplace(OUTPUT_PARAM, output_mesh_tensor);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_program_artifacts(
+    const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
+    return build_fused(operation_attributes, tensor_args, tensor_return_value, std::nullopt);
+}
+
+ttnn::device_operation::MeshWorkloadArtifacts EmbeddingsServerOrderProgramFactory::create_mesh_workload_artifacts(
+    const EmbeddingParams& operation_attributes,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // one program a mesh row (its row index a reader arg), as tt/page_copy.IdsReorder's
+    const auto& shape = tensor_args.input_tensor_arg.device()->shape();
+    const uint32_t rows = shape[0], cols = shape.dims() > 1 ? shape[1] : 1;
+    TT_FATAL(
+        tensor_coords.coords().size() == static_cast<size_t>(rows) * cols,
+        "embedding server order: the input on every chip of the mesh");
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+    for (uint32_t r = 0; r < rows; ++r) {
+        auto per_row = build_fused(operation_attributes, tensor_args, tensor_return_value, r);
+        artifacts.programs.push_back({
+            .range = ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(r, 0), ttnn::MeshCoordinate(r, cols - 1)),
+            .spec = std::move(per_row.spec),
+            .run_params = std::move(per_row.run_params),
+        });
+    }
+    return artifacts;
+}
+
+tt::tt_metal::ProgramRunArgs EmbeddingsServerOrderProgramFactory::override_runtime_arguments(
+    const EmbeddingParams& operation_attributes,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRange& /*range*/) {
+    // The key pins everything else (the work split, the row index); a call rewrites the io tensors and the values.
+    const auto& a = tensor_args.input_tensor_arg;
+    const auto v = server_order_values(operation_attributes, a.padded_shape()[0], a.padded_shape()[-1]);
+    ProgramRunArgs run_args;
+    KernelRunArgs reader{.kernel = kReader};
+    reader.common_runtime_arg_values = {{"server_iu", v.iu}, {"server_cs", v.cs}, {"server_valid", v.valid}};
+    run_args.kernel_run_args.push_back(std::move(reader));
+    run_args.tensor_args.emplace(kInputParam, a.mesh_tensor());
+    run_args.tensor_args.emplace(kWeightsParam, tensor_args.weight_arg.mesh_tensor());
+    run_args.tensor_args.emplace(kOutputParam, tensor_return_value.mesh_tensor());
+    return run_args;
 }
 
 }  // namespace ttnn::prim::bringup

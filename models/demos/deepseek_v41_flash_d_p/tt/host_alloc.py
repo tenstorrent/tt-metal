@@ -115,8 +115,8 @@ def _reserve_attention(model) -> None:
     ccl.reserve(mesh, "q_a.xq", [1, 1, q, k], gdt, tile)
     ccl.reserve(mesh, "q_a.p", [1, 1, q, n], act_dtype(), tile)
     # _q_stock: q_resid x the softmax scale as wq_b's input, wq_b's bf16 output
-    ccl.reserve(mesh, "attn.xq", [1, 1, q, int(att.wq_b.shape[-2])], gdt, tile)
-    ccl.reserve(mesh, "attn.qb", [1, 1, q, int(att.wq_b.shape[-1])], ttnn.bfloat16, tile)
+    ccl.reserve(mesh, "attn.xq", [1, 1, q, int(att.wq_b_shape[-2])], gdt, tile)
+    ccl.reserve(mesh, "attn.qb", [1, 1, q, int(att.wq_b_shape[-1])], ttnn.bfloat16, tile)  # (WQB_BANK: either copy)
     # _out_proj: the grouped heads as wo_a's input, wo_a's output
     ccl.reserve(mesh, "attn.oa", [1, att.g_l, q, att.hpg * att.d], gdt, tile)
     ydt = gdt if (att.glue and bf16_activations()) else ttnn.float32

@@ -22,6 +22,7 @@ enum class ChunkKind : uint8_t {
     GLUED_IDS = 3,    // tt/page_copy.GluedIdsReorder (the kernel after the SP all-gather, if any)
     DERIVE = 4,       // tt/glued_derive.Derive (one or more sections in one program, each on its own cores)
     OWNED_SEND = 5,   // tt/owned_gather.OwnedSend
+    PAGE_MULTI = 6,   // tt/page_copy.page_copy_many (NC.9: several page copies of one page size in one program)
 };
 
 // Everything structural about one Python program instance, made once by the model and kept; its hash is computed
