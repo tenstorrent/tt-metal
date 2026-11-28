@@ -15,13 +15,9 @@ from ....models.transformers.minimax_h3.sol_prepass import SolGeometry, build_ro
 from ....pipelines.minimax_h3.packing import video_latent_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
-from ....pipelines.minimax_h3.policy import SolSchedule, sol_schedule
+from ....pipelines.minimax_h3.policy import SolSchedule
 
 _SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS", "H3_SOL_POOLED")
-
-
-def test_the_off_switch_beats_the_default():
-    assert sol_schedule({"H3_SOL_ATTN": "0"}, "10eros-max") is None
 
 
 _EROS = SolSchedule(tau=1.13, dense_steps=3, dense_layers=0, sinks=True)  # the 10Eros-Max card and a third dense step
@@ -33,6 +29,7 @@ _HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # NVIDIA
     ("file", "task", "env", "expected"),
     [
         ("/models/v1/v1t.safetensors", "t2va", {}, _EROS_DEFAULT),
+        ("/models/v1/v1t.safetensors", "t2va", {"H3_SOL_ATTN": "0"}, None),  # the off switch
         ("/models/v1/v1t.safetensors", "ref2va", {}, None),
         ("/models/v1/v1t.safetensors", "ref2va", {"H3_SOL_ATTN": "1"}, SolSchedule()),
         ("/models/v1/v1n.safetensors", "t2va", {}, None),  # the non-Turbo build
