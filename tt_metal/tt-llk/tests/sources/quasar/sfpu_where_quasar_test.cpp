@@ -45,28 +45,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     LLK_ASSERT(TILE_CNT == 3, "Where stages three Dest tiles (cond, true, false)");
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
+    {
+        // If Dst is 32b and MATH uses FPU datacopy (MOVA2D → ELWADD fallback), we need both SrcA and SrcB formats configured.
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+    }
+    if constexpr (unpack_to_dest)
+    {
+        // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
+        // bank offset reset to 0 keeps every section at DEST tile 0.
+        _llk_unpack_dest_init_();
+    }
     {
         START_PERF_MEASURE("INIT")
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
-        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-        {
-            // If Dst is 32b and MATH uses FPU datacopy (MOVA2D → ELWADD fallback), we need both SrcA and SrcB formats configured.
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-        else
+        if constexpr (!(is_fp32_dest_acc_en && !unpack_to_dest))
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
         if constexpr (unpack_to_dest)
         {
-            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
-            // bank offset reset to 0 keeps every section at DEST tile 0.
-            _llk_unpack_dest_init_();
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
         }
         else
@@ -162,9 +166,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         if constexpr (!unpack_to_dest)
         {
@@ -278,14 +283,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
     {
         START_PERF_MEASURE("INIT")
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP.

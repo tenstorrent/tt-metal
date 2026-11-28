@@ -39,6 +39,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B         = params.buffer_B;
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
+    {
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+    }
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_dest_init_();
+    }
     {
         START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
@@ -84,19 +94,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::trisc::program_bfd<unp_res, ckernel::trisc::L1AccessMode::Continuous>(tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
 
-        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-        {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-        else
+        if constexpr (!(is_fp32_dest_acc_en && !unpack_to_dest))
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_dest_init_();
             _llk_unpack_tilize_to_dest_init_(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         else
@@ -194,6 +198,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
     // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (!unpack_to_dest)
+    {
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+    }
     {
         START_PERF_MEASURE("INIT")
         if constexpr (!unpack_to_dest)
@@ -204,9 +213,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
-
-            DataFormat math_format = static_cast<DataFormat>(formats.math);
-            _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -283,6 +289,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none() /*relu_config*/);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE has no active DEST producer, so it must clear the
@@ -300,7 +308,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst);
         constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none() /*relu_config*/);
         _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);
         PROFILER_SYNC();
     }

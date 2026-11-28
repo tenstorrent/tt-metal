@@ -37,6 +37,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
     {
         START_PERF_MEASURE("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
@@ -45,8 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, INPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
@@ -109,6 +110,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
@@ -116,9 +120,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
-
-        DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape, ACC_TO_DEST);
@@ -192,6 +193,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, tensor_shape, OUTPUT_NUM_TILES_IN_BLOCK);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE: no math↔pack dest-dvalid handshake.
@@ -205,10 +211,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, tensor_shape, OUTPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
     {
