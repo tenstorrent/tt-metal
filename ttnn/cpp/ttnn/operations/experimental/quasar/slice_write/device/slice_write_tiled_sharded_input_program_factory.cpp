@@ -142,13 +142,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     SliceWriteRuntimeArgs ret_val(num_cores_total);
 
     uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(output_tensor, output_tensor_start);
+    const auto grid_origin = input_cores.bounding_box().start_coord;
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
         uint32_t core_h_index = core_index;
         if (is_block_sharded) {
-            core_w_index = rm_orientation ? core.x : core.y;
-            core_h_index = rm_orientation ? core.y : core.x;
+            core_w_index = rm_orientation ? (core.x - grid_origin.x) : (core.y - grid_origin.y);
+            core_h_index = rm_orientation ? (core.y - grid_origin.y) : (core.x - grid_origin.x);
         } else if (is_width_sharded) {
             core_h_index = 0;
             core_w_index = core_index;
@@ -157,7 +158,9 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         const uint32_t num_sticks_read = core_h_index * num_tiles_nhw_per_core;
         const uint32_t width_offset = core_w_index * num_tiles_per_channel;
 
-        const uint32_t channels_tiles_this_core = std::min(output_channel_tiles - width_offset, num_tiles_per_channel);
+        const uint32_t channels_tiles_this_core =
+            width_offset < output_channel_tiles ? std::min(output_channel_tiles - width_offset, num_tiles_per_channel)
+                                                : 0;
         id_per_dim[0] = 0;
         uint32_t unpadded_written = num_sticks_read;
         uint32_t start_id = id_per_dim[0] + start_offset + width_offset;
