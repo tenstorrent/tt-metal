@@ -12,6 +12,8 @@
 // Compare each HAL function in codegen.cpp with its adjacent reference_
 // function. Disable identical-code folding so both bodies are emitted
 // independently.
+// PACR operands are (CfgContext, RowPadZero, DstAccessMode, AddrMod, AddrCntContext, ZeroWrite, ReadIntfSel,
+// OvrdThreadId, Concat, CtxtCtrl, Flush, Last). The HAL leaves the operands the Blackhole ISA does not support at zero.
 
 //--- common.h
 #pragma once
@@ -27,106 +29,74 @@ namespace pack = hal::pack;
 
 extern "C" __attribute__((noinline, used)) void transfer_defaults()
 {
-    pack::run<pack::DataTransfer {}>();
+    pack::Packer0.transfer<pack::Transfer {}>();
 }
 
 // CHECK-LABEL: <transfer_defaults>:
 // CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,0,0,0{{$}}
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void transfer_every_field()
+extern "C" __attribute__((noinline, used)) void transfer_every_option()
 {
-    pack::run<pack::DataTransfer {
-        .address_modifier      = 3,
-        .context               = pack::ContextControl::HardwareCounterNoAdvance,
-        .configuration_context = 3,
-        .counter_context       = 2,
-        .override_thread_id    = true,
-        .interfaces            = 0xf,
-        .datum_override        = pack::DatumOverride::Zero,
-        .dest_access           = pack::DestAccess::Strided,
-        .padding               = pack::RowPadding::FinalOnly,
-        .alignment             = pack::PaddingAlignment::To16Datums,
-        .concatenation         = pack::Concatenation::Append,
-        .boundary              = pack::TileBoundary::Last,
+    pack::Packer0.transfer<pack::Transfer {
+        .address_modifier = 3,
+        .interfaces       = pack::ReadInterfaces::Row1And3,
+        .datum_override   = pack::DatumOverride::Zero,
+        .dest_access      = pack::DestAccess::Strided,
+        .concatenation    = pack::Concatenation::Append,
+        .boundary         = pack::TileBoundary::Last,
     }>();
 }
 
-// CHECK-LABEL: <transfer_every_field>:
-// CHECK-NEXT: ttpacr 3,7,1,3,2,1,15,1,1,3,0,1{{$}}
+// CHECK-LABEL: <transfer_every_option>:
+// CHECK-NEXT: ttpacr 0,0,1,3,0,1,10,0,1,0,0,1{{$}}
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void transfer_context_controls()
+// Each read-interface selection is its ReadIntfSel mask.
+extern "C" __attribute__((noinline, used)) void transfer_read_interfaces()
 {
-    pack::run<pack::DataTransfer {.context = pack::ContextControl::HardwareCounter, .interfaces = 0b0101}>();
-    pack::run<pack::DataTransfer {.context = pack::ContextControl::HardwareCounterReset}>();
-    pack::run<pack::DataTransfer {.padding = pack::RowPadding::AllTransfers, .boundary = pack::TileBoundary::Last}>();
-    pack::run<pack::DataTransfer {.padding = pack::RowPadding::NonConcatenated, .alignment = pack::PaddingAlignment::To16Datums}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0To1}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0To2}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0And2}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row1And3}>();
 }
 
-// CHECK-LABEL: <transfer_context_controls>:
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,5,0,0,1,0,0{{$}}
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,2,0,0{{$}}
-// CHECK-NEXT: ttpacr 0,1,0,0,0,0,0,0,0,0,0,1{{$}}
-// CHECK-NEXT: ttpacr 0,6,0,0,0,0,0,0,0,0,0,0{{$}}
+// CHECK-LABEL: <transfer_read_interfaces>:
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,1,0,0,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,3,0,0,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,7,0,0,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,5,0,0,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,10,0,0,0,0,0{{$}}
 // CHECK-NEXT: ret
 
-// The value is staged in two 16-bit halves before the write consumes it.
-extern "C" __attribute__((noinline, used)) void register_write()
+// A tilize half-tile: Append rows on alternating interface pairs, then the row that closes the tile.
+extern "C" __attribute__((noinline, used)) void transfer_tilize_rows()
 {
-    pack::run<pack::RegisterWriteValue {.value = 0x1234}>();
-    pack::run<pack::RegisterWriteValue {.high_half = true, .value = 0xabcd}>();
-    pack::run<pack::RegisterWrite {.address_slot = 3, .stream_id = 63}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0And2, .concatenation = pack::Concatenation::Append}>();
+    pack::Packer0
+        .transfer<pack::Transfer {.address_modifier = 1, .interfaces = pack::ReadInterfaces::Row1And3, .concatenation = pack::Concatenation::Append}>();
+    pack::Packer0.transfer<pack::Transfer {.address_modifier = 2, .interfaces = pack::ReadInterfaces::Row1And3, .boundary = pack::TileBoundary::Last}>();
 }
 
-// The load flavor's value (bits 18:3) and half select (bit 2) overlap the
-// write flavor's StreamId..Unused fields; objdump decodes them as those.
-// CHECK-LABEL: <register_write>:
-// CHECK-NEXT: ttpacrsetreg 0,1,9,0,1,40,0,0{{$}}
-// CHECK-NEXT: ttpacrsetreg 0,1,85,3,2,27,0,0{{$}}
-// CHECK-NEXT: ttpacrsetreg 1,0,0,0,3,63,1,0{{$}}
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void edge_window()
-{
-    pack::run<pack::EdgeWindow {.x_start = 1, .x_end = 2, .y_start = 3, .y_end = 15}>();
-}
-
-// CHECK-LABEL: <edge_window>:
-// CHECK-NEXT: ttsetpkedgof 15,3,2,1{{$}}
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void flush_and_clear()
-{
-    pack::flush_write_aligners();
-    pack::clear_exponent_histogram();
-}
-
-// CHECK-LABEL: <flush_and_clear>:
-// CHECK-NEXT: ttpacr 0,0,0,0,0,0,0,0,0,0,1,0{{$}}
-// CHECK-NEXT: ttclrexphist
+// CHECK-LABEL: <transfer_tilize_rows>:
+// CHECK-NEXT: ttpacr 0,0,0,0,0,0,5,0,1,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,1,0,0,10,0,1,0,0,0{{$}}
+// CHECK-NEXT: ttpacr 0,0,0,2,0,0,10,0,0,0,0,1{{$}}
 // CHECK-NEXT: ret
 
 //--- codegen.cpp
 #include "common.h"
 
-extern "C" __attribute__((noinline, used)) void store_encoded_operations(std::uint32_t* words)
+// Encoded transfers are plain words for MOP and replay programs.
+extern "C" __attribute__((noinline, used)) void store_encoded_transfers(std::uint32_t* words)
 {
-    constexpr std::uint32_t transfer = pack::DataTransfer {.interfaces = 0b0011, .boundary = pack::TileBoundary::Last}.get_operation();
-    constexpr std::uint32_t write    = pack::RegisterWrite {.address_slot = 1}.get_operation();
-    constexpr std::uint32_t value    = pack::RegisterWriteValue {.value = 0xffff}.get_operation();
-    constexpr std::uint32_t window   = pack::EdgeWindow {.y_end = 1}.get_operation();
-    words[0]                         = transfer;
-    words[1]                         = write;
-    words[2]                         = value;
-    words[3]                         = window;
-    words[4]                         = pack::flush_write_aligners_operation();
-    words[5]                         = pack::clear_exponent_histogram_operation();
+    constexpr auto packer = pack::Packer0.operation();
+    words[0]              = packer.transfer<pack::Transfer {.interfaces = pack::ReadInterfaces::Row0To1, .boundary = pack::TileBoundary::Last}>();
+    words[1]              = packer.transfer({.address_modifier = 2, .dest_access = pack::DestAccess::Strided});
 }
 
-// Value 0xffff sits in bits 18:3, which the write-flavor macro splits into
-// Unused = 0x7f, DisableStall = 3, AddrSel = 3 and StreamId = 0x3e.
-extern "C" __attribute__((noinline, used)) void reference_store_encoded_operations(std::uint32_t* words)
+extern "C" __attribute__((noinline, used)) void reference_store_encoded_transfers(std::uint32_t* words)
 {
     words[0] = TT_OP_PACR(
         0 /*CfgContext*/,
@@ -141,21 +111,81 @@ extern "C" __attribute__((noinline, used)) void reference_store_encoded_operatio
         0 /*CtxtCtrl*/,
         0 /*Flush*/,
         1 /*Last*/);
-    words[1] = TT_OP_PACR_SETREG(1 /*Push*/, 0 /*ModeSel*/, 0 /*Unused*/, 0 /*DisableStall*/, 1 /*AddrSel*/, 0 /*StreamId*/, 1 /*Flush*/, 0 /*Last*/);
-    words[2] = TT_OP_PACR_SETREG(0 /*Push*/, 1 /*ModeSel*/, 0x7f /*Unused*/, 3 /*DisableStall*/, 3 /*AddrSel*/, 0x3e /*StreamId*/, 0 /*Flush*/, 0 /*Last*/);
-    words[3] = TT_OP_SETPKEDGOF(1 /*y_end*/, 0 /*y_start*/, 0 /*x_end*/, 0 /*x_start*/);
-    words[4] = TT_OP_PACR(
+    words[1] = TT_OP_PACR(
         0 /*CfgContext*/,
         0 /*RowPadZero*/,
-        0 /*DstAccessMode*/,
-        0 /*AddrMode*/,
+        1 /*DstAccessMode*/,
+        2 /*AddrMode*/,
         0 /*AddrCntContext*/,
         0 /*ZeroWrite*/,
         0 /*ReadIntfSel*/,
         0 /*OvrdThreadId*/,
         0 /*Concat*/,
         0 /*CtxtCtrl*/,
-        1 /*Flush*/,
+        0 /*Flush*/,
         0 /*Last*/);
-    words[5] = TT_OP_CLREXPHIST;
+}
+
+// The MOP pattern: encode a transfer, change one option, encode again.
+extern "C" __attribute__((noinline, used)) void store_mop_transfers(std::uint32_t* words)
+{
+    constexpr auto packer = pack::Packer0.operation();
+    pack::Transfer transfer {.interfaces = pack::ReadInterfaces::Row0, .datum_override = pack::DatumOverride::Zero};
+    words[0]                  = packer.transfer(transfer);
+    transfer.address_modifier = 1;
+    transfer.boundary         = pack::TileBoundary::Last;
+    words[1]                  = packer.transfer(transfer);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_store_mop_transfers(std::uint32_t* words)
+{
+    words[0] = TT_OP_PACR(
+        0 /*CfgContext*/,
+        0 /*RowPadZero*/,
+        0 /*DstAccessMode*/,
+        0 /*AddrMode*/,
+        0 /*AddrCntContext*/,
+        1 /*ZeroWrite*/,
+        0b0001 /*ReadIntfSel*/,
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        0 /*Last*/);
+    words[1] = TT_OP_PACR(
+        0 /*CfgContext*/,
+        0 /*RowPadZero*/,
+        0 /*DstAccessMode*/,
+        1 /*AddrMode*/,
+        0 /*AddrCntContext*/,
+        1 /*ZeroWrite*/,
+        0b0001 /*ReadIntfSel*/,
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        1 /*Last*/);
+}
+
+// A template transfer issues the same immediate as production's TTI_PACR.
+extern "C" __attribute__((noinline, used)) void issue_template_transfer()
+{
+    pack::Packer0.transfer<pack::Transfer {.address_modifier = 1, .interfaces = pack::ReadInterfaces::Row0To2, .dest_access = pack::DestAccess::Strided}>();
+}
+
+extern "C" __attribute__((noinline, used)) void reference_issue_template_transfer()
+{
+    TTI_PACR(
+        0 /*CfgContext*/,
+        0 /*RowPadZero*/,
+        1 /*DstAccessMode*/,
+        1 /*AddrMode*/,
+        0 /*AddrCntContext*/,
+        0 /*ZeroWrite*/,
+        0b0111 /*ReadIntfSel*/,
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        0 /*Last*/);
 }

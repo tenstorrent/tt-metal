@@ -4,45 +4,39 @@
 
 // clang-format off
 // RUN: %split-file %s %t
-// RUN: %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/valid-descriptors.cpp
+// RUN: %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/valid-options.cpp
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-address-modifier.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_ADDRESS_MODIFIER
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-configuration-context.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_CONFIGURATION_CONTEXT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-counter-context.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_COUNTER_CONTEXT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-interfaces.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_INTERFACES
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/alignment-without-padding.cpp 2>&1 | FileCheck %s --check-prefix=ALIGNMENT_WITHOUT_PADDING
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-address-slot.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_ADDRESS_SLOT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-stream-id.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_STREAM_ID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-edge-offset.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_EDGE_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-constant-encoding.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_CONSTANT_ENCODING
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/unsupported-interfaces.cpp 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED_INTERFACES
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/invalid-encode.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_ENCODE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/runtime-address-modifier.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_ADDRESS_MODIFIER
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_pack_thread} %t/runtime-interfaces.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_INTERFACES
 // clang-format on
 
-//--- valid-descriptors.cpp
+//--- valid-options.cpp
 #include "hal/pack.h"
 
 namespace pack = hal::pack;
 
-static_assert(pack::is_valid(pack::DataTransfer {}));
-static_assert(pack::is_valid(pack::DataTransfer {
-    .address_modifier      = 3,
-    .configuration_context = 3,
-    .counter_context       = 2,
-    .interfaces            = 15,
-    .padding               = pack::RowPadding::FinalOnly,
-    .alignment             = pack::PaddingAlignment::To16Datums,
+static_assert(pack::is_valid(pack::Transfer {}));
+static_assert(pack::is_valid(pack::Transfer {
+    .address_modifier = 3,
+    .interfaces       = pack::ReadInterfaces::Row1And3,
+    .datum_override   = pack::DatumOverride::Zero,
+    .dest_access      = pack::DestAccess::Strided,
+    .concatenation    = pack::Concatenation::Append,
+    .boundary         = pack::TileBoundary::Last,
 }));
-static_assert(!pack::is_valid(pack::DataTransfer {.alignment = pack::PaddingAlignment::To16Datums}));
-static_assert(!pack::is_valid(pack::DataTransfer {.context = static_cast<pack::ContextControl>(4)}));
-static_assert(!pack::is_valid(pack::DataTransfer {.padding = static_cast<pack::RowPadding>(4)}));
-static_assert(pack::is_valid(pack::RegisterWrite {.address_slot = 3, .stream_id = 63}));
-static_assert(!pack::is_valid(pack::RegisterWrite {.stream_id = 64}));
-static_assert(pack::is_valid(pack::EdgeWindow {15, 15, 15, 15}));
-static_assert(!pack::is_valid(pack::EdgeWindow {.y_end = 16}));
+static_assert(!pack::is_valid(pack::Transfer {.address_modifier = 4}));
+// Only the read-interface masks the Blackhole ISA supports are valid; 0b1111 is spelled ReadInterfaces::All.
+static_assert(!pack::is_valid(pack::Transfer {.interfaces = static_cast<pack::ReadInterfaces>(0b0110)}));
+static_assert(!pack::is_valid(pack::Transfer {.interfaces = static_cast<pack::ReadInterfaces>(0b1111)}));
 
-// Descriptor encoders are usable in constant expressions.
-static_assert(pack::DataTransfer {.boundary = pack::TileBoundary::Last}.get_operation() == TT_OP_PACR(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1));
-static_assert(pack::EdgeWindow {1, 2, 3, 4}.get_operation() == TT_OP_SETPKEDGOF(4, 3, 2, 1));
-static_assert(pack::flush_write_aligners_operation() == TT_OP_PACR(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0));
-static_assert(pack::clear_exponent_histogram_operation() == TT_OP_CLREXPHIST);
+// The runtime encoder is also usable in constant expressions.
+static_assert(
+    pack::Packer0.operation().transfer({.address_modifier = 2, .interfaces = pack::ReadInterfaces::Row0, .boundary = pack::TileBoundary::Last}) ==
+    pack::Packer0.operation()
+        .transfer<pack::Transfer {.address_modifier = 2, .interfaces = pack::ReadInterfaces::Row0, .boundary = pack::TileBoundary::Last}>());
+static_assert(pack::Packer0.operation().transfer<pack::Transfer {.boundary = pack::TileBoundary::Last}>() == TT_OP_PACR(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1));
 
 //--- invalid-address-modifier.cpp
 #include "hal/pack.h"
@@ -51,100 +45,46 @@ namespace pack = hal::pack;
 
 void issue()
 {
-    pack::run<pack::DataTransfer {.address_modifier = 4}>();
+    pack::Packer0.transfer<pack::Transfer {.address_modifier = 4}>();
 }
 
-// INVALID_ADDRESS_MODIFIER: error: static assertion failed: invalid packer descriptor
+// INVALID_ADDRESS_MODIFIER: error: static assertion failed: invalid PACR data-transfer options
 
-//--- invalid-configuration-context.cpp
+//--- unsupported-interfaces.cpp
 #include "hal/pack.h"
 
 namespace pack = hal::pack;
 
 void issue()
 {
-    pack::run<pack::DataTransfer {.configuration_context = 4}>();
+    pack::Packer0.transfer<pack::Transfer {.interfaces = static_cast<pack::ReadInterfaces>(0b0110)}>();
 }
 
-// INVALID_CONFIGURATION_CONTEXT: error: static assertion failed: invalid packer descriptor
+// UNSUPPORTED_INTERFACES: error: static assertion failed: invalid PACR data-transfer options
 
-//--- invalid-counter-context.cpp
+//--- invalid-encode.cpp
 #include "hal/pack.h"
 
 namespace pack = hal::pack;
 
-void issue()
-{
-    pack::run<pack::DataTransfer {.counter_context = 3}>();
-}
+constexpr auto operation = pack::Packer0.operation().transfer<pack::Transfer {.address_modifier = 4}>();
+// INVALID_ENCODE: error: static assertion failed: invalid PACR data-transfer options
 
-// INVALID_COUNTER_CONTEXT: error: static assertion failed: invalid packer descriptor
-
-//--- invalid-interfaces.cpp
+//--- runtime-address-modifier.cpp
 #include "hal/pack.h"
 
 namespace pack = hal::pack;
 
-void issue()
-{
-    pack::run<pack::DataTransfer {.interfaces = 16}>();
-}
+// Constant evaluation of the runtime encoder rejects invalid options without a static_assert.
+constexpr auto operation = pack::Packer0.operation().transfer({.address_modifier = 4});
+// RUNTIME_ADDRESS_MODIFIER: in 'constexpr' expansion of 'hal::detail::require({{.*}}"PACR address modifier must be in [0, 3]"))'
+// RUNTIME_ADDRESS_MODIFIER: error: '__builtin_trap()' is not a constant expression
 
-// INVALID_INTERFACES: error: static assertion failed: invalid packer descriptor
-
-//--- alignment-without-padding.cpp
+//--- runtime-interfaces.cpp
 #include "hal/pack.h"
 
 namespace pack = hal::pack;
 
-void issue()
-{
-    pack::run<pack::DataTransfer {.alignment = pack::PaddingAlignment::To16Datums}>();
-}
-
-// ALIGNMENT_WITHOUT_PADDING: error: static assertion failed: invalid packer descriptor
-
-//--- invalid-address-slot.cpp
-#include "hal/pack.h"
-
-namespace pack = hal::pack;
-
-void issue()
-{
-    pack::run<pack::RegisterWrite {.address_slot = 4}>();
-}
-
-// INVALID_ADDRESS_SLOT: error: static assertion failed: invalid packer descriptor
-
-//--- invalid-stream-id.cpp
-#include "hal/pack.h"
-
-namespace pack = hal::pack;
-
-void issue()
-{
-    pack::run<pack::RegisterWrite {.stream_id = 64}>();
-}
-
-// INVALID_STREAM_ID: error: static assertion failed: invalid packer descriptor
-
-//--- invalid-edge-offset.cpp
-#include "hal/pack.h"
-
-namespace pack = hal::pack;
-
-void issue()
-{
-    pack::run<pack::EdgeWindow {.x_start = 16}>();
-}
-
-// INVALID_EDGE_OFFSET: error: static assertion failed: invalid packer descriptor
-
-//--- invalid-constant-encoding.cpp
-#include "hal/pack.h"
-
-namespace pack = hal::pack;
-
-// Constant evaluation of an invalid descriptor is rejected without static_assert.
-constexpr auto operation = pack::EdgeWindow {.x_end = 16}.get_operation();
-// INVALID_CONSTANT_ENCODING: error: '__builtin_trap()' is not a constant expression
+constexpr auto operation = pack::Packer0.operation().transfer({.interfaces = static_cast<pack::ReadInterfaces>(0b0110)});
+// RUNTIME_INTERFACES: in 'constexpr' expansion of 'hal::detail::require({{.*}}"PACR read interfaces must be a ReadInterfaces value"))'
+// RUNTIME_INTERFACES: error: '__builtin_trap()' is not a constant expression
