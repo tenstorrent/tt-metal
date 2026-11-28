@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -21,6 +22,27 @@ FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program
         return FillPadL1ShardedProgramFactory{};
     }
     return FillPadProgramFactory{};
+}
+
+ttsl::hash::hash_t FillPadDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto program_factory = select_program_factory(operation_attributes, tensor_args);
+    const auto& input = tensor_args.input;
+    const auto tile_height = input.tensor_spec().tile().get_height();
+    const auto& padded_shape = input.padded_shape();
+    if (!std::holds_alternative<FillPadProgramFactory>(program_factory) || input.logical_shape().rank() < 2 ||
+        input.logical_shape()[-2] % tile_height == 0) {
+        return tt::tt_metal::operation::hash_operation<FillPadDeviceOperation>(
+            operation_attributes, input.tensor_spec(), program_factory.index());
+    }
+    // FillPadProgramFactory takes the bottom remainder (H_mod32) as a runtime arg: every logical height
+    // with the same padded height shares one program. Hash a canonical height in that bucket.
+    auto canonical_shape = input.logical_shape();
+    canonical_shape[-2] = padded_shape[-2] - 1;
+    const tt::tt_metal::TensorSpec canonical(canonical_shape, input.tensor_spec().tensor_layout());
+    TT_FATAL(canonical.padded_shape() == padded_shape, "FillPad canonical height changed the padded shape");
+    return tt::tt_metal::operation::hash_operation<FillPadDeviceOperation>(
+        operation_attributes, canonical, program_factory.index());
 }
 
 void FillPadDeviceOperation::validate_on_program_cache_miss(
