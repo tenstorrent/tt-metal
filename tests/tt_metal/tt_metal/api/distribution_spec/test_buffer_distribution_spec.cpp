@@ -256,6 +256,11 @@ class MeshBufferReadWriteTests : public BufferDistributionSpecFixture,
 
 TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     const auto& [cq_write, cq_read, params] = GetParam();
+    const CoreCoord grid_size = mesh_device_->compute_with_storage_grid_size();
+    if (!CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}).contains(params.inputs.grid)) {
+        GTEST_SKIP() << "Shard grid " << params.inputs.grid.str() << " does not fit this device's " << grid_size.x
+                     << "x" << grid_size.y << " worker grid";
+    }
 
     // Create a replicated mesh buffer across generic mesh device; tests will only use first device
     auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
