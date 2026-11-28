@@ -387,3 +387,103 @@ def test_bcast_hw_sharded_multi_row_col(device, orientation):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing, pcc_msg
+
+
+@pytest.mark.parametrize(
+    "dtype, max_mean_rel_err",
+    [
+        # fp32 operands must be computed with a 32-bit Dest; a 16-bit Dest gives about 2.7e-3 (add) and 5e-3 (mul).
+        (ttnn.float32, {ttnn.BcastOpMath.ADD: 1.2e-3, ttnn.BcastOpMath.MUL: 2.5e-3}),
+        # bf16 control: unchanged behaviour, only bf16 rounding.
+        (ttnn.bfloat16, {ttnn.BcastOpMath.ADD: 1e-2, ttnn.BcastOpMath.MUL: 1e-2}),
+    ],
+)
+@pytest.mark.parametrize("op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL])
+@pytest.mark.parametrize("dim", [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW])
+def test_bcast_float32_precision(device, dim, op, dtype, max_mean_rel_err):
+    torch.manual_seed(0)
+    N, C, H, W = 2, 1, 64, 128
+    b_shape = {
+        ttnn.BcastOpDim.H: [1, 1, 32, W],
+        ttnn.BcastOpDim.W: [1, 1, H, 32],
+        ttnn.BcastOpDim.HW: [1, 1, 32, 32],
+    }[dim]
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    a_torch = torch.rand([N, C, H, W], dtype=torch_dtype)
+    b_torch = torch.rand(b_shape, dtype=torch_dtype)
+
+    if dim == ttnn.BcastOpDim.H:
+        b_ref = b_torch[:, :, :1, :]
+    elif dim == ttnn.BcastOpDim.W:
+        b_ref = b_torch[:, :, :, :1]
+    else:
+        b_ref = b_torch[:, :, :1, :1]
+    ref = (a_torch.double() + b_ref.double()) if op == ttnn.BcastOpMath.ADD else (a_torch.double() * b_ref.double())
+
+    a_tt = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    b_tt = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    out = ttnn.to_torch(ttnn.bcast(a_tt, b_tt, op, dim)).double()
+
+    mean_rel_err = ((out - ref).abs().mean() / ref.abs().mean()).item()
+    logger.info(f"mean relative error {mean_rel_err}")
+    assert mean_rel_err < max_mean_rel_err[op], f"mean relative error {mean_rel_err} for {dtype} {op} {dim}"
+
+
+# fp32 with a sharded input: the optimised sharded-H factory binds the resident output DFB as a CONSUMER
+# self-loop, so it needs an unpack mode. Its kernel also writes h_blk = min(Ht, 8) tiles to Dest per acquire,
+# which overruns a double-buffered fp32 Dest once Ht > 4. Block-sharded shards of 256 rows are 8 tiles high,
+# so this reaches both. The error bounds are the ones of test_bcast_float32_precision.
+_FLOAT32_MAX_MEAN_REL_ERR = {ttnn.BcastOpMath.ADD: 1.2e-3, ttnn.BcastOpMath.MUL: 2.5e-3}
+
+
+def _assert_float32_bcast_h_close(out, a_torch, b_torch, op):
+    b_ref = b_torch[:, :, :1, :]
+    ref = (a_torch.double() + b_ref.double()) if op == ttnn.BcastOpMath.ADD else (a_torch.double() * b_ref.double())
+    mean_rel_err = ((out.double() - ref).abs().mean() / ref.abs().mean()).item()
+    logger.info(f"mean relative error {mean_rel_err}")
+    assert mean_rel_err < _FLOAT32_MAX_MEAN_REL_ERR[op], f"mean relative error {mean_rel_err} for float32 {op}"
+
+
+@pytest.mark.parametrize("op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL])
+def test_bcast_h_block_sharded_float32_optimised(device, op):
+    torch.manual_seed(0)
+    a_torch = torch.rand([1, 1, 512, 64], dtype=torch.float32)
+    b_torch = torch.rand([1, 1, 32, 64], dtype=torch.float32)
+    a = ttnn.from_torch(
+        a_torch,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded_h_bcast_mem_config(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 0, 1, [256, 64]),
+    )
+    b = ttnn.from_torch(b_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.bcast(a, b, op, ttnn.BcastOpDim.H))
+    _assert_float32_bcast_h_close(out, a_torch, b_torch, op)
+
+
+# Same fp32 self-loop requirement on the non-optimised sharded-H factory: b's batch dim is not 1, so
+# the batching bypasses the optimised factory (mirrors test_bcast_h_width_sharded_batched_channel).
+@pytest.mark.parametrize("op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL])
+def test_bcast_h_width_sharded_float32_batched_channel(device, op):
+    torch.manual_seed(0)
+    batch, height_per_batch, width, num_cores = 2, 64, 256, 8
+    a_torch = torch.rand([1, batch, height_per_batch, width], dtype=torch.float32)
+    b_torch = torch.rand([batch, 1, 32, width], dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(
+        a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(batch * height_per_batch, width // num_cores),
+        core_grid=get_shard_grid_from_num_cores(num_cores, device),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+    tt_weight = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+
+    out = ttnn.to_torch(ttnn.bcast(tt_input, tt_weight, op, ttnn.BcastOpDim.H))
+    # b batch c broadcasts over channel c of a.
+    b_ref = b_torch.reshape(1, batch, 32, width)
+    _assert_float32_bcast_h_close(out, a_torch, b_ref, op)
