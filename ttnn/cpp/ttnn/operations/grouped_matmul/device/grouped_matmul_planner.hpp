@@ -61,4 +61,16 @@ uint32_t solve_bank_block_w(
     uint32_t f32_tile_bytes,
     uint32_t block_w);
 
+// bank_n_sub() (FIX.42): the bank path's column sub-block width. 0: none needed (rt x pn_max within DEST, full
+// sync allowed: the kernel's path before FIX.42); kBankNSubNone: rt alone over DEST (refused); else the widest
+// sub-block (DEST / rt tiles) the compute kernel cuts a core's columns into (GMM_N_SUB).
+constexpr uint32_t kBankNSubNone = 0xFFFFFFFFu;
+inline uint32_t bank_n_sub(bool fp32_dest_acc_en, uint32_t rt, uint32_t pn_max) {
+    const uint32_t dst = fp32_dest_acc_en ? 8u : 16u;  // full-sync DEST tiles (half-sync: half of it)
+    if (rt * pn_max <= dst) {
+        return 0;
+    }
+    return rt <= dst ? dst / rt : kBankNSubNone;
+}
+
 }  // namespace ttnn::operations::grouped_matmul

@@ -1625,3 +1625,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 05:20 heartbeat: FIX.43 running; RAM used 79 GB; / 100G free.
 - 05:50 heartbeat: FIX.43 agent active (a large load for 1M history); RAM used 268 GB; / 99G free.
 - 06:05 FIX.43 PASS -> ad677db52bb: same load at real 1M, off -> on: single 8192 111.64 -> 111.34 ms, 4x2k 127.35 -> 126.55 ms (attention 29.27 -> 28.87 / 32.22 -> 32.19); off == on 0.0. The WA.4 gap was load-to-load drift: the bank layout stays on everywhere. Next: model_bringup batch (FIX.41 placeholder to be replaced by a task in model_bringup's own ledger).
+- 07:17 on batching: F311 cherry-picked (40d066a8855), rebuilt; FIX.42 released; orchestrator resume --until FIX.42 (tmux orch_wa). FIX.41 stays held (obsolete: MB.NC / MB.NCL did it on model_bringup).
+- 07:22 OWNER (to put in the bringup skill, 'Decide; do not ask', at the next pause): never wait on a trivial decision ('should I run X', minutes of device); if a question to the owner is unanswered at the next heartbeat, decide it yourself and run it. Today's breaches: the 1M check, FIX.42 held.

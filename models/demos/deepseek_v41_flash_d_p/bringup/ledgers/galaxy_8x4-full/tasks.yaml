@@ -1718,6 +1718,40 @@ tasks:
       no 40-layer load.'
     gate_tasks:
     - WA.3
+- id: FIX.42
+  title: 'OWNER 2026-11-27 (after the C++ series): wq_b / wo_b bank-layout probe built directly in C++ (groupe'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - NC.1
+  gate:
+    cmd: BRINGUP_TASK=NC.1 scripts/run_safe_pytest.sh --run-all --no-precompile tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/test_acceptance.py
+      && BRINGUP_TASK=NC.1 scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/test_grouped_matmul.py
+      && BRINGUP_TASK=NC.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py
+    metrics:
+      gmm_native_mismatch_*: == 0
+      gmm_native_repeat_*: == 0
+      gmm_native_cache_growth_*: == 0
+  device: true
+  paths:
+  - ttnn/cpp/ttnn/operations/grouped_matmul
+  - ttnn/cpp/ttnn/operations/CMakeLists.txt
+  - ttnn/cpp/ttnn-nanobind
+  - ttnn/ttnn/bringup/grouped_matmul_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  - tests/ttnn/unit_tests/operations/grouped_matmul
+  - models/demos/deepseek_v41_flash_d_p/tests/woa
+  - models/demos/deepseek_v41_flash_d_p/tt/attention.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.1_layer.md
+  - models/demos/deepseek_v41_flash_d_p/tt
+  brief:
+    details: 'OWNER 2026-11-27 (after the C++ series): wq_b / wo_b bank-layout probe built directly in C++ (grouped_matmul
+      with G = 1, N split over the 8 banks): stub test first (no weight reads); kill if not read-bound; op level only.'
+    gate_tasks:
+    - NC.1
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1737,6 +1771,7 @@ tasks:
   - FIX.38
   - FIX.39
   - FIX.43
+  - FIX.42
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py

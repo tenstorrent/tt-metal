@@ -2178,3 +2178,49 @@
 - Re-run (1M): `WOA_OFFON_POS=1024000 <the WA.3#test_woa_offon unit's env> scripts/run_safe_pytest.sh --run-all
   --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py` via `resident submit`; gate:
   `gate FIX.43 --spec $BRINGUP_SPEC --check`.
+
+## FIX.42 (overseer fix, attempt 1): wq_b / wo_b bank-layout probe on the C++ grouped_matmul (G = 1), op level
+
+- Loads: none ("needs no model: an op probe on the resident runner's held mesh, fixed-seed bfp8 tensors of the real
+  shapes"; 0 model loads, 1 device open for the C++ rebuild's new process).
+- What: tests/woa/test_qbob_bank_probe.py. Today = the stock call the model makes (mm_configs.program_config in the
+  same process: wq_b minimal M2 K8 N16 at 256 rows, 1D in0 at 160; wo_b 1D in0). Bank = ttnn.grouped_matmul with
+  w_layout = bank.plan(G = 1, ...) on the matmul-capped 11 x 10 grid (bank b holds column tiles [b NT / 8, (b + 1)
+  NT / 8), no padding), one_group, layouts band 10 / row 11 / rect 11 / band 8 (<= 88 cores). Step 0 stubs first
+  (diag no_w / no_x / no_compute; KILL if the best no-weight floor >= 0.9 x today, WA.2's rule), then a knob sweep
+  (block_w x depth x w_inflight), the best's repeat and rel vs fp64.
+- C++ change (needed for step 0 to run wq_b at all): wq_b's 1024 column tiles give 12-16 a core, refused "rt 1 x 13
+  column tiles exceed DEST". Bank path now cuts a core's columns into DEST-sized sub-blocks (gmm_compute.cpp define
+  GMM_N_SUB, set only for shapes refused before: every shape that ran keeps its kernel). Fork test
+  tests/unit/test_grouped_matmul_nsub.py (via tests/woa/test_gmm_fork_nsub.py): 5 passed (rt 1 vs sub-blocked rt
+  bit-identical; wq_b's real shape vs fp64; repeats 0). Build: `cmake --build build --target install` (incremental).
+- Gotcha: the first run's step 0 refused every wo_b layout at 256 rows (depth 4 with the planner's block_w 32 overflows
+  L1: "Statically allocated circular buffers ... beyond max L1 size"); step 0 now takes the first fitting (block_w,
+  knobs) from a short list.
+- Measured (slowest chip, 20 calls, us):
+
+| proj, rows | today | best no_w floor (x today) | bank best (cfg) | x today |
+|---|---|---|---|---|
+| wq_b 256 | 238.80 | 183.39 rect11 (0.768) | 202.92 rect11 bw4 d4 wi1 | 0.850 |
+| wq_b 160 | 195.63 | 115.50 row11 (0.590) | 151.40 row11 bw4 d3 wi1 | 0.774 |
+| wo_b 256 | 157.67 | 129.64 band10 (0.822) | 205.99 band8 bw8 d3 wi1 | 1.306 |
+| wo_b 160 | 139.15 | 81.53 band10 (0.586) | 161.23 band8 bw8 d3 wi2 | 1.159 |
+
+  rel vs fp64 equal to the stock call's (1.680e-3 / 1.677e-3), repeat 0.0 everywhere. Not killed by the stub rule
+  (all four read-bound). wq_b: -35.9 us a call at 256 rows (x 20 calls = ~0.72 ms a 8192 chunk; WA.5 estimated 1.28),
+  -44.2 us at 160 (~0.88 ms a 5120 chunk; WA.5: 0.64). wo_b: slower: with G = 1 each of the 8 clusters reads the whole
+  2.2 MB x (full ~ no_compute: reader-bound on x + w; no_x 121.8 us at 256 rows); WA.5's caveat holds; it needs one
+  grid-wide x multicast (new reader work, not built). DS41-405.
+- Note: today's wq_b at 160 rows measured 195.6 us here vs P.81's 182.0 (ATTN_ROOFLINE config at the time); the same
+  program_config the model takes in this process.
+- Not done (op level only, owner): no model wiring, no Setting. The next step for wq_b would be a WQB_BANK switch in
+  tt/attention.py (row 11 / rect 11, knobs by rows) and an off == on check; numbers are not bit-identical to the stock
+  call (other K order, DS41-390), so judged by the reference gate.
+- Known issues used: DS41-391 / DS41-396 (stubs first; placements probed, not the layout alone), DS41-393 (sender at
+  the rectangle's first core), DS41-394 (one_group), DS41-382 (layouts on the 11 x 10 grid), DS41-390 (judged by rel vs
+  fp64 and repeats, not bytes vs the stock call).
+- Per-chunk values (rule 20): none touched in the model. In the op, x / w / y addresses are the program cache's
+  override (same as before); GMM_N_SUB is a compile-time define of a program built once a shape.
+- Re-run: probe `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd
+  "scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_qbob_bank_probe.py"`
+  (~2 min); fork test: the same with tests/woa/test_gmm_fork_nsub.py; gate `gate FIX.42 --spec $BRINGUP_SPEC --check`.

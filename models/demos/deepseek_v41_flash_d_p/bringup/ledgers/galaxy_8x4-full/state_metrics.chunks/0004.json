@@ -4,6 +4,20 @@
   "woa_est_ms_wq_b": 1.277,
   "woa_report_parts": 4
  },
+ "FIX.42": {
+  "gmm_native_cache_growth_bank160": 0,
+  "gmm_native_cache_growth_bank256": 0,
+  "gmm_native_cache_growth_interleaved160": 0,
+  "gmm_native_cache_growth_interleaved256": 0,
+  "gmm_native_mismatch_bank160": 0.0,
+  "gmm_native_mismatch_bank256": 0.0,
+  "gmm_native_mismatch_interleaved160": 0.0,
+  "gmm_native_mismatch_interleaved256": 0.0,
+  "gmm_native_repeat_bank160": 0.0,
+  "gmm_native_repeat_bank256": 0.0,
+  "gmm_native_repeat_interleaved160": 0.0,
+  "gmm_native_repeat_interleaved256": 0.0
+ },
  "FIX.43": {
   "no_rebuild_pass_lanes2x3k": 1,
   "no_rebuild_pass_lanes2x3k_tagentic_cc": 1,

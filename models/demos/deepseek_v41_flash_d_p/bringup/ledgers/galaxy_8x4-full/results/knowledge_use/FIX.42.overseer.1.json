@@ -1,0 +1,97 @@
+{
+ "used": [
+  {
+   "id": "DS41-391",
+   "how": "kept the bank layout's premise (interleaved tiles in fixed banks, bank-local K-major reads) and the stubs-first step 0 (WA.2 KILL rule 0.9) for wq_b / wo_b",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-393",
+   "how": "bank.plan sender='start' (default) for every G = 1 layout probed",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-394",
+   "how": "one_group=True on every bank call (few core ranges a launch)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-396",
+   "how": "probed core placements (band / row / rect) not only the layout; row / rect 11 won for wq_b",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-390",
+   "how": "judged the bank path by rel vs fp64 (equal to the stock call's) and its own repeats, not bytes vs the stock call (other K order)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-382",
+   "how": "layouts planned on max_grid (11 x 10), never column 11",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "grouped_matmul's bank path refused cores over DEST (rt x PN > 8 at fp32 DEST): G = 1 layouts of wide-N projections need column sub-blocks (now GMM_N_SUB, DS41-405)",
+  "the resident runner refuses fork test files directly (only model test files share a batch process): a wrapper under the model's tests is needed (WA.2's test_woa_fork_bank.py pattern)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.42",
+   "answer": "done",
+   "evidence": "tests/woa/test_qbob_bank_probe.py, 8x4: stubs first; none killed (no_w floor 0.77 / 0.59 / 0.82 / 0.59 x stock); wq_b 238.8 -> 202.9 us (256 rows), 195.6 -> 151.4 (160); wo_b slower (206.0 vs 157.7, 161.2 vs 139.2: per-cluster x reads); op level only, no model change"
+  },
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding: bank.plan splits N's column tiles evenly over the 8 banks (128 / 20 a bank); cores over DEST handled by a kernel change (GMM_N_SUB), not by inflating work"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "the op is the native C++ ttnn.grouped_matmul on the program cache (NC.1); no Python-built program added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run on the 8x4; only the new tests/unit/test_grouped_matmul_nsub.py (5 passed) and the gate's units"
+  }
+ ],
+ "cited_only": [
+  "DS41-405"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.42",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T07:39:05",
+  "head": "40d066a8855",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.42.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.1_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.42.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_fork_nsub.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_qbob_bank_probe.py",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_planner.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/README.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/test_grouped_matmul_nsub.py"
+  ]
+ }
+}

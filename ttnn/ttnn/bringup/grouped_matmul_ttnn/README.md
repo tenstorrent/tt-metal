@@ -26,7 +26,10 @@ Always dispatched as a prepared program (ttnn.bringup.prepare_program / run_prep
   matmul cap (agent rule 18).
 - `block_w` (default the widest of 32, 16, 8, 4, 2, 1 that fits 1 MB of L1): K tiles a block.
 - `depth` (default 2): K blocks of x and of w buffered a core.
-- `rt` (default 1): row tiles a DST block (rt x PN tiles; full-sync DEST when it exceeds half of DEST).
+- `rt` (default 1): row tiles a DST block (rt x PN tiles; full-sync DEST when it exceeds half of DEST). Bank path
+  (FIX.42): a core whose rt x PN exceeds DEST (8 tiles at fp32 DEST) runs its columns in sub-blocks of DEST / rt tiles
+  (define GMM_N_SUB; before FIX.42 refused); shapes within DEST keep the kernel path they had. The interleaved path
+  still refuses rt x PN over DEST.
 - `supported(x_shape, w_shape, x_dtype, w_dtype, out_dtype, device, max_grid=None, block_w=None)`: whether a call has a
   layout (cached).
 - `w_layout` (default None: the interleaved path above): a `bank.BankLayout` (`bank.plan(device, G, K, N, max_cores,
@@ -58,6 +61,13 @@ Always dispatched as a prepared program (ttnn.bringup.prepare_program / run_prep
   fresh buffers); host a warm call 20-26 us vs 63-85 us (interleaved 256 / 160 rows: 21.0 / 23.2 vs 85.2 / 63.2; bank:
   25.5 / 25.9 vs 68.9 / 67.7); device equal (149.97 / 130.59 / 129.48 / 112.28 vs 149.93 / 130.61 / 129.86 / 112.29 us).
 
+- FIX.42 (8x4, op level, tests in deepseek_v41_flash_d_p tests/woa/test_qbob_bank_probe.py): G = 1 bank layouts (N
+  split over the 8 banks; every cluster's sender reads all of x) for the attention's replicated projections, vs the
+  stock call the model runs (slowest chip, 20 calls): wq_b [rows, 1280] @ [1280, 32768] bfp8 -> bf16, 256 rows 238.8 ->
+  202.9 us (rect 11, block_w 4, depth 4), 160 rows 195.6 -> 151.4 us (row 11, block_w 4, depth 3); rel vs fp64 equal
+  to the stock call's (1.68e-3), repeats 0. wo_b [rows, 8192] @ [8192, 5120]: slower (205.99 vs 157.7 / 161.2 vs
+  139.2 us): with G = 1 each of the 8 clusters reads the whole 2.2 MB x (no-x stub 121.8 us at 256 rows).
+
 ## Limits
 - G <= the grid's rows; batch shape [1, G]; M, K, N multiples of 32; interleaved DRAM tensors.
 - The x sender reads x alone (one core a row); the weight reads go one block in flight a core (a read-ahead version
@@ -69,6 +79,9 @@ Always dispatched as a prepared program (ttnn.bringup.prepare_program / run_prep
   whole number of rectangle columns; every bank's cores in a band (or a row) on its anchor's side; the x sender must sit
   at the rectangle's first core (sender="anchor" wraps NoC-0 multicasts around the chip: 2x slower); weights must go
   through `bank.upload` (a `from_torch` straight to the sharded config quantizes bfloat8_b differently).
+- Bank path with G = 1 (one group over all banks): every cluster's sender reads ALL of x from DRAM and multicasts it
+  to its own cluster only: 8 x the x traffic. Fine for a small x (wq_b, 0.35 MB); a wide-K x (wo_b, 2.2 MB) makes the
+  call slower than the stock 1D in0 multicast (FIX.42). A grid-wide x multicast is not built.
 
 ## How to call
 ```python

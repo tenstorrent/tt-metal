@@ -36,6 +36,15 @@ void check_dest_fit(const GroupedMatmulParams& attrs, uint32_t mt, uint32_t pn_m
         fmt::format("grouped_matmul: rt {} x {} column tiles exceed DEST ({} tiles)", rt, pn_max, dst));
 }
 
+// The bank path (FIX.42): a core whose rt x column tiles exceed DEST runs its columns in sub-blocks of
+// bank_n_sub() tiles (GMM_N_SUB); only rt itself over DEST is refused there.
+void check_bank_dest_fit(const GroupedMatmulParams& attrs, uint32_t mt, uint32_t pn_max) {
+    const uint32_t rt = std::max<uint32_t>(1, std::min(attrs.rt, mt));
+    require(
+        bank_n_sub(attrs.fp32_dest_acc_en, rt, pn_max) != kBankNSubNone,
+        fmt::format("grouped_matmul: rt {} x {} column tiles exceed DEST (bank path: rt alone over DEST)", rt, pn_max));
+}
+
 void check_depth(uint32_t depth) { require(depth >= 2, fmt::format("grouped_matmul: depth {} (>= 2)", depth)); }
 
 }  // namespace
@@ -98,7 +107,7 @@ void GroupedMatmulDeviceOperation::validate_on_program_cache_miss(
     require(
         attrs.x_ahead <= std::min<uint32_t>(3, attrs.depth - 1),
         fmt::format("grouped_matmul: x_ahead {} (0 .. min(3, depth - 1))", attrs.x_ahead));
-    check_dest_fit(attrs, mt, pn_max);
+    check_bank_dest_fit(attrs, mt, pn_max);
 }
 
 void GroupedMatmulDeviceOperation::validate_on_program_cache_hit(

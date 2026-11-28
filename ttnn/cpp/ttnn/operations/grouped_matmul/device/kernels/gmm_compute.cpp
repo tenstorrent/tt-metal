@@ -14,6 +14,10 @@
 // still advance; the output is garbage).
 // GMM_PN_RT (the bank path's one kernel group, WA.3): PN is per-core runtime arg compute_rt::PN (compile-time arg
 // compute_ct::PN unused).
+// GMM_N_SUB=<SN> (FIX.42, G = 1 bank layouts of wq_b: 12-16 column tiles a core): a core's PN columns are cut into
+// ceil(PN / SN) column sub-blocks (as even as possible, the wider first), each its own DST block of RT x width tiles
+// (RT x SN within DEST); the program sets it only when RT x PN exceeds DEST (before FIX.42 such a shape was refused),
+// so every shape that ran before keeps this kernel's other path unchanged. Same products, same K order per tile.
 // compile-time args: MT, BW, PN, NBLK, CB_IN0, CB_IN1, CB_PART, CB_OUT, RT, PNX (grouped_matmul_args.hpp)
 
 #include <cstdint>
@@ -48,12 +52,49 @@ void kernel_main() {
     constexpr uint32_t RT_LAST = MT % RT;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(CB_IN0, CB_IN1, CB_PART);  // (matmul: in1 -> SrcA, in0 -> SrcB)
+#ifdef GMM_N_SUB
+    constexpr uint32_t SN = GMM_N_SUB;
+    const uint32_t NSB = (PN + SN - 1) / SN;
+    const uint32_t SB_BASE = PN / NSB;
+    const uint32_t SB_REM = PN % NSB;
+    uint32_t cur_w = SB_BASE + (SB_REM > 0 ? 1 : 0);
+    uint32_t cur_r = RT;
+    matmul_block_init(CB_IN0, CB_IN1, false, cur_w, cur_r, BW);
+#else
     matmul_block_init(CB_IN0, CB_IN1, false, PN, RT, BW);
+#endif
     cb_reserve_back(CB_PART, OUT_TILES);
     for (uint32_t kb = 0; kb < NBLK; ++kb) {
         cb_wait_front(CB_IN0, MT * BW);
         cb_wait_front(CB_IN1, BW * PNX);
-#ifndef GMM_DIAG_NO_COMPUTE
+#if !defined(GMM_DIAG_NO_COMPUTE) && defined(GMM_N_SUB)
+        pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
+        for (uint32_t m = 0; m < MT; m += RT) {
+            const uint32_t rr = MT - m < RT ? MT - m : RT;
+            uint32_t c0 = 0;
+            for (uint32_t s = 0; s < NSB; ++s) {
+                const uint32_t w = SB_BASE + (s < SB_REM ? 1 : 0);
+                if (w != cur_w || rr != cur_r) {
+                    matmul_block_init(CB_IN0, CB_IN1, false, w, rr, BW);
+                    cur_w = w;
+                    cur_r = rr;
+                }
+                tile_regs_acquire();
+                for (uint32_t k = 0; k < BW; ++k) {
+                    matmul_block(CB_IN0, CB_IN1, m * BW + k, k * PNX + c0, 0, false, w, rr, BW);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t r = 0; r < rr; ++r) {
+                    for (uint32_t j = 0; j < w; ++j) {
+                        pack_tile<true>(r * w + j, CB_PART, (m + r) * PN + c0 + j);
+                    }
+                }
+                tile_regs_release();
+                c0 += w;
+            }
+        }
+#elif !defined(GMM_DIAG_NO_COMPUTE)
         pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
         for (uint32_t m = 0; m + RT <= MT; m += RT) {
             tile_regs_acquire();

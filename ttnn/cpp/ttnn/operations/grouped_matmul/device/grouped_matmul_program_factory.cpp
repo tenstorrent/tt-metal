@@ -337,7 +337,10 @@ ProgramDescriptor bank_descriptor(const GroupedMatmulParams& attrs, const Groupe
 
     auto* dev = x.device();
     const uint32_t rt = std::max(1u, std::min(attrs.rt, MT));
-    const ComputeConfigDescriptor cfg = gmm_compute_config(attrs, rt, pn_max);
+    // FIX.42: rt x pn_max over DEST -> column sub-blocks of n_sub tiles (DEST then holds rt x n_sub)
+    const uint32_t n_sub = bank_n_sub(attrs.fp32_dest_acc_en, rt, pn_max);
+    TT_FATAL(n_sub != kBankNSubNone, "grouped_matmul: rt {} x {} column tiles exceed DEST", rt, pn_max);
+    const ComputeConfigDescriptor cfg = gmm_compute_config(attrs, rt, n_sub != 0 ? n_sub : pn_max);
 
     std::vector<std::pair<uint32_t, std::vector<const BankSlot*>>> groups;
     for (const auto& s : layout.slots) {
@@ -408,6 +411,9 @@ ProgramDescriptor bank_descriptor(const GroupedMatmulParams& attrs, const Groupe
         compute.compile_time_args[compute_ct::PNX] = pn_max;
         if (attrs.diag_no_compute) {
             compute.defines.emplace_back("GMM_DIAG_NO_COMPUTE", "1");
+        }
+        if (n_sub != 0) {
+            compute.defines.emplace_back("GMM_N_SUB", std::to_string(n_sub));
         }
         compute.config = cfg;
         if (attrs.one_group) {
