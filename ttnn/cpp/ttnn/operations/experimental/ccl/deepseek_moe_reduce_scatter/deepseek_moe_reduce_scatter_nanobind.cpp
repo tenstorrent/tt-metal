@@ -41,7 +41,7 @@ void bind_deepseek_moe_reduce_scatter(nb::module_& mod) {
             >>> # num_devices along cluster_axis is 8
             >>> input_tensors = ttnn.split(ttnn_tensor, split_size=896, dim=3)
             >>> output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-            >>> output = ttnn.reduce_scatter(input_tensors, output_memory_config=output_memory_config, dim=3, cluster_axis=1)
+            >>> output = ttnn.experimental.deepseek_moe_reduce_scatter(input_tensors, output_memory_config, dim=3, cluster_axis=1)
             >>> print(output.shape)
             [1, 1, 32, 896]
         )doc",

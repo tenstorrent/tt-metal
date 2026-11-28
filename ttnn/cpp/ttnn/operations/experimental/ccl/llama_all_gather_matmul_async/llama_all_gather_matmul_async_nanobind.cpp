@@ -63,7 +63,7 @@ void bind_llama_all_gather_matmul_async(nb::module_& mod) {
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.llama_all_gather_matmul_async(ttnn_tensor_a, ttnn_tensor_b, dim=0, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.experimental.llama_all_gather_matmul_async(ttnn_tensor_a, ttnn_tensor_b, intermediate_tensor, dim=3, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear, multi_device_global_semaphore=ccl_semaphore)
 
         )doc",
         &ttnn::experimental::llama_all_gather_matmul_async,

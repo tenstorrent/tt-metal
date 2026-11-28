@@ -237,7 +237,7 @@ void bind_all_gather_async(nb::module_& mod) {
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.experimental.all_gather_async(ttnn_tensor, dim=0, multi_device_global_semaphore=ccl_semaphore, topology=ttnn.Topology.Ring)
 
         )doc";
 

@@ -68,7 +68,7 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
 
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> weight_tensor = ttnn.from_torch(torch.tensor((2, 1), dtype=torch.bfloat16), device=device)
-            >>> all_gathered_mm_in, mm_out = ttnn.strided_all_gather_minimal_matmul_async(tensor, weight_tensor, dim=0, (0, 0))
+            >>> all_gathered_mm_in, mm_out = ttnn.experimental.strided_all_gather_minimal_matmul_async(tensor, weight_tensor, persistent_output_buffer, dim=0, multi_device_global_semaphore=ccl_semaphore, strided_all_gather_core_grid_offset=ttnn.CoreCoord(0, 0))
 
         )doc",
         &ttnn::experimental::strided_all_gather_minimal_matmul_async,

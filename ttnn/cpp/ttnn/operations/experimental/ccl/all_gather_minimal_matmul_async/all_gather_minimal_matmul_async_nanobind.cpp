@@ -213,6 +213,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         >>> y = ttnn.experimental.all_gather_minimal_matmul_async(
         ...     input_tensor=a,
         ...     weight_tensor=b,
+        ...     multi_device_global_semaphore=ccl_semaphore,
         ...     bias_tensor=bias,
         ...     fused_activation=(ttnn.UnaryOpType.GELU, False),
         ...     config=ttnn.MinimalMatmulConfig(
