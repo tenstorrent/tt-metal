@@ -4,11 +4,17 @@
 
 import pytest
 import torch
-from transformers import AutoModelForDepthEstimation
+from transformers import AutoModelForDepthEstimation, DepthAnythingConfig
+from transformers.models.depth_anything.modeling_depth_anything import DepthAnythingDepthEstimationHead
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
+from models.experimental.depth_anything_v2.tt.model_def import (
+    DictNamespace,
+    TtDepthAnythingV2,
+    TtDPTHead,
+    custom_preprocessor,
+)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -59,4 +65,42 @@ def test_depth_anything_v2_pcc(device):
     # 5. PCC comparison
     passing, pcc_value = comp_pcc(torch_output, tt_output, pcc=0.99)
     print(f"PCC Result: passing={passing}, pcc={pcc_value}")
+    assert passing, f"PCC {pcc_value} < 0.99 threshold"
+
+
+def _conv_parameters(device, **convs):
+    return DictNamespace(
+        {
+            name: DictNamespace(
+                {
+                    "weight": ttnn.from_torch(
+                        conv.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+                    ),
+                    "bias": ttnn.from_torch(
+                        conv.bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+                    ),
+                }
+            )
+            for name, conv in convs.items()
+        }
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_dpt_head_resize(device):
+    """The head resizes conv1's output from 8x to 14x the patch grid. Random weights on a 4x4 patch grid (32 -> 56,
+    the same 1.75 ratio as 296 -> 518), against the HF head."""
+    torch.manual_seed(0)
+    config = DepthAnythingConfig(fusion_hidden_size=256, head_hidden_size=32)
+    torch_head = DepthAnythingDepthEstimationHead(config).eval()
+    hidden = torch.randn(1, 256, 32, 32)
+    with torch.no_grad():
+        torch_output = torch_head([hidden], patch_height=4, patch_width=4)
+
+    parameters = _conv_parameters(device, conv1=torch_head.conv1, conv2=torch_head.conv2, conv3=torch_head.conv3)
+    tt_head = TtDPTHead(parameters, device, max_depth=config.max_depth)
+    tt_hidden = ttnn.from_torch(hidden, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(tt_head(tt_hidden, patch_height=4, patch_width=4)).float().reshape(torch_output.shape)
+
+    passing, pcc_value = comp_pcc(torch_output, tt_output, pcc=0.99)
     assert passing, f"PCC {pcc_value} < 0.99 threshold"
