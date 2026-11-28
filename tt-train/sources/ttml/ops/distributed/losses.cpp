@@ -6,12 +6,15 @@
 
 #include <fmt/core.h>
 
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -44,7 +47,8 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     const autograd::TensorPtr& logits,
     const autograd::TensorPtr& targets,
     std::optional<uint32_t> cluster_axis,
-    ReduceType reduce) {
+    ReduceType reduce,
+    std::optional<uint32_t> vocab_size) {
     if (reduce != ReduceType::NONE && reduce != ReduceType::MEAN) {
         throw std::logic_error(fmt::format(
             "vocab_parallel_cross_entropy_loss: only NONE and MEAN reductions are supported. Got: {}",
@@ -94,8 +98,37 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // per-position [B,1,S,1] tensor itself, so no extra factor is needed.
     const float inv_N = (reduce == ReduceType::MEAN) ? (1.0F / static_cast<float>(N)) : 1.0F;
 
+    auto* device = logits->get_value().device();
+    const auto mesh_shape = device->shape();
+    const uint32_t tp_size = cluster_axis.has_value()
+                                 ? mesh_shape[*cluster_axis]
+                                 : static_cast<uint32_t>(device->num_devices());
+    const uint32_t full_V = local_V * tp_size;
+    if (vocab_size.has_value() && (*vocab_size == 0U || *vocab_size > full_V)) {
+        throw std::logic_error(fmt::format(
+            "vocab_parallel_cross_entropy_loss: vocab_size ({}) must be in [1, {}] (tp_size={} * local_V={})",
+            *vocab_size,
+            full_V,
+            tp_size,
+            local_V));
+    }
+
+    std::optional<ttnn::Tensor> valid_vocab_mask;
+    auto logits_for_max = logits->get_value();
+    if (vocab_size.has_value() && *vocab_size < full_V) {
+        std::vector<float> mask_buf(full_V, 0.0F);
+        std::fill_n(mask_buf.begin(), *vocab_size, 1.0F);
+        const std::optional<int> mapper_axis =
+            cluster_axis.has_value() ? std::optional<int>(static_cast<int>(*cluster_axis)) : std::nullopt;
+        const auto mask_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3, mapper_axis);
+        valid_vocab_mask = core::from_vector<float, ttnn::DataType::FLOAT32>(
+            mask_buf, ttnn::Shape({1U, 1U, 1U, full_V}), device, ttnn::Layout::TILE, mask_mapper.get());
+        auto max_bias = ttnn::multiply(ttnn::subtract(*valid_vocab_mask, 1.0F), 1e4F, ttnn::DataType::BFLOAT16);
+        logits_for_max = ttnn::add(logits_for_max, max_bias);
+    }
+
     // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
-    auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
+    auto local_max = ttnn::max(logits_for_max, 3, /* keepdim */ true);
 
     // Step 2: all-gather local maxes → [B,1,S,tp_size] → global max [B,1,S,1]
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
@@ -103,6 +136,9 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel.
     auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+    if (valid_vocab_mask.has_value()) {
+        local_exp = ttnn::multiply(local_exp, *valid_vocab_mask);
+    }
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     local_exp.deallocate();
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
@@ -165,13 +201,17 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
                                       targets_raw,
                                       local_V,
                                       cluster_axis,
-                                      inv_N]() {
+                                      inv_N,
+                                      valid_vocab_mask]() {
         if (!out->is_grad_initialized()) {
             return;
         }
         auto scaled_inv_sum = ttnn::multiply(ttnn::reciprocal(global_sum), inv_N);  // [B,1,S,1] FP32
 
         auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+        if (valid_vocab_mask.has_value()) {
+            local_exp = ttnn::multiply(local_exp, *valid_vocab_mask);
+        }
         auto scaled_softmax = ttnn::multiply(local_exp, scaled_inv_sum, ttnn::DataType::BFLOAT16);
         local_exp.deallocate();
         scaled_inv_sum.deallocate();
