@@ -20,9 +20,9 @@ constexpr auto sdpa_addr_mod_x = ADDR_MOD_7;
 
 ALWI void sdpa_insert_sfpnop() {}
 
-template <bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
+template <int POLY_DEGREE>
 constexpr bool sdpa_can_preload_ln2_constants() {
-    return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
+    return POLY_DEGREE <= 2;
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -45,56 +45,48 @@ inline void calculate_recip_first_column() {
     }
 }
 
-template <
-    bool SCALE_EN,
-    int ITERATIONS,
-    bool USE_SFPARECIP_INSTR,
-    int POLY_DEGREE,
-    bool IS_FP32_DEST_ACC_EN,
-    std::uint16_t SCALE_BF16>
+template <bool SCALE_EN, int ITERATIONS, int POLY_DEGREE, bool IS_FP32_DEST_ACC_EN, std::uint16_t SCALE_BF16>
 inline void calculate_exponential_polynomial() {
     constexpr float LN2_RECIP = 1.44269504088896340736f;
     constexpr float M_LN2 = -0.69314718055994530942f;
 
-    if constexpr (!USE_SFPARECIP_INSTR) {
-        static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
+    static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
 
-        constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
-                             : (POLY_DEGREE == 2) ? 0.999848792924395313327307061545061386175496934006f
-                             : (POLY_DEGREE == 3) ? 0.99992449655091231753798502608929170703152709521188f
-                                                  : 1.0000001510806179002040134468008959160576106495165f;
-        constexpr float c1 = (POLY_DEGREE == 1)   ? 1.0201394465967894800285756834161653337107187804001f
-                             : (POLY_DEGREE == 2) ? 1.01508760098521056684783640695492761469306929535975f
-                             : (POLY_DEGREE == 3) ? 0.99993960415029750534472970577402987498389428593233f
-                                                  : 0.99996228117047652035114096488703457970402030983204f;
-        constexpr float c2 = (POLY_DEGREE == 2)   ? 0.50628367056745568861842335616023694454759126020461f
-                             : (POLY_DEGREE == 3) ? 0.50502329058055065591138054839814880512001604099324f
-                                                  : 0.49998365704615426417337683145647067790385638465486f;
-        constexpr float c3 = (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
-                                                : 0.16792157982882225102649214918047336097544632172075f;
-        constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
+    constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
+                         : (POLY_DEGREE == 2) ? 0.999848792924395313327307061545061386175496934006f
+                         : (POLY_DEGREE == 3) ? 0.99992449655091231753798502608929170703152709521188f
+                                              : 1.0000001510806179002040134468008959160576106495165f;
+    constexpr float c1 = (POLY_DEGREE == 1)   ? 1.0201394465967894800285756834161653337107187804001f
+                         : (POLY_DEGREE == 2) ? 1.01508760098521056684783640695492761469306929535975f
+                         : (POLY_DEGREE == 3) ? 0.99993960415029750534472970577402987498389428593233f
+                                              : 0.99996228117047652035114096488703457970402030983204f;
+    constexpr float c2 = (POLY_DEGREE == 2)   ? 0.50628367056745568861842335616023694454759126020461f
+                         : (POLY_DEGREE == 3) ? 0.50502329058055065591138054839814880512001604099324f
+                                              : 0.49998365704615426417337683145647067790385638465486f;
+    constexpr float c3 = (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
+                                            : 0.16792157982882225102649214918047336097544632172075f;
+    constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
-        if constexpr (POLY_DEGREE >= 4) {
-            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(c4));
-            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(c4));
-        }
-        if constexpr (POLY_DEGREE >= 3) {
-            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(c3));
-            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, Converter::hi16(c3));
-        }
-        if constexpr (POLY_DEGREE >= 2) {
-            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, Converter::lo16(c2));
-            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, Converter::hi16(c2));
-        }
-        if constexpr (POLY_DEGREE >= 1) {
-            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, Converter::lo16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, Converter::hi16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, Converter::lo16(c0));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, Converter::hi16(c0));
-        }
+    if constexpr (POLY_DEGREE >= 4) {
+        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(c4));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(c4));
+    }
+    if constexpr (POLY_DEGREE >= 3) {
+        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(c3));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, Converter::hi16(c3));
+    }
+    if constexpr (POLY_DEGREE >= 2) {
+        TTI_SFPLOADI(p_sfpu::LREG5, 0xA, Converter::lo16(c2));
+        TTI_SFPLOADI(p_sfpu::LREG5, 0x8, Converter::hi16(c2));
+    }
+    if constexpr (POLY_DEGREE >= 1) {
+        TTI_SFPLOADI(p_sfpu::LREG6, 0xA, Converter::lo16(c1));
+        TTI_SFPLOADI(p_sfpu::LREG6, 0x8, Converter::hi16(c1));
+        TTI_SFPLOADI(p_sfpu::LREG7, 0xA, Converter::lo16(c0));
+        TTI_SFPLOADI(p_sfpu::LREG7, 0x8, Converter::hi16(c0));
     }
 
-    if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+    if constexpr (sdpa_can_preload_ln2_constants<POLY_DEGREE>()) {
         TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(LN2_RECIP));
         TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(LN2_RECIP));
         TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(M_LN2));
@@ -112,7 +104,7 @@ inline void calculate_exponential_polynomial() {
             sdpa_insert_sfpnop();
         }
 
-        if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+        if constexpr (sdpa_can_preload_ln2_constants<POLY_DEGREE>()) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         } else {
             TTI_SFPLOADI(p_sfpu::LREG1, 0xA, Converter::lo16(LN2_RECIP));
@@ -123,45 +115,37 @@ inline void calculate_exponential_polynomial() {
         TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
-        if constexpr (USE_SFPARECIP_INSTR) {
-            TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-            TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);
-            TTI_SFPENCC(0, 0, 0, 0);
+        if constexpr (sdpa_can_preload_ln2_constants<POLY_DEGREE>()) {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
         } else {
-            if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
-                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            } else {
-                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, Converter::lo16(M_LN2));
-                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, Converter::hi16(M_LN2));
-                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            }
-            sdpa_insert_sfpnop();
-
-            if constexpr (POLY_DEGREE == 1) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else if constexpr (POLY_DEGREE == 2) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                sdpa_insert_sfpnop();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else if constexpr (POLY_DEGREE == 3) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                sdpa_insert_sfpnop();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                sdpa_insert_sfpnop();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-                sdpa_insert_sfpnop();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                sdpa_insert_sfpnop();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                sdpa_insert_sfpnop();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            }
-            sdpa_insert_sfpnop();
+            TTI_SFPLOADI(p_sfpu::LREG0, 0xA, Converter::lo16(M_LN2));
+            TTI_SFPLOADI(p_sfpu::LREG0, 0x8, Converter::hi16(M_LN2));
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         }
+        sdpa_insert_sfpnop();
+
+        if constexpr (POLY_DEGREE == 1) {
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        } else if constexpr (POLY_DEGREE == 2) {
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+            sdpa_insert_sfpnop();
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        } else if constexpr (POLY_DEGREE == 3) {
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+            sdpa_insert_sfpnop();
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+            sdpa_insert_sfpnop();
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        } else {
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
+            sdpa_insert_sfpnop();
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+            sdpa_insert_sfpnop();
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+            sdpa_insert_sfpnop();
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        }
+        sdpa_insert_sfpnop();
 
         TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);
         sdpa_insert_sfpnop();
@@ -199,7 +183,6 @@ inline void calculate_exponential_first_column() {
         calculate_exponential_polynomial<
             true,
             ITERATIONS_HALF_FACE,
-            false,
             polynomial_degree,
             is_fp32_dest_acc_en,
             scale_bf16>();

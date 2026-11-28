@@ -46,7 +46,18 @@ from helpers.utils import passed_test, result_tensor
 TILE_DIMENSIONS = [TILE_DIM, TILE_DIM]
 
 RECIP_OPS = (SdpaOp.RecipIter,)
-EXP_OPS = (SdpaOp.ExpAccurate, SdpaOp.ExpPoly)
+# The calculate_exponential_first_column bodies, which pick their own polynomial degree.
+FIRST_COLUMN_EXP_OPS = (SdpaOp.ExpAccurate, SdpaOp.ExpPoly)
+
+# calculate_exponential_polynomial supports degrees 1 to 4. The first-column wrapper only picks
+# 2 (bf16 Dest) or 4 (fp32 Dest); test_sfpu_sdpa_exp_polynomial drives every degree directly.
+EXP_POLY_DEGREE_OPS = {
+    1: SdpaOp.ExpPolyDeg1,
+    2: SdpaOp.ExpPolyDeg2,
+    3: SdpaOp.ExpPolyDeg3,
+    4: SdpaOp.ExpPolyDeg4,
+}
+EXP_OPS = FIRST_COLUMN_EXP_OPS + tuple(EXP_POLY_DEGREE_OPS.values())
 
 # The exp bodies take their scale as a uint16_t bf16 pattern, so only bf16-exact values
 # keep the golden aligned with the kernel. 0xBF80 is -1.0, which ttnn's sigmoid_sub passes;
@@ -123,6 +134,11 @@ _TOLERANCES = {
     (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
     (SdpaOp.ExpAccurate, None): ((4.0e-6, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.ExpPoly, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
+    # calculate_exponential_polynomial by degree. Degree 1 is ~4.3% off even before packing.
+    (SdpaOp.ExpPolyDeg1, None): ((4.0e-6, 8.6e-2), (4.0e-6, 8.6e-2)),
+    (SdpaOp.ExpPolyDeg2, None): ((4.0e-6, 1.2e-2), (4.0e-6, 4.8e-3)),
+    (SdpaOp.ExpPolyDeg3, None): ((4.0e-6, 1.2e-2), (4.0e-6, 2.0e-4)),
+    (SdpaOp.ExpPolyDeg4, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
     (SdpaOp.Softplus, None): ((3.0e-8, 1.0e-2), (3.0e-8, 3.2e-4)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
@@ -230,12 +246,14 @@ def _variants():
     ]
     variants += [
         Variant(op, exp_scale_bf16=scale)
-        for op in EXP_OPS
+        for op in FIRST_COLUMN_EXP_OPS
         for scale in EXP_SCALE_BF16_VALUES
     ]
     variants += [Variant(SdpaOp.Softplus, softplus=cfg) for cfg in SOFTPLUS_CONFIGS]
     variants += [
-        Variant(op, dest_sync=DestSync.Full) for op in SdpaOp if op != SdpaOp.Correction
+        Variant(op, dest_sync=DestSync.Full)
+        for op in SdpaOp
+        if op != SdpaOp.Correction and op not in EXP_POLY_DEGREE_OPS.values()
     ]
     return variants
 
@@ -326,6 +344,23 @@ def _run_sfpu_sdpa(
     ), (
         f"column-vector SFPU result does not match golden "
         f"(atol={atol:g}, rtol={rtol:g} for {variant}/{precision.label})"
+    )
+
+
+@parametrize(
+    poly_degree=list(EXP_POLY_DEGREE_OPS),
+    exp_scale_bf16=list(EXP_SCALE_BF16_VALUES),
+    precision=list(Precision),
+)
+def test_sfpu_sdpa_exp_polynomial(poly_degree, exp_scale_bf16, precision):
+    """calculate_exponential_polynomial at every degree it supports, called directly.
+
+    Degrees 1 and 2 preload ln2 into LREG3/LREG4 on Blackhole and 3 and 4 reload it every
+    iteration, so between them they cover both sides of sdpa_can_preload_ln2_constants.
+    """
+    _run_sfpu_sdpa(
+        Variant(EXP_POLY_DEGREE_OPS[poly_degree], exp_scale_bf16=exp_scale_bf16),
+        precision,
     )
 
 
