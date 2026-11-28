@@ -1,0 +1,558 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Accuracy tests for OpenVLA pieces that the PCC tests with random weights do not reach.
+
+1. Language model Q/K weights: attention scores after RoPE match HF Llama (host only)
+2. SigLIP featurizer: TT features match timm, position embedding included (random weights)
+3. Vision backbone: DINOv2 and SigLIP features match the reference on the checkpoint (needs OPENVLA_WEIGHTS)
+4. Language model prefill: logits after the first decoder layers match HF Llama on the checkpoint
+   (needs OPENVLA_WEIGHTS)
+5. predict_action: returns only action tokens, decoded to actions; teacher-forced on the HF reference tokens, each
+   TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS). In one case every decode step writes past the prompt's KV blocks.
+6. predict_action on device rejects generation options it cannot honour (host only)
+7. predict_action returns the generated tokens in order, first the prefill's, and rejects non-action tokens (host only)
+8. The language model's forward puts the prefill token first, feeds each token to the next decode step, and gives decode
+   a page table that covers every position it writes (host only, device calls stubbed)
+
+Reference for 5: references/generate_reference_actions.py (HF, bfloat16 on CPU, revision 47a0ec7f).
+Reference for 3 and 4: openvla/openvla-7b (revision 47a0ec7f) on CPU in float32, through the timm towers of
+PrismaticVisionBackbone (the code of the checkpoint's modeling_prismatic.py) and transformers' LlamaForCausalLM.
+"""
+
+import json
+import os
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+import torch
+from safetensors import safe_open
+from transformers import LlamaConfig, LlamaForCausalLM
+from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding, apply_rotary_pos_emb
+
+import ttnn
+from models.common.reference_rope import apply_rotary_emb, precompute_freqs_cis
+from models.common.utility_functions import comp_pcc, torch_random
+import models.experimental.openvla.tt.open_vla as open_vla
+from models.experimental.openvla.tt.open_vla import (
+    OPENVLA_FABRIC_CONFIG,
+    OPENVLA_MESH_DEVICE,
+    TIMM_OVERRIDE_ACT_LAYER,
+    VISION_BACKBONE_TO_RESOLUTION,
+    VISION_BACKBONE_TO_TIMM_ID,
+    OpenVLAConfig,
+    OpenVLALanguageModel,
+    PrismaticProjector,
+    PrismaticVisionBackbone,
+    TTOpenVLAForActionPrediction,
+    map_openvla_hf_to_meta_keys,
+    ttnn_to_torch_safe,
+)
+
+BACKBONE_ID = "dinosiglip-vit-so-224px"
+PROMPT = "In: What action should the robot take to pick up the red block?\nOut:"
+OPENVLA_DEVICE_PARAMS = {
+    "fabric_config": OPENVLA_FABRIC_CONFIG,
+    "trace_region_size": 30000000,
+    "num_command_queues": 1,
+    "l1_small_size": 81920,
+}
+
+
+@pytest.fixture
+def llama2_hf_model():
+    """The language model loads its config and tokenizer from HF_MODEL, which must be Llama-2-7B."""
+    if os.environ.get("HF_MODEL") != "meta-llama/Llama-2-7b-hf":
+        pytest.skip("Set HF_MODEL=meta-llama/Llama-2-7b-hf")
+
+
+def vision_backbone_args():
+    return (
+        True,
+        VISION_BACKBONE_TO_RESOLUTION[BACKBONE_ID],
+        VISION_BACKBONE_TO_TIMM_ID[BACKBONE_ID],
+        TIMM_OVERRIDE_ACT_LAYER[BACKBONE_ID],
+    )
+
+
+def load_openvla_weights(weights_path, prefixes):
+    """Checkpoint tensors whose names start with one of `prefixes`, read only from the shards that hold them."""
+    with open(os.path.join(weights_path, "model.safetensors.index.json")) as f:
+        weight_map = json.load(f)["weight_map"]
+    keys = [key for key in weight_map if key.startswith(prefixes)]
+    tensors = {}
+    for shard in sorted({weight_map[key] for key in keys}):
+        with safe_open(os.path.join(weights_path, shard), framework="pt", device="cpu") as f:
+            for key in keys:
+                if weight_map[key] == shard:
+                    tensors[key] = f.get_tensor(key)
+    return tensors
+
+
+def normalize_image(image):
+    """A 3x224x224 image in [0, 1], normalized for DINOv2 and SigLIP and stacked on channels as OpenVLA does."""
+    dinov2_mean = torch.tensor([0.484375, 0.455078125, 0.40625]).view(3, 1, 1)
+    dinov2_std = torch.tensor([0.228515625, 0.2236328125, 0.224609375]).view(3, 1, 1)
+    return torch.cat([(image - dinov2_mean) / dinov2_std, (image - 0.5) / 0.5]).unsqueeze(0)
+
+
+def fixed_pixel_values():
+    y, x = torch.meshgrid(torch.linspace(0, 1, 224), torch.linspace(0, 1, 224), indexing="ij")
+    return normalize_image(torch.stack([x, y, 0.5 + 0.5 * torch.sin(12 * x) * torch.cos(12 * y)]))
+
+
+def to_tt_pixel_values(pixel_values, device):
+    """The two NHWC inputs, channels padded to 4, that the TT vision backbone takes."""
+    images = torch.split(pixel_values.permute(0, 2, 3, 1), [3, 3], dim=3)
+    return [
+        ttnn.from_torch(
+            torch.nn.functional.pad(image, (0, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        for image in images
+    ]
+
+
+# =============================================================================
+# TEST 1: Language model Q/K layout
+# =============================================================================
+@pytest.mark.parametrize("n_heads, head_dim, seq_len", [(2, 128, 64)])
+def test_language_model_qk_rope_pcc(n_heads, head_dim, seq_len):
+    """
+    tt_transformers rotates Q/K in the Meta layout. The weights map_openvla_hf_to_meta_keys produces must give the
+    same attention scores under that rotation as the HF weights give under HF RoPE.
+    """
+    torch.manual_seed(42)
+    dim = n_heads * head_dim
+    hf_state_dict = {
+        "language_model.model.layers.0.self_attn.q_proj.weight": torch.randn(dim, dim),
+        "language_model.model.layers.0.self_attn.k_proj.weight": torch.randn(dim, dim),
+    }
+    x = torch.randn(1, seq_len, dim)
+
+    # HF reference
+    config = LlamaConfig(hidden_size=dim, num_attention_heads=n_heads, num_key_value_heads=n_heads)
+    cos, sin = LlamaRotaryEmbedding(config)(x, torch.arange(seq_len).unsqueeze(0))
+    q = (x @ hf_state_dict["language_model.model.layers.0.self_attn.q_proj.weight"].T).view(1, seq_len, n_heads, -1)
+    k = (x @ hf_state_dict["language_model.model.layers.0.self_attn.k_proj.weight"].T).view(1, seq_len, n_heads, -1)
+    q, k = apply_rotary_pos_emb(q.transpose(1, 2), k.transpose(1, 2), cos, sin)
+    hf_scores = q @ k.transpose(-2, -1)
+
+    # Mapped weights with the Meta-layout rotation
+    meta_state_dict = map_openvla_hf_to_meta_keys(hf_state_dict, head_dim)
+    q = (x @ meta_state_dict["layers.0.attention.wq.weight"].T).view(1, seq_len, n_heads, -1)
+    k = (x @ meta_state_dict["layers.0.attention.wk.weight"].T).view(1, seq_len, n_heads, -1)
+    q, k = apply_rotary_emb(q, k, precompute_freqs_cis(head_dim, seq_len, theta=10000.0))
+    tt_scores = q.transpose(1, 2) @ k.transpose(1, 2).transpose(-2, -1)
+
+    _, pcc_value = comp_pcc(hf_scores, tt_scores, 0.9999)
+
+    print(f"\n{'='*60}")
+    print(f"LANGUAGE MODEL Q/K ROPE PCC RESULTS")
+    print(f"{'='*60}")
+    print(f"  PCC: {pcc_value}")
+    print(f"{'='*60}\n")
+
+    assert pcc_value > 0.9999, f"Attention scores PCC {pcc_value} too low: Q/K not in the layout the RoPE expects"
+
+
+# =============================================================================
+# TEST 2: SigLIP featurizer
+# =============================================================================
+@pytest.mark.parametrize("batch_size", [1])
+def test_siglip_featurizer_pcc(device, batch_size):
+    """
+    SigLIP features from PrismaticVisionBackbone (TT) vs its timm model (CPU), same random weights.
+
+    Random init leaves pos_embed near zero, which hides a missing position embedding, so it is redrawn at unit scale.
+    """
+    torch.manual_seed(42)
+    torch_backbone = PrismaticVisionBackbone(*vision_backbone_args())
+    torch_backbone.fused_featurizer.pos_embed.data.normal_()
+    state_dict = {f"vision_backbone.{k}": v for k, v in torch_backbone.state_dict().items()}
+    tt_backbone = PrismaticVisionBackbone(*vision_backbone_args(), ttnn_device=device, local_state_dict=state_dict)
+
+    torch_pixel_values = torch_random((batch_size, 3, 224, 224), -1, 1, dtype=torch.float32)
+    with torch.no_grad():
+        torch_output = torch_backbone.fused_featurizer(torch_pixel_values)
+
+    pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
+    pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
+    pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = tt_backbone.ttnn_fused_featurizer(pixel_values)
+    tt_output_torch = ttnn_to_torch_safe(tt_output, device)
+
+    _, pcc_value = comp_pcc(torch_output, tt_output_torch, 0.99)
+
+    print(f"\n{'='*60}")
+    print(f"SigLIP FEATURIZER PCC RESULTS")
+    print(f"{'='*60}")
+    print(f"  PCC: {pcc_value}")
+    print(f"{'='*60}\n")
+
+    assert pcc_value > 0.99, f"SigLIP featurizer PCC {pcc_value} too low"
+
+
+# =============================================================================
+# TEST 3: Vision backbone on the checkpoint
+# =============================================================================
+def test_vision_backbone_checkpoint_pcc(device, openvla_weights_path):
+    """
+    DINOv2 and SigLIP patch features from the TT vision backbone vs its timm towers, both with the checkpoint's weights,
+    on a fixed image.
+    """
+    state_dict = load_openvla_weights(openvla_weights_path, ("vision_backbone.",))
+    torch_backbone = PrismaticVisionBackbone(*vision_backbone_args(), local_state_dict=state_dict)
+    tt_backbone = PrismaticVisionBackbone(*vision_backbone_args(), ttnn_device=device, local_state_dict=state_dict)
+
+    pixel_values = fixed_pixel_values()
+    with torch.no_grad():
+        torch_output = torch_backbone(pixel_values)
+    tt_output = ttnn_to_torch_safe(tt_backbone(to_tt_pixel_values(pixel_values, device)), device)
+
+    dinov2_dim = torch_backbone.featurizer.embed_dim
+    _, dinov2_pcc = comp_pcc(torch_output[..., :dinov2_dim], tt_output[..., :dinov2_dim])
+    _, siglip_pcc = comp_pcc(torch_output[..., dinov2_dim:], tt_output[..., dinov2_dim:])
+
+    print(f"\n{'='*60}")
+    print(f"VISION BACKBONE CHECKPOINT PCC RESULTS")
+    print(f"{'='*60}")
+    print(f"  DINOv2 PCC: {dinov2_pcc}")
+    print(f"  SigLIP PCC: {siglip_pcc}")
+    print(f"{'='*60}\n")
+
+    assert dinov2_pcc > 0.97, f"DINOv2 features PCC {dinov2_pcc} too low"
+    assert siglip_pcc > 0.97, f"SigLIP features PCC {siglip_pcc} too low"
+
+
+# =============================================================================
+# TEST 4: Language model prefill on the checkpoint
+# =============================================================================
+@pytest.mark.parametrize("device_params", [OPENVLA_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [OPENVLA_MESH_DEVICE], indirect=True)
+@pytest.mark.parametrize("num_layers", [2])
+def test_language_model_prefill_checkpoint_pcc(mesh_device, openvla_weights_path, llama2_hf_model, num_layers):
+    """
+    Last-position logits of the language model cut to its first decoder layers vs HF LlamaForCausalLM with the
+    checkpoint's weights, on the input predict_action builds: BOS, the projected patches of a fixed image, the prompt.
+    """
+    layers = tuple(f"language_model.model.layers.{i}." for i in range(num_layers))
+    lm_state_dict = load_openvla_weights(
+        openvla_weights_path,
+        ("language_model.model.embed_tokens.", "language_model.model.norm.", "language_model.lm_head.") + layers,
+    )
+    vision_state_dict = load_openvla_weights(openvla_weights_path, ("vision_backbone.", "projector."))
+    language_model = OpenVLALanguageModel(mesh_device, local_state_dict=lm_state_dict, num_layers=num_layers)
+
+    input_ids = language_model.tokenizer(PROMPT, return_tensors="pt")["input_ids"]
+    input_ids = torch.cat([input_ids, torch.tensor([[29871]])], dim=1)
+    vision_backbone = PrismaticVisionBackbone(*vision_backbone_args(), local_state_dict=vision_state_dict)
+    projector = PrismaticProjector(True, vision_backbone.embed_dim, 4096)
+    projector.load_state_dict(
+        {k.removeprefix("projector."): v for k, v in vision_state_dict.items() if k.startswith("projector.")}
+    )
+    # LlamaConfig defaults are Llama-2-7B's
+    reference = LlamaForCausalLM(LlamaConfig(vocab_size=32064, num_hidden_layers=num_layers))
+    reference.load_state_dict({k.removeprefix("language_model."): v.float() for k, v in lm_state_dict.items()})
+    with torch.no_grad():
+        token_embeds = reference.model.embed_tokens(input_ids)
+        patch_embeds = projector(vision_backbone(fixed_pixel_values()))
+        inputs_embeds = torch.cat([token_embeds[:, :1], patch_embeds, token_embeds[:, 1:]], dim=1)
+        reference_logits = reference(inputs_embeds=inputs_embeds).logits[0, -1]
+
+    tt_inputs_embeds = ttnn.from_torch(
+        inputs_embeds.unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_logits = language_model(inputs_embeds=tt_inputs_embeds)[0].reshape(-1)[: reference_logits.shape[0]].float()
+
+    _, pcc_value = comp_pcc(reference_logits, tt_logits)
+    reference_top5 = reference_logits.topk(5).indices.tolist()
+    tt_top1 = tt_logits.argmax().item()
+
+    print(f"\n{'='*60}")
+    print(f"LANGUAGE MODEL PREFILL CHECKPOINT RESULTS ({num_layers} layers, {inputs_embeds.shape[1]} positions)")
+    print(f"{'='*60}")
+    print(f"  Logits PCC: {pcc_value}")
+    print(f"  Reference top-5: {reference_top5}, TT top-1: {tt_top1}")
+    print(f"{'='*60}\n")
+
+    assert pcc_value > 0.97, f"Logits PCC {pcc_value} too low"
+    assert tt_top1 in reference_top5, f"TT top-1 {tt_top1} not in the reference top-5 {reference_top5}"
+
+
+# =============================================================================
+# TEST 5: Action tokens
+# =============================================================================
+# From references/generate_reference_actions.py: the HF greedy action tokens and, at each step, the HF top-5
+REFERENCE_ACTIONS = {
+    "orange_red_block": {
+        "rgb": (255, 100, 50),
+        "instruction": "pick up the red block",
+        "tokens": [31868, 31744, 31947, 31864, 31834, 31823, 31872],
+        "top5": [
+            [31868, 31839, 31861, 31999, 31884],
+            [31744, 31798, 31885, 31794, 31776],
+            [31947, 31949, 31847, 31886, 31913],
+            [31864, 31870, 31827, 31917, 31896],
+            [31834, 31786, 31866, 31782, 31855],
+            [31823, 31848, 31850, 31812, 31827],
+            [31872, 31744, 31873, 31858, 31811],
+        ],
+    },
+    "blue_put_cup": {
+        "rgb": (40, 90, 200),
+        "instruction": "put the cup on the plate",
+        "tokens": [31860, 31865, 31876, 31873, 31860, 31853, 31744],
+        "top5": [
+            [31860, 31999, 31871, 31995, 31873],
+            [31865, 31855, 31832, 31843, 31831],
+            [31876, 31877, 31887, 31881, 31888],
+            [31873, 31872, 31881, 31882, 31883],
+            [31860, 31861, 31859, 31868, 31857],
+            [31853, 31854, 31852, 31855, 31856],
+            [31744, 31872, 31745, 31785, 31758],
+        ],
+    },
+    # 288 positions: the prompt fills 9 KV-cache blocks exactly, so every decode step writes past them
+    "green_spatula_stove": {
+        "rgb": (60, 160, 70),
+        "instruction": "move the spatula from the left side of the stove to the right side",
+        "tokens": [31858, 31895, 31898, 31878, 31866, 31882, 31744],
+        "top5": [
+            [31858, 31794, 31838, 31828, 31786],
+            [31895, 31882, 31915, 31999, 31883],
+            [31898, 31894, 31910, 31885, 31900],
+            [31878, 31899, 31834, 31990, 31976],
+            [31866, 31859, 31873, 31862, 31861],
+            [31882, 31884, 31883, 31873, 31863],
+            [31744, 31872, 31875, 31860, 31825],
+        ],
+    },
+}
+OPENVLA_VOCAB_SIZE = 32000
+OPENVLA_ACTION_BINS = 256
+
+
+def reference_unnormalized_actions(tokens, stats):
+    """OpenVLA's token-to-action decoding: each token's bin center, scaled from [-1, 1] to [q01, q99] where masked."""
+    bins = np.linspace(-1, 1, OPENVLA_ACTION_BINS)
+    bin_centers = (bins[:-1] + bins[1:]) / 2.0
+    normalized = bin_centers[np.clip(OPENVLA_VOCAB_SIZE - np.array(tokens) - 1, 0, bin_centers.shape[0] - 1)]
+    low, high = np.array(stats["q01"]), np.array(stats["q99"])
+    mask = np.array(stats.get("mask", np.ones_like(low, dtype=bool)))
+    return np.where(mask, 0.5 * (normalized + 1) * (high - low) + low, normalized)
+
+
+# Six 32-layer predict_action calls (about 34 s each on an N150) after loading the 7B weights
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [OPENVLA_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [OPENVLA_MESH_DEVICE], indirect=True)
+def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_model):
+    """
+    For each reference case, greedy predict_action must return action tokens only, decoded to actions. Then, with the
+    reference tokens fed back in (teacher forcing), the model's top-1 at every step must be in the reference top-5.
+    The third prompt fills its KV-cache blocks exactly, so every decode step writes past them.
+    """
+    merged_tensors = load_openvla_weights(openvla_weights_path, ("",))
+    kwargs = {
+        "return_unused_kwargs": True,
+        "torch_dtype": torch.bfloat16,
+        "low_cpu_mem_usage": False,
+        "name_or_path": "openvla/openvla-7b",
+        "pretrained_model_name_or_path": openvla_weights_path,
+    }
+    config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
+    vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
+    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors).to(
+        "cpu", dtype=torch.bfloat16
+    )
+    action_stats = vla_config.norm_stats["bridge_orig"]["action"]
+
+    for case, reference in REFERENCE_ACTIONS.items():
+        prompt = f"In: What action should the robot take to {reference['instruction']}?\nOut:"
+        inputs = vla.language_model.tokenizer(prompt, return_tensors="pt")
+        image = (torch.tensor(reference["rgb"], dtype=torch.float32) / 255).view(3, 1, 1).expand(3, 224, 224)
+        predict_kwargs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "pixel_values": normalize_image(image).to(torch.bfloat16),
+            "unnorm_key": "bridge_orig",
+            "do_sample": False,
+            "return_tokens": True,
+        }
+        # Teacher-forced pass first, so its numbers are printed even if the greedy pass raises
+        vla.language_model.forced_tokens = reference["tokens"]
+        try:
+            vla.predict_action(**predict_kwargs)
+        except ValueError as error:  # the model's own top-1 at some step is not an action token; still recorded below
+            if "non-action" not in str(error):
+                raise
+        finally:
+            vla.language_model.forced_tokens = None
+        forced_top1 = vla.language_model._last_generated_tokens
+        try:
+            actions, action_tokens = vla.predict_action(**predict_kwargs)
+            greedy_error = None
+        except ValueError as error:  # a non-action token among the generated ones
+            actions, action_tokens, greedy_error = None, vla.language_model._last_generated_tokens, error
+        outside_top5 = [i for i, token in enumerate(forced_top1) if token not in reference["top5"][i]]
+
+        print(f"\n{'='*60}")
+        print(f"ACTION TOKEN RESULTS ({case})")
+        print(f"{'='*60}")
+        print(f"  Greedy:              {action_tokens}")
+        print(f"  Reference:           {reference['tokens']}")
+        print(f"  Teacher-forced top-1: {forced_top1}")
+        print(f"  Steps outside the reference top-5: {outside_top5}")
+        print(f"{'='*60}\n")
+
+        assert greedy_error is None, f"{case}: {greedy_error}"
+        assert len(action_tokens) == vla.get_action_dim("bridge_orig")
+        assert action_tokens == vla.language_model._last_generated_tokens, f"{case}: not the generated tokens"
+        assert np.allclose(
+            actions, reference_unnormalized_actions(action_tokens, action_stats)
+        ), f"{case}: actions {actions} are not the decoded tokens {action_tokens}"
+        assert not outside_top5, f"{case}: top-1 outside the reference top-5 at steps {outside_top5}: {forced_top1}"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"do_sample": True},
+        {"num_beams": 2},
+        {"logits_processor": []},
+        {"attention_mask": torch.tensor([[0, 1, 1]])},
+    ],
+)
+def test_predict_action_rejects_unsupported_generate_options(kwargs, expect_error):
+    """The device path decodes greedily in one forward call, so options it would ignore must raise."""
+    vla = SimpleNamespace(ttnn_device=object(), cached_output=None, _skip_kv_reset=True)
+    with expect_error(ValueError, "decodes greedily"):
+        TTOpenVLAForActionPrediction.predict_action(
+            vla, input_ids=torch.tensor([[1, 2, 29871]]), unnorm_key="bridge_orig", pixel_values=None, **kwargs
+        )
+
+
+class FakeOpenVLA:
+    """Stands in for TTOpenVLAForActionPrediction around predict_action: the forward call just records `tokens` as
+    the language model's generated tokens, the first being the one the prefill picks."""
+
+    _check_unnorm_key = staticmethod(TTOpenVLAForActionPrediction._check_unnorm_key)
+    get_action_dim = TTOpenVLAForActionPrediction.get_action_dim
+    get_action_stats = TTOpenVLAForActionPrediction.get_action_stats
+
+    def __init__(self, tokens):
+        self.ttnn_device = object()
+        self.cached_output = None
+        self._skip_kv_reset = True
+        self.vocab_size = OPENVLA_VOCAB_SIZE
+        bins = np.linspace(-1, 1, OPENVLA_ACTION_BINS)
+        self.bin_centers = (bins[:-1] + bins[1:]) / 2.0
+        action = {"q01": [-0.5, -1.0, -0.2, -0.3, -0.4, -0.6, 0.0], "q99": [0.5, 1.0, 0.2, 0.3, 0.4, 0.6, 1.0]}
+        self.norm_stats = {"bridge_orig": {"action": {**action, "mask": [True] * 6 + [False]}}}
+        self.language_model = SimpleNamespace(num_actions=None, _last_generated_tokens=None)
+        self.tokens = tokens
+
+    def __call__(self, **kwargs):
+        self.language_model._last_generated_tokens = list(self.tokens)
+
+
+def predict_with_tokens(tokens):
+    return TTOpenVLAForActionPrediction.predict_action(
+        FakeOpenVLA(tokens),
+        input_ids=torch.tensor([[1, 2, 29871]]),
+        unnorm_key="bridge_orig",
+        pixel_values=None,
+        return_tokens=True,
+    )
+
+
+def test_predict_action_token_order():
+    """predict_action returns the generated tokens in generation order, the prefill's first, decoded in that order."""
+    tokens = [31999, 31990, 31900, 31850, 31800, 31760, 31744]
+    actions, action_tokens = predict_with_tokens(tokens)
+    stats = FakeOpenVLA(tokens).norm_stats["bridge_orig"]["action"]
+    assert action_tokens == [31999, 31990, 31900, 31850, 31800, 31760, 31744]
+    assert np.allclose(actions, reference_unnormalized_actions(tokens, stats))
+    # Token 31999 is the lowest bin (center -1 + 1/255), 31744 the highest (center 1 - 1/255, gripper not unnormalized)
+    assert actions[0] == pytest.approx(-0.5 + 1 / 510)
+    assert actions[6] == pytest.approx(1 - 1 / 255)
+
+
+@pytest.mark.parametrize("bad_token", [2, 31743, 32000])
+def test_predict_action_rejects_non_action_tokens(bad_token, expect_error):
+    """An end-of-sequence or other non-action token among the generated tokens must not be decoded as an action."""
+    with expect_error(ValueError, "non-action tokens"):
+        predict_with_tokens([31868, 31744, 31947, 31864, 31834, 31823, bad_token])
+
+
+class FakeTTTensor:
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def device(self):
+        return None
+
+
+def one_hot_logits(token):
+    logits = torch.zeros(1, 1, OPENVLA_VOCAB_SIZE)
+    logits[..., token] = 1.0
+    return logits
+
+
+# 276 and 282 positions stay in the prompt's last KV block; 283 and 288 make decode write into the next one
+@pytest.mark.parametrize("seq_len", [276, 282, 283, 288])
+def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
+    """OpenVLALanguageModel's forward with the device calls stubbed: the prefill's token comes first, each decode step
+    takes the previous token, and every position decode writes is covered by the page table it gets."""
+    monkeypatch.setattr(
+        open_vla.ttnn,
+        "pad",
+        lambda t, pads, value: FakeTTTensor((t.shape[0], t.shape[1], t.shape[2] + pads[2][1], t.shape[3])),
+    )
+    monkeypatch.setattr(open_vla.ttnn, "unsqueeze", lambda t, dim: FakeTTTensor((t.shape[0], 1) + t.shape[1:]))
+    monkeypatch.setattr(open_vla.ttnn, "from_torch", lambda t, **kwargs: t)
+    monkeypatch.setattr(open_vla.ttnn, "from_device", lambda t: t)
+    monkeypatch.setattr(open_vla.ttnn, "ReplicateTensorToMesh", lambda device: None)
+    block_size = 32
+    monkeypatch.setattr(open_vla, "get_block_size", lambda kv_cache: block_size)
+    prefill_token, decode_tokens = 31900, [31801, 31802, 31803, 31804, 31805, 31806]
+    calls, prefill_page_tables = [], []
+
+    def decode_forward(out_tok, current_pos, page_table=None, **kwargs):
+        calls.append((int(out_tok.item()), int(current_pos.item()), page_table))
+        return one_hot_logits(decode_tokens[len(calls) - 1]), None
+
+    language_model = object.__new__(OpenVLALanguageModel)
+    language_model.page_table = torch.randperm(512).view(1, 512)
+    language_model.tt_kv_cache = [[None]]
+    language_model.num_actions = 7
+    rope_setup = SimpleNamespace(
+        cos_matrix_prefill=torch.zeros(1, 1, 1024, 2), sin_matrix_prefill=torch.zeros(1, 1, 1024, 2)
+    )
+    language_model.model = [
+        SimpleNamespace(
+            rope_setup=rope_setup,
+            forward=lambda *args, page_table=None, **kwargs: prefill_page_tables.append(page_table),
+            process_output_prefill=lambda logits, last_token_idx: one_hot_logits(prefill_token).view(-1),
+        )
+    ]
+    language_model.generator = SimpleNamespace(decode_forward=decode_forward)
+    logits = language_model(inputs_embeds=FakeTTTensor((1, 1, seq_len, 8)), return_dict=True)
+
+    assert language_model._last_generated_tokens == [prefill_token] + decode_tokens
+    # forward() hands these logits out one per call (the first as .logits), so the prefill's must come first
+    assert [int(step.reshape(-1).argmax()) for step in logits] == [prefill_token] + decode_tokens
+    assert [token for token, _, _ in calls] == [prefill_token] + decode_tokens[:-1]
+    assert [position for _, position, _ in calls] == list(range(seq_len, seq_len + 6))
+    (prefill_page_table,) = prefill_page_tables
+    for _, position, page_table in calls:
+        num_blocks = page_table.shape[1]
+        assert position < block_size * num_blocks, f"decode writes position {position} past {num_blocks} blocks"
+        assert torch.equal(page_table[:, : prefill_page_table.shape[1]], prefill_page_table), "decode maps other blocks"

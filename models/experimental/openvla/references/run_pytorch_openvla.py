@@ -105,7 +105,7 @@ def main():
         gen_outputs = model.generate(
             input_ids=input_ids,
             pixel_values=pixel_values,
-            max_new_tokens=8,
+            max_new_tokens=7,
             do_sample=False,
             output_scores=True,
             return_dict_in_generate=True,
@@ -119,24 +119,15 @@ def main():
 
         print(f"Generated tokens: {all_tokens}")
 
-        # Compute action from tokens
-        action_tokens = torch.tensor(all_tokens[1:8], dtype=torch.long)
-        action_token_ids = action_tokens.cpu().numpy()
-
-        # Map tokens to action values (tokens 31744-31999 -> 256 bins -> [-1, 1])
-        n_bins = 256
-        bin_centers = np.linspace(-1, 1, n_bins)
-        bin_indices = np.clip(action_token_ids - 31744, 0, n_bins - 1)
-        normalized_actions = bin_centers[bin_indices]
-
-        # Try to unnormalize using model's norm_stats
-        action = normalized_actions
-        if hasattr(model, "norm_stats") and "bridge_orig" in model.norm_stats:
-            norm_stats = model.norm_stats["bridge_orig"]
-            if "q01" in norm_stats:
-                q01 = np.array(norm_stats["q01"])
-                q99 = np.array(norm_stats["q99"])
-                action = (normalized_actions + 1) / 2 * (q99 - q01) + q01
+        # Decode the 7 action tokens as OpenVLAForActionPrediction.predict_action does: the first is the prefill's,
+        # token vocab_size - 1 - i is bin center i, and masked dimensions are scaled to [q01, q99]
+        action_token_ids = np.array(all_tokens[:7])
+        bin_indices = np.clip(model.vocab_size - action_token_ids - 1, 0, model.bin_centers.shape[0] - 1)
+        normalized_actions = model.bin_centers[bin_indices]
+        stats = model.get_action_stats("bridge_orig")
+        mask = np.array(stats.get("mask", np.ones_like(stats["q01"], dtype=bool)))
+        q01, q99 = np.array(stats["q01"]), np.array(stats["q99"])
+        action = np.where(mask, 0.5 * (normalized_actions + 1) * (q99 - q01) + q01, normalized_actions)
 
     print(f"\nAction: {action}")
 
