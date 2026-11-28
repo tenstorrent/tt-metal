@@ -14,6 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "jit_build/depend.hpp"
+#include "jit_build/path_roots.hpp"
 #include "jit_build/pch.hpp"
 
 TEST(JitBuildTests, ParseDependencyFile) {
@@ -82,6 +83,35 @@ TEST_F(JitBuildDependencyTests, UpToDate) {
 
     // Verify that dependencies are up to date
     EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
+}
+
+// A record written relative to a root is checked where the reader's root is.
+TEST_F(JitBuildDependencyTests, RelocatableRecordFollowsItsRoot) {
+    constexpr auto obj_file_name = "test.o";
+    const tt::jit_build::ParsedDependencies dependencies{{obj_file_name, {"a.txt", "b.txt"}}};
+    create_dependency_files(dependencies, obj_file_name);
+
+    tt::jit_build::PathRoots written_at;
+    written_at.add("SRC", out_dir_.string());
+    std::stringstream record;
+    tt::jit_build::write_dependency_hashes(dependencies, out_dir_.string(), obj_file_name, record, &written_at);
+    EXPECT_NE(record.str().find("\"${SRC}/a.txt\""), std::string::npos);
+    EXPECT_EQ(record.str().find(out_dir_.string()), std::string::npos);
+
+    const auto moved_dir = std::filesystem::path(out_dir_.string() + "_moved");
+    std::filesystem::rename(out_dir_, moved_dir);
+    out_dir_ = moved_dir;
+    tt::jit_build::PathRoots read_at;
+    read_at.add("SRC", moved_dir.string());
+
+    std::stringstream at_new_root(record.str());
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(at_new_root, &read_at));
+    std::stringstream at_old_root(record.str());
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(at_old_root, &written_at));
+
+    std::ofstream{moved_dir / "b.txt"} << "Modified content of b.txt";
+    std::stringstream after_edit(record.str());
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(after_edit, &read_at));
 }
 
 TEST_F(JitBuildDependencyTests, OutOfDateAfterModification) {

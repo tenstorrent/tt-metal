@@ -33,6 +33,10 @@
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
+namespace tt::jit_build {
+class PathRoots;
+}
+
 namespace tt::tt_metal {
 
 class JitBuildOptions;
@@ -370,7 +374,10 @@ public:
 
     virtual Config config() const = 0;
 
-    uint64_t compute_hash() const;
+    // With `roots`, the source and include paths are hashed relative to their root, so the hash
+    // does not depend on where the trees are (see jit_build/path_roots.hpp).
+    uint64_t compute_hash(const tt::jit_build::PathRoots* roots = nullptr) const;
+    std::string get_kernel_source_file() const override;
 
     const std::string& get_full_kernel_name() const override;
     std::string get_observability_event_src_id() const override {

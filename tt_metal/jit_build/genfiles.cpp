@@ -57,13 +57,18 @@ namespace tt::tt_metal {
 
 namespace {
 
-string get_kernel_source_to_include(const KernelSource& kernel_src) {
+// With `path_from_define`, a source file is included through KERNEL_SOURCE_FILE_DEFINE, which the
+// compile recipe sets to its path, and the generated text is the same wherever the file is.
+string get_kernel_source_to_include(const KernelSource& kernel_src, bool path_from_define) {
     // Kernels define kernel_main() with no prior declaration (-Wmissing-prototypes). Not static:
     // that lets the compiler inline the only call and drop the symbol, which dump-consts.py and
     // llk-audit resolve by name.
     constexpr const char* kernel_main_decl = "void kernel_main();\n";
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
+            if (path_from_define) {
+                return fmt::format("{}#include {}\n", kernel_main_decl, jit_build::utils::KERNEL_SOURCE_FILE_DEFINE);
+            }
             return kernel_main_decl + ("#include \"" + kernel_src.path_.string() + "\"\n");
         }
         case KernelSource::SOURCE_CODE: return kernel_main_decl + kernel_src.source_;
@@ -890,7 +895,7 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content += generate_cached_semaphore_list(settings);
     }
 
-    kernel_header_content += get_kernel_source_to_include(kernel_src);
+    kernel_header_content += get_kernel_source_to_include(kernel_src, !env.path_roots().empty());
 
     // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
     // by name and calls the user entry. It must follow the user source (so the entry is declared)
@@ -939,7 +944,7 @@ void jit_build_genfiles_triscs_src(
         build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2, has_blaze_experimental_ct_args);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
-    const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
+    const string kernel_src_to_include = get_kernel_source_to_include(kernel_src, !env.path_roots().empty());
 
     // For a TT_KERNEL-tagged compute entry, append the generated kernel_main() shim after the user
     // source (same as the data-movement path). The compute entry symbol is kernel_main() —

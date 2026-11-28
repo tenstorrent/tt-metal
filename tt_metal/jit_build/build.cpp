@@ -252,11 +252,13 @@ void JitBuildEnv::init(
     uint64_t build_key,
     const JitDeviceConfig& config,
     const tt::llrt::RunTimeOptions& rtoptions,
-    const std::map<std::string, std::string>& device_kernel_defines) {
+    const std::map<std::string, std::string>& device_kernel_defines,
+    jit_build::PathRoots path_roots) {
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
     this->out_root_ = get_cache_root(rtoptions);
+    this->path_roots_ = std::move(path_roots);
 
     this->arch_ = config.arch;
     this->max_dfbs_ = config.max_dfbs;
@@ -281,6 +283,9 @@ void JitBuildEnv::init(
         if (std::filesystem::exists(gxx)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";
+            if (!this->path_roots_.empty()) {  // relocatable cache
+                this->path_roots_.add("SFPI", sfpi_roots[i]);
+            }
             log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
             sfpi_found = true;
             break;
@@ -702,15 +707,17 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // objects are invalidated, preventing stale binaries from being reused.
     {
         tt::StableHasher hasher;
-        hasher.update(env_.gpp_);
-        hasher.update(cflags_);
-        hasher.update(defines_);
-        hasher.update(includes_);
-        hasher.update(lflags_);
-        hasher.update(linker_script_);
-        hasher.update(extra_link_objs_);
+        // Paths are hashed relative to their root when the cache is relocatable.
+        const auto& roots = env_.path_roots();
+        hasher.update(roots.relocatable_text(env_.gpp_));
+        hasher.update(roots.relocatable_text(cflags_));
+        hasher.update(roots.relocatable_text(defines_));
+        hasher.update(roots.relocatable_text(includes_));
+        hasher.update(roots.relocatable_text(lflags_));
+        hasher.update(roots.relocatable(linker_script_));
+        hasher.update(roots.relocatable_text(extra_link_objs_));
         for (const auto& src : srcs_) {
-            hasher.update(src);
+            hasher.update(roots.relocatable(src));
         }
         hasher.update(default_compile_opt_level_);
         hasher.update(default_linker_opt_level_);
@@ -762,7 +769,7 @@ bool JitBuildState::warmed_elf_reusable(std::string_view kernel_name) const {
     const std::string full_dephash = elf_path.string() + std::string(jit_build::FULL_DEPHASH_SUFFIX);
     const std::string out_dir = elf_path.parent_path().string() + "/";
     return fs::exists(elf_path) && fs::exists(full_dephash) && build_state_matches(out_dir) &&
-           jit_build::dependencies_up_to_date_file(full_dephash);
+           jit_build::dependencies_up_to_date_file(full_dephash, &env_.path_roots());
 }
 
 void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
@@ -812,7 +819,7 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
     const std::string full_dephash = elf + std::string(jit_build::FULL_DEPHASH_SUFFIX);
     jit_build::ParsedDependencies deps_map{{elf, std::move(deps)}};
     std::ofstream hash_file(full_dephash);
-    jit_build::write_dependency_hashes(deps_map, out_dir, elf, hash_file);
+    jit_build::write_dependency_hashes(deps_map, out_dir, elf, hash_file, &env_.path_roots());
     hash_file.close();
     if (hash_file.fail()) {
         // A genuinely unreadable dependency drops the sidecar, correctly forcing a later recompile.
@@ -894,13 +901,14 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", recipe.pch_umbrella);
+    jit_build::write_dependency_hashes(
+        out_dir, obj_temp_path, obj_temp_path + ".dephash", recipe.pch_umbrella, &env_.path_roots());
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
     return env_.get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
-           !jit_build::dependencies_up_to_date(out_dir, obj);
+           !jit_build::dependencies_up_to_date(out_dir, obj, &env_.path_roots());
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
@@ -937,7 +945,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
 bool JitBuildState::need_link(const string& out_dir) const {
     std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path, &env_.path_roots());
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
@@ -980,7 +988,8 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     report_result(this->target_name_, "link", cmd, log_file.path(), result);
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
     std::ofstream hash_file(dephash_file.path());
-    jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+    jit_build::write_dependency_hashes(
+        {{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file, &env_.path_roots());
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
@@ -1228,6 +1237,12 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
         // path does no shell expansion).
         defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
+        // In a relocatable cache the generated wrapper names the kernel source through this define
+        // (see get_kernel_source_to_include), which keeps the wrapper free of absolute paths.
+        if (const std::string source_file = settings->get_kernel_source_file();
+            !source_file.empty() && !env_.path_roots().empty()) {
+            defines.push_back(fmt::format(R"(-D{}="{}")", jit_build::utils::KERNEL_SOURCE_FILE_DEFINE, source_file));
+        }
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));

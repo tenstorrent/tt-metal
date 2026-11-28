@@ -5,6 +5,7 @@
 #include "depend.hpp"
 #include "build_cache_telemetry.hpp"
 #include "common/stable_hash.hpp"
+#include "jit_build/path_roots.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <istream>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -175,7 +177,8 @@ void write_dependency_hashes(
     const ParsedDependencies& dependencies,
     const std::string& out_dir,
     const std::string& obj,
-    std::ostream& hash_file) {
+    std::ostream& hash_file,
+    const PathRoots* roots) {
     auto iter = dependencies.find(obj);
     if (iter == dependencies.end()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
@@ -196,9 +199,10 @@ void write_dependency_hashes(
             hash_file.setstate(std::ios::badbit);
             return;
         }
-        // Always write absolute path to the hash file, so when reading back we don't need to
-        // worry about relative paths
-        hash_file << dep_path << '\t' << hash << '\n';
+        // Always write a full path to the hash file, so when reading back we don't need to worry
+        // about paths relative to out_dir: absolute, or relative to a named root when `roots` has one.
+        const std::string recorded = roots != nullptr ? roots->relocatable(dep_path.string()) : dep_path.string();
+        hash_file << std::quoted(recorded) << '\t' << hash << '\n';
     }
 }
 
@@ -206,7 +210,8 @@ void write_dependency_hashes(
     const std::string& out_dir,
     const std::string& obj,
     const std::string& hash_path,
-    const std::string& extra_dependency) {
+    const std::string& extra_dependency,
+    const PathRoots* roots) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
@@ -227,7 +232,7 @@ void write_dependency_hashes(
         if (!extra_dependency.empty() && dependencies.contains(obj)) {
             dependencies.at(obj).push_back(extra_dependency);
         }
-        write_dependency_hashes(dependencies, out_dir, obj, hash_file);
+        write_dependency_hashes(dependencies, out_dir, obj, hash_file, roots);
     }
     hash_file.close();
     if (hash_file.fail()) {
@@ -236,10 +241,11 @@ void write_dependency_hashes(
     }
 }
 
-bool dependencies_up_to_date(std::istream& hash_file) {
+bool dependencies_up_to_date(std::istream& hash_file, const PathRoots* roots) {
     size_t count = 0;
-    std::filesystem::path dep;
-    while (hash_file >> dep) {
+    std::string recorded;
+    while (hash_file >> std::quoted(recorded)) {
+        const std::filesystem::path dep = roots != nullptr ? roots->resolve(recorded) : recorded;
         uint64_t recorded_hash{};
         hash_file >> recorded_hash;
         if (hash_file.fail()) {
@@ -275,7 +281,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
     return count > 0;
 }
 
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
+bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj, const PathRoots* roots) {
     auto t0 = std::chrono::steady_clock::now();
     std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
     std::ifstream hash_file(hash_path);
@@ -284,7 +290,7 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
         return false;
     }
 
-    auto up_to_date = dependencies_up_to_date(hash_file);
+    auto up_to_date = dependencies_up_to_date(hash_file, roots);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().get_or_register_metric("dependencies_up_to_date");
@@ -293,12 +299,12 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     return up_to_date;
 }
 
-bool dependencies_up_to_date_file(const std::string& hash_file_path) {
+bool dependencies_up_to_date_file(const std::string& hash_file_path, const PathRoots* roots) {
     std::ifstream hash_file(hash_file_path);
     if (!hash_file.is_open()) {
         return false;
     }
-    return dependencies_up_to_date(hash_file);
+    return dependencies_up_to_date(hash_file, roots);
 }
 
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }

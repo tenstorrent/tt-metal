@@ -431,6 +431,9 @@ class RunTimeOptions {
 
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
+    // TT_METAL_JIT_RELOCATABLE_CACHE when set, TT_METAL_JIT_PATH_ROOTS as given; see jit_build/path_roots.hpp.
+    std::optional<bool> jit_relocatable_cache;
+    std::string jit_path_roots;
 
     // Store command queues in device DRAM
     bool dram_backed_cq_env_var_set = false;
@@ -1089,6 +1092,11 @@ public:
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
+
+    std::optional<bool> get_jit_relocatable_cache() const { return jit_relocatable_cache; }
+    void set_jit_relocatable_cache(std::optional<bool> enable) { jit_relocatable_cache = enable; }
+    const std::string& get_jit_path_roots() const { return jit_path_roots; }
+    void set_jit_path_roots(std::string roots) { jit_path_roots = std::move(roots); }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 

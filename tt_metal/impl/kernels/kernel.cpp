@@ -23,6 +23,7 @@
 #include <tt-metalium/vocabulary/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "jit_build/path_roots.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -721,7 +722,14 @@ std::string ComputeKernel::config_hash() const {
     return hash;
 }
 
-uint64_t Kernel::compute_hash() const {
+std::string Kernel::get_kernel_source_file() const {
+    return kernel_src_.source_type_ == KernelSource::FILE_PATH ? kernel_src_.path_.string() : std::string{};
+}
+
+uint64_t Kernel::compute_hash(const tt::jit_build::PathRoots* roots) const {
+    const auto relocatable = [roots](const std::string& path) {
+        return roots != nullptr ? roots->relocatable(path) : path;
+    };
     tt::StableHasher hasher;
     hasher.update(static_cast<uint64_t>(this->defines_.size()));
     for (const auto& [define, value] : this->defines_) {
@@ -916,7 +924,10 @@ uint64_t Kernel::compute_hash() const {
         }
     }
     ////////////////////////////////////////////////////////////
-    hasher.update(this->kernel_src_.source_);
+    // For a FILE_PATH kernel, source_ is the path the caller gave.
+    hasher.update(
+        this->kernel_src_.source_type_ == KernelSource::FILE_PATH ? relocatable(this->kernel_src_.source_)
+                                                                  : this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     // Prefix length baked into kernel_args_generated.h (array size / accessor bounds).
     // Independent of compile_time_args_ values: same words with a different split must not collide.
@@ -934,7 +945,7 @@ uint64_t Kernel::compute_hash() const {
     // Header contents are tracked separately via the per-object .dephash mechanism.
     size_t num_include_paths = 0;
     this->process_include_paths([&](const std::string& path) {
-        hasher.update(path);
+        hasher.update(relocatable(path));
         ++num_include_paths;
     });
     hasher.update(static_cast<uint64_t>(num_include_paths));
