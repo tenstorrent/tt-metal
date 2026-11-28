@@ -16,17 +16,21 @@
 namespace ttnn::prim {
 
 // The one compute configuration for every chunk_gated_delta_rule program (mono, phased, fused). The
-// kernels keep the recurrent state and the WY inverse in fp32 DEST at HiFi4 and nothing else has been
-// validated, so other arithmetic is rejected; dst_full_sync_en passes through, other knobs are unused.
+// kernels keep the recurrent state and the WY inverse in fp32 DEST at HiFi4, or HiFi3: the Wormhole default,
+// where HiFi4 + fp32 accumulation can return wrong outputs (hardware bug #38306). Other arithmetic is rejected;
+// dst_full_sync_en passes through, other knobs are unused.
 inline tt::tt_metal::ComputeConfigDescriptor gdn_compute_config(const DeviceComputeKernelConfig& cfg) {
     using tt::tt_metal::MathFidelity;
     TT_FATAL(
-        cfg.math_fidelity == MathFidelity::HiFi4 && cfg.fp32_dest_acc_en && !cfg.math_approx_mode,
+        (cfg.math_fidelity == MathFidelity::HiFi4 || cfg.math_fidelity == MathFidelity::HiFi3) &&
+            cfg.fp32_dest_acc_en && !cfg.math_approx_mode,
         "chunk_gated_delta_rule runs HiFi4 with fp32 destination accumulation and no approx mode on every "
-        "path (its recurrent state and WY inverse are fp32); compute_kernel_config asked for math_fidelity {} "
-        "(HiFi4 = {}), fp32_dest_acc_en {}, math_approx_mode {}",
+        "path (its recurrent state and WY inverse are fp32; HiFi3 is also accepted, for Wormhole #38306); "
+        "compute_kernel_config asked for math_fidelity {} (HiFi4 = {}, HiFi3 = {}), fp32_dest_acc_en {}, "
+        "math_approx_mode {}",
         static_cast<int>(cfg.math_fidelity),
         static_cast<int>(MathFidelity::HiFi4),
+        static_cast<int>(MathFidelity::HiFi3),
         cfg.fp32_dest_acc_en,
         cfg.math_approx_mode);
     return tt::tt_metal::ComputeConfigDescriptor{

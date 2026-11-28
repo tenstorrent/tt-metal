@@ -293,10 +293,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    // Hardware bug #38306: HiFi4 + fp32_dest_acc_en can return wrong results on Wormhole, so default to HiFi3 there.
+    const auto default_fidelity = dev->arch() == tt::ARCH::WORMHOLE_B0 ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(dev->arch(), compute_kernel_config);
     const auto kernel_cfg = init_device_compute_kernel_config(
         dev->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        default_fidelity,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

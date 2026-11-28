@@ -25,10 +25,14 @@ namespace {
 
 ttnn::DeviceComputeKernelConfig gdn_default_compute_kernel_config(
     tt::ARCH arch, const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    // Hardware bug #38306: HiFi4 + fp32_dest_acc_en can return wrong results on Wormhole, so default to HiFi3 there.
+    const auto default_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     return ttnn::init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
+        default_fidelity,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
@@ -616,8 +620,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 device op's outputs (the head-major o and final_state) and, on the phased path, of its
                 seven DRAM intermediates; not passed to the token-major post-processing.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): every path runs HiFi4 with
-                fp32 destination accumulation and no approx mode; a config asking for other arithmetic
-                is rejected rather than applied.
+                fp32 destination accumulation and no approx mode, HiFi3 by default on Wormhole (HiFi4 with
+                fp32 accumulation hits hardware bug #38306 there). A config asking for other arithmetic is
+                rejected rather than applied.
             eye, tril, ones (ttnn.Tensor, optional): [1,1,C,C] fp32 TILE constant tiles (identity,
                 lower-triangular ones, all-ones). Caller-supplied, all four together with masks or none:
                 a partial set is ignored and all four are rebuilt, a host upload on every call, so traced
@@ -687,8 +692,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             chunk_size (int): default 32 (C; Ct==1 is the only qk_norm-capable config).
             memory_config (ttnn.MemoryConfig, optional): default DRAM interleaved (the public
                 op's default).
-            compute_kernel_config (optional): default HiFi4 + fp32 dest acc, no approx — built
-                by the same helper as the public op's default; other arithmetic is rejected.
+            compute_kernel_config (optional): default HiFi4 (HiFi3 on Wormhole, #38306) + fp32 dest
+                acc, no approx — built by the same helper as the public op's default; other arithmetic
+                is rejected.
             v_flat (bool) / HV (int): OPT-A flat token-major v, chunk_gdn_phased.hpp:34-40.
             qk_norm (bool) / scale (float): OPT-B in-kernel q/k L2 norm with scale folded into
                 q's norm, chunk_gdn_phased.hpp:45-48.
@@ -762,8 +768,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 contents are unspecified.
             memory_config (ttnn.MemoryConfig, optional): default DRAM interleaved (the public
                 op's default).
-            compute_kernel_config (optional): default HiFi4 + fp32 dest acc, no approx — built
-                by the same helper as the public op's default; other arithmetic is rejected.
+            compute_kernel_config (optional): default HiFi4 (HiFi3 on Wormhole, #38306) + fp32 dest
+                acc, no approx — built by the same helper as the public op's default; other arithmetic
+                is rejected.
             use_mcast (bool) / force_serial (bool): ChunkGdnPhasedProgramConfig.use_mcast /
                 scan_serial — the shared-input multicast (default True) and the one-core-per-head
                 NV=1 layout (default False; measurement only).
