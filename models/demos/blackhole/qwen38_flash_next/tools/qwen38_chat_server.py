@@ -78,6 +78,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     open_partition_b_mesh,
     resolve_route,
     template_decoder,
+    template_token_bytes,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lane_scheduler import (
     DEFAULT_STALL_BUDGET_SECONDS,
@@ -1158,8 +1159,9 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
         )
         # One logprobs item per token the client sees (the sampled loop appends its sample before yielding).
         decode_one = lambda token_id: template_decoder(session.template)([token_id])  # noqa: E731
+        token_bytes_of = template_token_bytes(session.template)
         logprobs_of = lambda token_id: sampling_step.logprobs_content_item(  # noqa: E731
-            sampling.samples[-1], token_id, decode_one
+            sampling.samples[-1], token_id, decode_one, token_bytes_of
         )
         logprob_items: list[dict[str, Any]] = []
 

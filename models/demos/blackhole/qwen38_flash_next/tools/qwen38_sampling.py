@@ -214,13 +214,21 @@ def logprobs_from_request(document: Mapping[str, Any]) -> tuple[bool, int]:
 
 
 def logprobs_content_item(
-    sample: Qwen38CandidateSample | None, token_id: int, decode: Callable[[int], str]
+    sample: Qwen38CandidateSample | None,
+    token_id: int,
+    decode: Callable[[int], str],
+    token_bytes: Callable[[int], bytes] | None = None,
 ) -> dict[str, Any]:
-    """One ``choices[].logprobs.content[]`` item (OpenAI shape); a forced token (no sample) carries ``logprob`` null."""
+    """One ``choices[].logprobs.content[]`` item (OpenAI shape); a forced token (no sample) carries ``logprob`` null.
+
+    ``bytes`` are the token's raw UTF-8 bytes (``token_bytes``) so a character split over several tokens can be rebuilt
+    by concatenation; without ``token_bytes`` they are the bytes of the decoded text.
+    """
 
     def item(token: int, logprob: float | None) -> dict[str, Any]:
         text = decode(token)
-        return {"token": text, "logprob": logprob, "bytes": list(text.encode("utf-8"))}
+        raw = text.encode("utf-8") if token_bytes is None else token_bytes(token)
+        return {"token": text, "logprob": logprob, "bytes": list(raw)}
 
     if sample is None:
         return {**item(token_id, None), "top_logprobs": []}
