@@ -12,6 +12,7 @@ from .generator import (
     format_sampling_params,
     broadcast_sampling_params,
     chunk_sampling_params,
+    per_slot_sampling_params,
     SeedManager,
 )
 from ._utils import split_list
@@ -28,6 +29,7 @@ __all__ = [
     "format_sampling_params",
     "broadcast_sampling_params",
     "chunk_sampling_params",
+    "per_slot_sampling_params",
     "SeedManager",
     "split_list",
 ]
