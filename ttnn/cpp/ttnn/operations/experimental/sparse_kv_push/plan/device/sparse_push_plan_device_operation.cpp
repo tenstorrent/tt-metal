@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sparse_push_plan_device_operation.hpp"
+#include <cstdlib>
+#include <string>
 
 #include <algorithm>
 
@@ -21,6 +23,7 @@ using ::sparse_push_plan::kChunkRows;
 // What the program hash leaves out, checked on every dispatch: buffers (their addresses are patched in) and the devices
 // they live on.
 void validate_runtime(const SparsePushPlanParams& attrs, const SparsePushPlanInputs& args) {
+    TT_FATAL(!attrs.rank_table || attrs.owner_major, "sparse push plan rank_table needs owner_major");
     TT_FATAL(
         !attrs.chunk_start.has_value() || *attrs.chunk_start < attrs.max_rows,
         "sparse push plan chunk_start {} must be below max_rows {}",
@@ -106,7 +109,17 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     // A host chunk start is a runtime arg: only whether there is one, and in which form, shapes the program.
     return tt::tt_metal::operation::hash_operation<SparsePushPlanDeviceOperation>(
-        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), args);
+        attrs.stripe_chunk,
+        attrs.max_rows,
+        attrs.page_bytes,
+        attrs.chunk_start.has_value(),
+        attrs.owner_major,
+        attrs.rank_table,
+        // perf-experiment kernels (sparse_push_plan_program_factory.cpp): a different program
+        std::string(std::getenv("PLAN_ABL") ? std::getenv("PLAN_ABL") : ""),
+        std::getenv("PLAN_STATS") != nullptr,
+        std::string(std::getenv("PLAN_WORKERS") ? std::getenv("PLAN_WORKERS") : ""),
+        args);
 }
 
 SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
@@ -114,24 +127,41 @@ SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation
     const auto layout = PlanTableLayout::make(attrs.max_rows, attrs.stripe_chunk);
     const tt::tt_metal::TensorLayout rm(
         DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM});
-    return {
-        tt::tt_metal::TensorSpec(Shape({1, 1, layout.pages, PlanTableLayout::kPageWords}), rm),
-        tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
+    const uint32_t num_devices = args.indices.device()->shape().mesh_size();
+    const auto table_shape =
+        attrs.owner_major
+            ? Shape({1, 1, num_devices, inbox_slot_bytes(attrs.max_rows, attrs.stripe_chunk, num_devices) / 4})
+            : Shape({1, 1, layout.pages, PlanTableLayout::kPageWords});
+    spec_return_value_t specs = {
+        tt::tt_metal::TensorSpec(table_shape, rm), tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
+    if (attrs.rank_table) {
+        specs.push_back(tt::tt_metal::TensorSpec(
+            Shape({1, 1, 1 + attrs.max_rows / attrs.stripe_chunk, rank_table_page_words(attrs.stripe_chunk)}), rm));
+    }
+    return specs;
 }
 
 SparsePushPlanDeviceOperation::topology_return_value_t SparsePushPlanDeviceOperation::compute_output_topologies(
-    const operation_attributes_t&, const tensor_args_t& args) {
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
     // Each chip plans its own top-k, so the tables differ: sharded on their rows over every chip in row-major order,
     // the order high_bw_all_gather's full-mesh ring gathers them in. The compact indices are per chip, like the
     // indices they rewrite.
-    return {rows_over_every_chip(args.indices.device()->shape()), args.indices.tensor_topology()};
+    topology_return_value_t topologies = {
+        rows_over_every_chip(args.indices.device()->shape()), args.indices.tensor_topology()};
+    if (attrs.rank_table) {
+        topologies.push_back(args.indices.tensor_topology());  // (per chip, like the compact indices)
+    }
+    return topologies;
 }
 
 SparsePushPlanDeviceOperation::tensor_return_value_t SparsePushPlanDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto specs = compute_output_specs(attrs, args);
-    return {
-        create_device_tensor(specs[0], args.indices.device()), create_device_tensor(specs[1], args.indices.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : specs) {
+        outputs.push_back(create_device_tensor(spec, args.indices.device()));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push
@@ -144,11 +174,18 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start,
-    const std::optional<Tensor>& chunk_start_tensor) {
+    const std::optional<Tensor>& chunk_start_tensor,
+    bool owner_major,
+    bool rank_table) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
-            .stripe_chunk = stripe_chunk, .max_rows = max_rows, .page_bytes = page_bytes, .chunk_start = chunk_start},
+            .stripe_chunk = stripe_chunk,
+            .max_rows = max_rows,
+            .page_bytes = page_bytes,
+            .chunk_start = chunk_start,
+            .owner_major = owner_major,
+            .rank_table = rank_table},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 

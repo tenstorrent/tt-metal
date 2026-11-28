@@ -2,6 +2,7 @@ set(TTNN_OP_EXPERIMENTAL_SPARSE_KV_PUSH_API_HEADERS
     plan/sparse_push_plan.hpp
     push/sparse_kv_push.hpp
     push/sparse_kv_push_types.hpp
+    dispatch/sparse_kv_dispatch.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_SPARSE_KV_PUSH_SRCS
@@ -12,6 +13,9 @@ set(TTNN_OP_EXPERIMENTAL_SPARSE_KV_PUSH_SRCS
     push/device/sparse_kv_push_device_operation.cpp
     push/device/sparse_kv_push_program_factory.cpp
     push/sparse_kv_push.cpp
+    dispatch/device/sparse_kv_dispatch_device_operation.cpp
+    dispatch/device/sparse_kv_dispatch_program_factory.cpp
+    dispatch/sparse_kv_dispatch.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_SPARSE_KV_PUSH_NANOBIND_SRCS sparse_kv_push_nanobind.cpp)

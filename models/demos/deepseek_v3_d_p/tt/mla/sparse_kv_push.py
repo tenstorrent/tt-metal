@@ -8,8 +8,10 @@ owner chip pushes only the rows a requester's indices reference into that reques
 reads the buffer through indices rewritten to compact slots. The plan is built on device, so it is trace-safe.
 """
 
+import itertools
+import os
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -19,8 +21,26 @@ from ttnn.core import divup
 # Which of a requester's needed rows a push sends: ALL, PREFIX (rows earlier chunks wrote) or REST.
 SparseKvPushPart = ttnn.experimental.SparseKvPushPart
 
+# sparse_kv_dispatch geometry (KV_DISPATCH_2D_PLAN.md): planner cores and lanes a link.
+KVD_PLANNERS = int(os.environ.get("SPARSE_MLA_KV_DISPATCH_PLANNERS", "48"))
+KVD_LANES_PER_LINK = int(os.environ.get("SPARSE_MLA_KV_DISPATCH_LANES", "2"))
+
+
+def _spike() -> bool:
+    """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): see mla.py _kvd_spike."""
+    return os.environ.get("SPARSE_MLA_KVD_SPIKE", "0") == "1"
+
+
+def _spike_compact() -> bool:
+    """SPIKE: the dispatch lands rows in the push's compact buffers (plan rank table), not at global pages."""
+    return _spike() and os.environ.get("SPARSE_MLA_KVD_COMPACT", "1") == "1"
+
+
 # Cores the push needs per fabric link, for laying out its grid beside sparse_sdpa.
 PUSH_CORES_PER_LINK = ttnn.experimental.SPARSE_KV_PUSH_CORES_PER_LINK
+
+
+_PLAN_GENERATIONS = itertools.count(1)  # (32-bit on device: wraps after 4G plan builds)
 
 
 @dataclass
@@ -29,6 +49,20 @@ class SparseKvPushPlan:
     compact_indices: ttnn.Tensor
     stripe_chunk: int
     max_rows: int
+    # Inbox mode: `table` is this chip's own plan table and the push exchanges the tables through this inbox.
+    inbox: ttnn.Tensor | None = None
+    # The planner's cache slot of this plan (its gathered-table pool entry).
+    slot: int = 0
+    # SPIKE: a dispatch on this plan build already exchanged its slices into `inbox` (later calls skip the exchange).
+    exchanged: bool = False
+    # SPIKE (compact landing): the plan's rank table, for sparse_kv_dispatch to land rows at compact pages.
+    rank_table: ttnn.Tensor | None = None
+    # SPIKE (plan once, dispatch many): this plan slot's routing record; `recorded` once a dispatch on this plan build
+    # recorded its planners' routing there (later calls replay it).
+    replay_buffer: ttnn.Tensor | None = None
+    recorded: bool = False
+    # this plan build's number: the record holds it, a replay of another build routes instead (exact)
+    generation: int = field(default_factory=lambda: next(_PLAN_GENERATIONS))
 
 
 @dataclass(frozen=True)
@@ -109,15 +143,59 @@ class SparseKvPushPlanner:
         self._tables: list = []
         # Plans built (sparse_push_plan + all-gather), counted on the host.
         self.builds = 0
+        # Inbox mode (owner-major plans): the dispatch exchanges the plan tables itself, so a plan is not followed by an
+        # all-gather of every chip's table. Scratch of each dispatch call, shared by every plan.
+        self._inbox = None
         self._buffers = {}
         self._managers = {}  # query rows -> sub-device manager of grids(query rows)
         # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
         # beside its attention, into that buffer (None: the dense gather buffer)
         self.prefetched = {}
-        # Pre-sends on/off, for comparing against pushing every row in line (tests).
-        self.presend = True
+        # Pre-sends on/off, for comparing against pushing every row in line (tests; SCRATCH_NO_PRESEND=1 off).
+        self.presend = not os.environ.get("SCRATCH_NO_PRESEND")
         # Pushes enqueued by part name (ALL / PREFIX / REST), counted on the host as they are enqueued.
         self.pushes = Counter()
+        # sparse_kv_dispatch: its four persistent words and its scratch, made on first use
+        self._kvd_sems = None
+        self._kvd_scratch = {}
+        # SPIKE: dispatch calls by part name
+        self.kvd_calls = Counter()
+
+    def dispatch_resources(self, max_rows: int, stripe_chunk: int, planners: int = KVD_PLANNERS, grid_key=None):
+        """(semaphores, scratch) of sparse_kv_dispatch for a cache of max_rows rows: made on first use (the warm pass,
+        before any trace capture) and shared by every layer."""
+        # One set of persistent words per program variant (planner count, grid and placement: grid_key, None for the
+        # whole chip): the fence pairs each TX with its neighbour's TX of the same program, whose cores differ between
+        # variants. Shared words let one chip's next call (the other variant) release a neighbour's TX still in the
+        # previous call, which then sends into landing pools not yet set up (non-deterministic rows).
+        if self._kvd_sems is None:
+            self._kvd_sems = {}
+        sem_key = (planners, grid_key)
+        if sem_key not in self._kvd_sems:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+            l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
+            buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
+            self._kvd_sems[sem_key] = [
+                ttnn.create_global_semaphore(self.mesh_device, cores, 0, buffer_type) for _ in range(4)
+            ]
+        key = (max_rows, stripe_chunk, planners, grid_key)  # (scratch too: one a program variant)
+        if key not in self._kvd_scratch:
+            spec = ttnn.experimental.sparse_kv_dispatch_scratch_spec(
+                self.mesh_device, max_rows, stripe_chunk, planners, self.links, KVD_LANES_PER_LINK
+            )
+            self._kvd_scratch[key] = ttnn.allocate_tensor_on_device(spec, self.mesh_device)
+        return self._kvd_sems[sem_key], self._kvd_scratch[key]
+
+    def _replay_buffer(self, slot: int, max_rows: int, stripe_chunk: int):
+        """SPIKE: plan slot `slot`'s sparse_kv_dispatch routing record (made on first use, before any capture)."""
+        if not hasattr(self, "_replay"):
+            self._replay = {}
+        key = (slot, max_rows, stripe_chunk)
+        if key not in self._replay:
+            spec = ttnn.experimental.sparse_kv_dispatch_replay_spec(self.mesh_device, max_rows, stripe_chunk)
+            self._replay[key] = ttnn.allocate_tensor_on_device(spec, self.mesh_device)
+        return self._replay[key]
 
     def grids(self, query_rows: int):
         """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.
@@ -126,6 +204,19 @@ class SparseKvPushPlanner:
         push, so attention takes that many whole columns. The push sits in the remaining columns' rows furthest from
         the Ethernet row, where it contends least with attention."""
         grid = self.mesh_device.compute_with_storage_grid_size()
+        if _spike():
+            # SPIKE: the dispatch (pre-send and rest) takes the 4 columns right of attention's 8, their bottom rows (8 of
+            # 10: 32 cores; 24 port cores and 4 planners). Every row costs attention up to 3% (the dispatch's ports and
+            # planners beside SDPA's DRAM readers); SPARSE_MLA_KVD_SPIKE_ROWS overrides.
+            attention_cols = grid.x - 4
+            attention = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]
+            )
+            rows = max(1, min(int(os.environ.get("SPARSE_MLA_KVD_SPIKE_ROWS", "8")), grid.y))
+            push = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(attention_cols, grid.y - rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+            )
+            return attention, push
         push_cores = self.links * PUSH_CORES_PER_LINK
         # Attention's busiest core if it took every core the push leaves free...
         tokens_per_core = divup(query_rows, grid.x * grid.y - push_cores)
@@ -182,6 +273,8 @@ class SparseKvPushPlanner:
     ) -> ttnn.Tensor:
         """The compact buffer for `parity`, sized as buffer_spec; created by the op once and reused by every chunk."""
         key = (parity, like.shape[-1], like.dtype, distinct_rows, max_rows, stripe_chunk)
+        if key not in self._buffers and _spike() and not _spike_compact():  # SPIKE: global landing: a full-size buffer
+            self._buffers[key] = ttnn.allocate_tensor_on_device(like.spec, self.mesh_device)
         if key not in self._buffers:
             self._buffers[key] = ttnn.experimental.sparse_kv_push_create_output_buffer(
                 self.mesh_device,
@@ -208,36 +301,92 @@ class SparseKvPushPlanner:
         max_rows: int,
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
+        owner_major: bool = False,
     ) -> SparseKvPushPlan:
         """The plan for `indices`, cached across the layers that reuse them, one per chunk of a packed forward. On a
         traced replay the plan op reads the chunk start from chunk_start_tensor on device, so one cached plan serves
-        any chunk at that metadata slot; eagerly it takes chunk_start as a runtime arg."""
+        any chunk at that metadata slot; eagerly it takes chunk_start as a runtime arg. owner_major: the owner-major
+        table and inbox sparse_kv_dispatch needs (if a slot fits a packet); otherwise the all-gathered tables
+        sparse_kv_push takes."""
         # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), as
         # does a pipeline stage's first layer, so an unchanged address means the same indices.
         start_key = chunk_start_tensor.buffer_address() if chunk_start_tensor is not None else chunk_start
-        key = (indices.buffer_address(), stripe_chunk, page_bytes, max_rows, start_key)
+        key = (indices.buffer_address(), stripe_chunk, page_bytes, max_rows, start_key, owner_major)
         plan = self._plans.get(key)
         if plan is None:
             plan = self._build(
-                len(self._plans), indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor
+                len(self._plans),
+                indices,
+                stripe_chunk,
+                page_bytes,
+                max_rows,
+                chunk_start,
+                chunk_start_tensor,
+                owner_major,
             )
             self._plans[key] = plan
         return plan
 
-    def _build(self, slot, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor):
+    def _build(
+        self,
+        slot,
+        indices,
+        stripe_chunk,
+        page_bytes,
+        max_rows,
+        chunk_start,
+        chunk_start_tensor,
+        owner_major=False,
+    ):
         n = self.mesh_device.get_num_devices()
-        table, compact_indices = ttnn.experimental.sparse_push_plan(
+        # Inbox mode needs a table slot to fit one fabric packet; larger caches on small meshes keep the all-gather.
+        slot_bytes = ttnn._ttnn.operations.experimental.sparse_kv_push_inbox_slot_bytes(max_rows, stripe_chunk, n)
+        pages_per_packet, _ = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape(
+            self.mesh_device, page_bytes
+        )
+        # (SPIKE: the dispatch fragments slots, so a dispatch plan is always owner-major)
+        inbox_mode = owner_major and (slot_bytes <= pages_per_packet * page_bytes or _spike())
+        outputs = ttnn.experimental.sparse_push_plan(
             indices,
             stripe_chunk=stripe_chunk,
             max_rows=max_rows,
             page_bytes=page_bytes,
             chunk_start=None if chunk_start_tensor is not None else chunk_start,
             chunk_start_tensor=chunk_start_tensor,
+            owner_major=inbox_mode,
+            rank_table=inbox_mode and _spike_compact(),
         )
         self.builds += 1
+        table, compact_indices = outputs[0], outputs[1]
+        if inbox_mode:
+            slot_words = slot_bytes // 4
+            # one inbox per cached plan slot: a later call on this plan reuses its exchanged slices
+            if not isinstance(self._inbox, dict):
+                self._inbox = {}
+            if slot not in self._inbox or self._inbox[slot].shape[3] != slot_words:
+                self._inbox[slot] = _replicated(
+                    self.mesh_device,
+                    torch.zeros(1, 1, n, slot_words, dtype=torch.int32),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+            return SparseKvPushPlan(
+                table=table,
+                compact_indices=compact_indices,
+                stripe_chunk=stripe_chunk,
+                max_rows=max_rows,
+                inbox=self._inbox[slot],
+                slot=slot,
+                rank_table=outputs[-1] if _spike_compact() else None,
+                replay_buffer=(
+                    self._replay_buffer(slot, max_rows, stripe_chunk)
+                    if _spike() and os.environ.get("SPARSE_MLA_KVD_REPLAY", "1") == "1"
+                    else None
+                ),
+            )
         gathered_rows = table.shape[2] * n
-        if slot == len(self._tables):
-            self._tables.append(None)
+        # Inbox-mode plans hold no gathered table, so their slots leave gaps here.
+        self._tables.extend([None] * (slot + 1 - len(self._tables)))
         tables = self._tables[slot]
         if tables is None or tables.shape[2] != gathered_rows:
             tables = self._tables[slot] = _replicated(
@@ -251,5 +400,9 @@ class SparseKvPushPlanner:
         )
         ttnn.deallocate(table)
         return SparseKvPushPlan(
-            table=tables, compact_indices=compact_indices, stripe_chunk=stripe_chunk, max_rows=max_rows
+            table=tables,
+            compact_indices=compact_indices,
+            stripe_chunk=stripe_chunk,
+            max_rows=max_rows,
+            slot=slot,
         )

@@ -9,7 +9,48 @@
 #include <algorithm>
 #include <cstdint>
 
-using namespace sparse_push_plan;
+#ifdef PLAN_STATS
+#include "api/debug/dprint.h"
+#endif
+
+// Perf experiments (host env PLAN_ABL=NAME,..., defines PLAN_ABL_NAME):
+//   DISPATCH_ONLY: stop after exchange 2 and write the owner-major slots (bitmap words, summary, header words 0-10)
+//                  with zero per-owner counts; no ranks, exchange 3, bases, rewrite or compact write-back. Only for
+//                  sparse_kv_dispatch, which reads nothing else.
+#ifndef PLAN_RANK_TABLE
+#define PLAN_RANK_TABLE 0
+#define PLAN_RANK_PAGE_WORDS 32
+#endif
+#if defined(PLAN_ABL_DISPATCH_ONLY) && !PLAN_OWNER_MAJOR
+#error "PLAN_ABL=DISPATCH_ONLY needs owner_major"
+#endif
+
+// Fused into sparse_kv_dispatch (PLAN_FUSED, kvd4: the dispatch kernels call plan_prologue() first): the plan's
+// compile-time args follow the dispatch kernel's (PLAN_CT_BASE), its common args follow the dispatch's
+// (PLAN_COMMON_BASE: indices, table, chunk start, then the cores' coordinates and the multicast rectangle, then the
+// table-ready targets), its buffers sit at PLAN_BUF_OFFSETS in the dispatch CB PLAN_OVERLAY_CB (stage + pool: no
+// dispatch traffic uses them before this chip's plan is done), its semaphores at PLAN_SEM_BASE, and its release CB is
+// PLAN_RELEASE_CB. A core finds its index from its coordinates.
+#ifdef PLAN_FUSED
+#if !defined(PLAN_ABL_DISPATCH_ONLY) || PLAN_WORKERS != 5
+#error "PLAN_FUSED is the dispatch-only plan on five workers"
+#endif
+#define PLAN_CT(i) get_compile_time_arg_val(PLAN_CT_BASE + (i))
+#define PLAN_TA_BASE PLAN_CT_BASE
+#define PLAN_COMMON(i) get_common_arg_val<uint32_t>(PLAN_COMMON_BASE + (i))
+#define PLAN_COORDS_OFF 3
+#define PLAN_SEM(id) get_semaphore(PLAN_SEM_BASE + (id))
+#define PLAN_RELEASE PLAN_RELEASE_CB
+#define PLAN_ENTRY inline void plan_prologue()
+#else
+#define PLAN_CT(i) get_compile_time_arg_val(i)
+#define PLAN_TA_BASE 0
+#define PLAN_COMMON(i) get_common_arg_val<uint32_t>(i)
+#define PLAN_COORDS_OFF 0
+#define PLAN_SEM(id) get_semaphore(id)
+#define PLAN_RELEASE ::sparse_push_plan::kMisc
+#define PLAN_ENTRY void kernel_main()
+#endif
 
 // sparse_push_plan: turns one chip's top-k indices into the push's plan table and into compact indices.
 //   table:   a bitmap of the needed rows (one bit per cache row), per-owner row counts and prefix counts, the header
@@ -17,10 +58,10 @@ using namespace sparse_push_plan;
 //   compact: every index rewritten to its compact-buffer page, compact_page(run base of its owner, rank), where rank is
 //            how many needed rows of the same owner come before it. Ranks need the whole bitmap, hence the steps below.
 //
-// Every core of the grid takes 1/cores of the indices, and five workers share its L1 work (loops in
-// sparse_push_plan_work.hpp): BRISC (worker 0) drives the steps and does the NoC traffic, NCRISC (worker 1, this file
-// as the helper) shares the NoC pushes and the write-back, and the three TRISCs (workers 2-4,
-// sparse_push_plan_trisc.cpp) run only L1 loops. Within a core, BRISC posts each step and the workers report on their
+// Every core of the grid takes 1/cores of the indices, and its two data movement processors share the L1 work, half
+// each (loops in sparse_push_plan_work.hpp): BRISC (worker 0) drives the steps and does the NoC traffic, NCRISC (worker
+// 1, this file as the helper) shares the NoC pushes and the write-back. Within a core, BRISC posts each step and the
+// workers report on their
 // done semaphores; across cores, exchange(k) gathers on core 0, which multicasts the result back to all.
 //
 //   0. Load:    read this core's indices; zero its private full-size bitmap and its dirty-chunk flags.
@@ -35,28 +76,50 @@ using namespace sparse_push_plan;
 //   4. Bases:   per owner, the running offset of each range, the total, and the compact-buffer run base.
 //   5. Rewrite: every worker rewrites its share of the indices; BRISC and NCRISC write them back, core 0 the header.
 
-void kernel_main() {
-    constexpr uint32_t num_devices = get_compile_time_arg_val(0);
-    constexpr uint32_t stripe_chunk = get_compile_time_arg_val(1);
-    constexpr uint32_t pages_per_packet = get_compile_time_arg_val(2);
-    constexpr uint32_t banks = get_compile_time_arg_val(3);
-    constexpr uint32_t cores = get_compile_time_arg_val(4);
-    constexpr uint32_t total_chunks = get_compile_time_arg_val(5);  // 512-row chunks of the bitmap
-    constexpr auto split_source = static_cast<SplitSource>(get_compile_time_arg_val(6));
+PLAN_ENTRY {
+#if defined(PLAN_FUSED) && defined(KVD_ABL_FUSED_NOPLAN)
+    return;  // (probe: the fused program's cost without the plan; the caller passes a built table)
+#endif
+    using namespace sparse_push_plan;
+#ifdef PLAN_STATS
+    uint32_t plan_t[16] = {};
+    auto plan_mark = [&](uint32_t i) {
+        plan_t[i] = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    };
+#else
+    auto plan_mark = [](uint32_t) {};
+#endif
+    plan_mark(0);
+    constexpr uint32_t num_devices = PLAN_CT(0);
+    constexpr uint32_t stripe_chunk = PLAN_CT(1);
+    constexpr uint32_t pages_per_packet = PLAN_CT(2);
+    constexpr uint32_t banks = PLAN_CT(3);
+    constexpr uint32_t cores = PLAN_CT(4);
+    constexpr uint32_t total_chunks = PLAN_CT(5);  // 512-row chunks of the bitmap
+    constexpr auto split_source = static_cast<SplitSource>(PLAN_CT(6));
     constexpr bool has_split = split_source != kNoSplit;
-    constexpr uint32_t bitmap_words = get_compile_time_arg_val(7);
-    constexpr uint32_t bucket_cap = get_compile_time_arg_val(8);    // indices per (from, to) scatter bucket
-    constexpr uint32_t range_blocks = get_compile_time_arg_val(9);  // blocks per rank range, a multiple of num_devices
-    constexpr uint32_t topk = get_compile_time_arg_val(10);
+    constexpr uint32_t bitmap_words = PLAN_CT(7);
+    constexpr uint32_t bucket_cap = PLAN_CT(8);    // indices per (from, to) scatter bucket
+    constexpr uint32_t range_blocks = PLAN_CT(9);  // blocks per rank range, a multiple of num_devices
+    constexpr uint32_t topk = PLAN_CT(10);
     // This file runs on both data movement processors: BRISC drives (worker 0), NCRISC helps (worker 1).
-    constexpr bool is_helper = get_compile_time_arg_val(11) != 0;
+    constexpr bool is_helper = PLAN_CT(11) != 0;
     constexpr uint32_t max_rows = bitmap_words * kRowsPerWord;
     constexpr uint32_t range_words = owner_stride(num_devices);  // a range's partials
-    constexpr auto indices_args = TensorAccessorArgs<12>();
+    constexpr auto indices_args = TensorAccessorArgs<PLAN_TA_BASE + 12>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto split_args =
-        TensorAccessorArgs<split_source == kSplitTensor ? compact_args.next_compile_time_args_offset() : 0>();
+        // (without a split tensor, any valid accessor's args: the indices'; offset 0 could decode a dispatch kernel's
+        // own first arg as accessor flags)
+        TensorAccessorArgs<
+            split_source == kSplitTensor ? compact_args.next_compile_time_args_offset() : PLAN_TA_BASE + 12>();
+#if PLAN_RANK_TABLE
+    // sparse_kv_dispatch's rank table (the last output): page 0 the run bases, page 1 + b block b's word ranks + words
+    constexpr auto rank_args = TensorAccessorArgs<
+        split_source == kSplitTensor ? split_args.next_compile_time_args_offset()
+                                     : compact_args.next_compile_time_args_offset()>();
+#endif
     constexpr uint32_t words_per_block = stripe_chunk / sparse_push::plan_table::kRowsPerWord;
     constexpr uint32_t index_bytes = sizeof(uint32_t);  // one top-k index
     constexpr uint32_t word_bytes = sizeof(uint32_t);   // one bitmap / table / scratch word
@@ -67,6 +130,19 @@ void kernel_main() {
     constexpr uint32_t table_page_bytes = sparse_push::plan_table::kPageBytes;
     constexpr uint32_t bitmap_off = sparse_push::plan_table::kBitmapOff;
 
+#ifdef PLAN_FUSED
+    const uint32_t indices_addr = PLAN_COMMON(0);
+    const uint32_t table_addr = PLAN_COMMON(1);
+    const uint32_t compact_addr = 0;
+    uint32_t core_idx = 0;
+    while (core_idx < cores && PLAN_COMMON(PLAN_COORDS_OFF + core_idx) !=
+                                   (static_cast<uint32_t>(my_x[0]) | static_cast<uint32_t>(my_y[0]) << 16)) {
+        ++core_idx;
+    }
+    const uint32_t first_index = std::min<uint32_t>(PLAN_TOTAL_IDX, core_idx * PLAN_PER_CORE);
+    const uint32_t index_count = std::min<uint32_t>(PLAN_TOTAL_IDX, first_index + PLAN_PER_CORE) - first_index;
+    const uint32_t split_arg = has_split ? PLAN_COMMON(2) : 0;
+#else
     size_t arg = 0;
     const uint32_t indices_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t table_addr = get_arg_val<uint32_t>(arg++);
@@ -74,39 +150,62 @@ void kernel_main() {
     const uint32_t core_idx = get_arg_val<uint32_t>(arg++);
     const uint32_t first_index = get_arg_val<uint32_t>(arg++);  // this core's indices: flat [first, first + count)
     const uint32_t index_count = get_arg_val<uint32_t>(arg++);
+#endif
     // BRISC and NCRISC (each on its own NoC) split the NoC work in two halves: step 2's reducers and step 5's
     // write-back.
     constexpr uint32_t brisc_reducers = cores / 2;   // BRISC pushes to reducers [0, this), NCRISC to the rest
     const uint32_t brisc_indices = index_count / 2;  // BRISC writes back idx [0, this), NCRISC the rest
+#ifndef PLAN_FUSED
     // The chunk start: its tensor's address (kSplitTensor) or the row itself (kSplitValue).
     const uint32_t split_arg = has_split ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t rank_addr = PLAN_RANK_TABLE ? get_arg_val<uint32_t>(arg++) : 0;
+#else
+    const uint32_t rank_addr = 0;
+#endif
+    (void)rank_addr;
     // Common runtime args: every core's (x, y), core 0 first, then the multicast rectangle of all of them.
     // NoC address of `l1` on plan core `core`.
-    auto core_noc_addr = [&](uint32_t core, uint32_t l1) {
-        const uint32_t x = get_common_arg_val<uint32_t>(kCoordsPerCore * core);
-        const uint32_t y = get_common_arg_val<uint32_t>(kCoordsPerCore * core + 1);
-        return get_noc_addr(x, y, l1);
+#ifdef PLAN_FUSED
+    // (fused: one word a core, x | y << 16, then the rectangle as two words, to keep within the runtime-arg budget)
+    auto core_x = [&](uint32_t core) { return PLAN_COMMON(PLAN_COORDS_OFF + core) & 0xFFFFu; };
+    auto core_y = [&](uint32_t core) { return PLAN_COMMON(PLAN_COORDS_OFF + core) >> 16; };
+    constexpr uint32_t kRectOff = PLAN_COORDS_OFF + cores;
+    auto rect = [&](uint32_t i) {  // start x, start y, end x, end y
+        const uint32_t v = PLAN_COMMON(kRectOff + i / 2);
+        return i % 2 == 0 ? (v & 0xFFFFu) : (v >> 16);
     };
+#else
+    auto core_x = [&](uint32_t core) { return PLAN_COMMON(PLAN_COORDS_OFF + kCoordsPerCore * core); };
+    auto core_y = [&](uint32_t core) { return PLAN_COMMON(PLAN_COORDS_OFF + kCoordsPerCore * core + 1); };
+    auto rect = [&](uint32_t i) { return PLAN_COMMON(PLAN_COORDS_OFF + kCoordsPerCore * cores + i); };
+#endif
+    auto core_noc_addr = [&](uint32_t core, uint32_t l1) { return get_noc_addr(core_x(core), core_y(core), l1); };
     // Multicast address of `l1` on every plan core.
     auto all_cores_mcast_addr = [&](uint32_t l1) {
-        return get_noc_multicast_addr(
-            get_common_arg_val<uint32_t>(kCoordsPerCore * cores),      // start x
-            get_common_arg_val<uint32_t>(kCoordsPerCore * cores + 1),  // start y
-            get_common_arg_val<uint32_t>(kCoordsPerCore * cores + 2),  // end x
-            get_common_arg_val<uint32_t>(kCoordsPerCore * cores + 3),  // end y
-            l1);
+        // (on NOC1 the rectangle is given end first: a fused plan's root can run on a NOC1 kernel)
+        return noc_index == 0 ? get_noc_multicast_addr(rect(0), rect(1), rect(2), rect(3), l1)
+                              : get_noc_multicast_addr(rect(2), rect(3), rect(0), rect(1), l1);
     };
 
     const auto indices = TensorAccessor(indices_args, indices_addr, topk * sizeof(uint32_t));
-    const auto table = TensorAccessor(table_args, table_addr, table_page_bytes);
+    // Owner-major tables (PLAN_OWNER_MAJOR): one slot page per owner, the header then that owner's block bitmaps.
+    constexpr bool owner_major = PLAN_OWNER_MAJOR != 0;
+    const auto table = TensorAccessor(table_args, table_addr, owner_major ? PLAN_SLOT_BYTES : table_page_bytes);
     const auto compact = TensorAccessor(compact_args, compact_addr, topk * sizeof(uint32_t));
 
-    const uint32_t table_image_l1 = get_write_ptr(kTableImage);
-    const uint32_t idx_l1 = get_write_ptr(kIdx);
-    const uint32_t dirty_chunks_l1 = get_write_ptr(kDirtyChunks);
-    const uint32_t dirty_maps_l1 = get_write_ptr(kDirtyMaps);
-    const uint32_t scratch_l1 = get_write_ptr(kScratch);
-    const uint32_t misc_l1 = get_write_ptr(kMisc);
+#ifdef PLAN_FUSED
+    constexpr uint32_t kPlanBufOff[] = {PLAN_BUF_OFFSETS};
+    const uint32_t plan_overlay = (get_write_ptr(PLAN_OVERLAY_CB) + 63) & ~63u;
+#define PLAN_BUF(cb) (plan_overlay + kPlanBufOff[cb])
+#else
+#define PLAN_BUF(cb) get_write_ptr(cb)
+#endif
+    const uint32_t table_image_l1 = PLAN_BUF(kTableImage);
+    const uint32_t idx_l1 = PLAN_BUF(kIdx);
+    const uint32_t dirty_chunks_l1 = PLAN_BUF(kDirtyChunks);
+    const uint32_t dirty_maps_l1 = PLAN_BUF(kDirtyMaps);
+    const uint32_t scratch_l1 = PLAN_BUF(kScratch);
+    const uint32_t misc_l1 = PLAN_BUF(kMisc);
     // Plain pointers: every NOC transfer into these buffers is followed by a barrier and a cache invalidation, and
     // every worker hand-off by a fence (post / wait_at_least).
     auto* table_image = reinterpret_cast<uint32_t*>(table_image_l1);  // this core's L1 copy of the whole plan table
@@ -115,19 +214,40 @@ void kernel_main() {
     auto* dirty_chunks = reinterpret_cast<uint8_t*>(dirty_chunks_l1);  // [chunk]: 1 if this core set a bit in it
     auto* dirty_maps = reinterpret_cast<uint32_t*>(dirty_maps_l1);     // the DirtyMap arrays
     auto* scratch = reinterpret_cast<uint32_t*>(scratch_l1);  // as a reducer: the chunk copies other cores pushed
-    const uint32_t partials_l1 = get_write_ptr(kPartials);
+    const uint32_t partials_l1 = PLAN_BUF(kPartials);
     auto* partials = reinterpret_cast<uint32_t*>(partials_l1);  // [range][owner]: owner's needed rows in the range
-    const uint32_t word_ranks_l1 = get_write_ptr(kWordRanks);
+    const uint32_t word_ranks_l1 = PLAN_BUF(kWordRanks);
     // [word]: this owner's needed rows before the word, within its range (fits 16 bits: see range_blocks).
     auto* word_ranks = reinterpret_cast<uint16_t*>(word_ranks_l1);
     auto* misc = reinterpret_cast<uint32_t*>(misc_l1);  // words shared between the workers (kMisc*)
-    auto* buckets = reinterpret_cast<uint32_t*>(get_write_ptr(kBuckets));
+    auto* buckets = reinterpret_cast<uint32_t*>(PLAN_BUF(kBuckets));
     uint32_t* copies = misc + kMiscCopies;
 
-    const uint32_t sem_step = get_semaphore(kSemStep);
+    // Intra-core sync: semaphores with BRISC and NCRISC alone; with the TRISCs (kWorkers 5) words of kMisc, which
+    // BRISC zeroes and then releases with a push of the kMisc CB (CB counters restart every launch, the words do not).
+    constexpr bool l1_sync = kWorkers > 2;
+    const uint32_t sem_step = l1_sync ? misc_l1 + kMiscSync * word_bytes : PLAN_SEM(kSemStep);
     // Waits until BRISC has started step `step`.
     auto wait_for_step = [&](uint32_t step) { wait_at_least(sem_step, step); };
-    auto sem_done = [](uint32_t w) { return static_cast<uint32_t>(get_semaphore(kSemDone + w)); };
+    auto sem_done = [&](uint32_t w) {
+        return l1_sync ? misc_l1 + (kMiscSync + 2 + w) * word_bytes : static_cast<uint32_t>(PLAN_SEM(kSemDone + w));
+    };
+    if constexpr (l1_sync) {
+        if constexpr (is_helper) {
+            cb_wait_front(PLAN_RELEASE, 1);
+        } else {
+            for (uint32_t w = 0; w < kMiscSyncWords; ++w) {
+                misc[kMiscSync + w] = 0;
+            }
+            fence();
+#ifdef PLAN_FUSED
+            misc[kMiscSync + kMiscSyncWords] = core_idx;  // (the TRISCs find their core's index here)
+            fence();
+#endif
+            cb_reserve_back(PLAN_RELEASE, 1);
+            cb_push_back(PLAN_RELEASE, 1);
+        }
+    }
 
     uint32_t* my_dirty_map = dirty_maps + kMyDirtyMap * array_words;
     const uint32_t column_l1 = dirty_maps_l1 + kColumn * array_words * sizeof(uint32_t);
@@ -159,8 +279,9 @@ void kernel_main() {
     };
     // Between bucketing and scatter: BRISC, whose NoC writes zero the bitmap, announces it is zero; the other workers
     // wait for that.
-    const uint32_t sem_zeroed = get_semaphore(kSemZeroed);
+    const uint32_t sem_zeroed = l1_sync ? misc_l1 + (kMiscSync + 1) * word_bytes : PLAN_SEM(kSemZeroed);
     auto sync_zeroed_bitmap = [&]() {
+        plan_mark(12);  // bucketed
         if constexpr (is_helper) {
             wait_at_least(sem_zeroed, 1);
         } else {
@@ -180,7 +301,9 @@ void kernel_main() {
             worker,
             sem_done,
             sync_zeroed_bitmap);
+        plan_mark(13);  // scattered (own)
         sync_workers(sem_done, worker, kScattered);
+        plan_mark(14);  // both scattered
         map_dirty<cores, total_chunks>(dirty_chunks, my_dirty_map, worker);
         sync_workers(sem_done, worker, kMapped);
     };
@@ -231,8 +354,8 @@ void kernel_main() {
         noc_async_write_barrier();
     };
 
-    // NCRISC (worker 1): follows BRISC's steps, does its share of the L1 loops, and the second half of the NoC pushes
-    // and write-back.
+    // NCRISC (worker 1): follows BRISC's steps, does its half, and the second half of the NoC pushes and
+    // write-back.
     auto run_helper = [&]() {
         constexpr uint32_t worker = 1;
 
@@ -245,6 +368,15 @@ void kernel_main() {
         // 2. Reduce: OR this core's share of the received copies.
         wait_for_step(kStepReduce);
         or_step(worker);
+#ifdef PLAN_ABL_DISPATCH_ONLY
+        // the slot builders' copy, split over the workers (BRISC posts kStepRanks on every core after exchange 2)
+        wait_for_step(kStepRanks);
+        if (num_devices <= cores && core_idx < num_devices) {
+            slot_share<num_devices, words_per_block>(bitmap, scratch, core_idx, misc[kMiscActiveBlocks], worker);
+        }
+        post(sem_done(worker), kRanked);
+        return;
+#endif
 
         // 3. Ranks.
         wait_for_step(kStepRanks);
@@ -261,7 +393,7 @@ void kernel_main() {
     // BRISC (worker 0): drives the steps, the NoC loads, the cross-core exchanges and the table writes.
     auto run_driver = [&]() {
         constexpr uint32_t worker = 0;
-        // BRISC waits for every other worker (NCRISC and the TRISCs) to report `progress`.
+        // BRISC waits for the helper to report `progress`.
         auto wait_workers = [&](uint32_t progress) {
             for (uint32_t w = 1; w < kWorkers; ++w) {
                 wait_at_least(sem_done(w), progress);
@@ -270,8 +402,8 @@ void kernel_main() {
         auto ceil_div = [](uint32_t a, uint32_t b) { return (a + b - 1) / b; };
         // NoC transfers between L1s move whole L1_ALIGNMENT (16 B) units.
         auto l1_transfer_bytes = [](uint32_t bytes) { return align(bytes, L1_ALIGNMENT); };
-        const uint32_t arrive_sem = get_semaphore(kSemArrive);
-        const uint32_t go_sem = get_semaphore(kSemGo);
+        const uint32_t arrive_sem = PLAN_SEM(kSemArrive);
+        const uint32_t go_sem = PLAN_SEM(kSemGo);
         // Gather on core 0, which multicasts the spans back: concurrent multicasts from every core serialize on the
         // NOC. spans(send) calls send(l1, bytes) for each span to multicast. `round` is 1, 2, 3: the arrive count is
         // never reset, so core 0 waits for cores * round arrivals.
@@ -326,6 +458,80 @@ void kernel_main() {
             }
         };
 
+        // Core 0: the header and per-owner counts (filled in table_image), written to the table.
+        auto fill_header = [&](uint32_t active_blocks, uint32_t split_block) {
+            using namespace sparse_push::plan_table;
+            table_image[kWordMagic] = kMagic;
+            table_image[kWordNumDevices] = num_devices;
+            table_image[kWordStripeChunk] = stripe_chunk;
+            table_image[kWordActiveBlocks] = active_blocks;
+            table_image[kWordSplitBlock] = split_block;
+            table_image[kWordPagesPerPacket] = pages_per_packet;
+            table_image[kWordBanks] = banks;
+            table_image[kWordHasSplit] = has_split ? 1 : 0;
+            table_image[kWordHasSummary] = 0;  // (owner-major slots set their own)
+        };
+        auto write_header = [&](uint32_t active_blocks, uint32_t split_block) {
+            fill_header(active_blocks, split_block);
+            write_span(0, bitmap_off * word_bytes);  // header and per-owner counts (slot 0 when owner-major)
+        };
+
+        // Owner-major: this core's owners' slots: the header (every core has every owner's counts), then the owner's
+        // blocks' bitmap words, gathered from the full bitmap every core holds since exchange 2.
+        auto build_slots = [&](uint32_t active_blocks, uint32_t split_block) {
+            fill_header(active_blocks, split_block);
+            auto* slot = scratch;
+            for (uint32_t w = 0; w < bitmap_off; ++w) {
+                slot[w] = table_image[w];
+            }
+            for (uint32_t owner = core_idx; owner < num_devices; owner += cores) {
+                const uint32_t owner_blocks =
+                    active_blocks > owner ? (active_blocks - owner + num_devices - 1) / num_devices : 0;
+                using namespace sparse_push::plan_table;
+                const bool summary = owner_blocks * words_per_block <= kSummaryWords * 32;
+                for (uint32_t s = 0; s < kSummaryWords; ++s) {
+                    slot[kSummaryOff + s] = 0;
+                }
+                for (uint32_t block = 0; block < owner_blocks; ++block) {
+                    const uint32_t* src = bitmap + (owner + block * num_devices) * words_per_block;
+                    for (uint32_t w = 0; w < words_per_block; ++w) {
+                        const uint32_t u = block * words_per_block + w;
+                        slot[bitmap_off + u] = src[w];
+                        if (summary && src[w] != 0) {
+                            slot[kSummaryOff + u / 32] |= 1u << (u % 32);
+                        }
+                    }
+                }
+                slot[kWordHasSummary] = summary ? kSummaryMagic : 0;
+                const uint32_t bytes = (bitmap_off + owner_blocks * words_per_block) * word_bytes;
+                noc_async_write(scratch_l1, table.get_noc_addr(owner), (bytes + 63) & ~63u);
+                noc_async_write_barrier();
+            }
+        };
+        auto print_stats = [&]() {
+#ifdef PLAN_STATS
+            DPRINT(
+                "PLS core={} t0={} load={} scat={} push={} ex1={} or={} ex2={} ranks={} ex3={} rw={} slot={} end={} "
+                "bk={} sc={} scw={}\n",
+                core_idx,
+                plan_t[0],
+                plan_t[1] - plan_t[0],
+                plan_t[2] - plan_t[1],
+                plan_t[3] - plan_t[2],
+                plan_t[4] - plan_t[3],
+                plan_t[5] - plan_t[4],
+                plan_t[6] - plan_t[5],
+                plan_t[7] - plan_t[6],
+                plan_t[8] - plan_t[7],
+                plan_t[9] - plan_t[8],
+                plan_t[10] - plan_t[9],
+                plan_t[11] - plan_t[10],
+                plan_t[12] - plan_t[1],
+                plan_t[13] - plan_t[12],
+                plan_t[14] - plan_t[13]);
+#endif
+        };
+
         // 0. Load.
         for_each_run([&](uint32_t index_row, uint32_t col, uint32_t pos, uint32_t len) {
             noc_async_read(
@@ -342,10 +548,12 @@ void kernel_main() {
         zero(column_l1, array_words * word_bytes);
         noc_async_read_barrier();
         invalidate_l1_cache();
+        plan_mark(1);
 
         // 1. Scatter, map the dirty chunks and push the dirty copies to their reducers.
         post(sem_step, kStepScatter);
         scatter_and_map(worker);
+        plan_mark(2);
         uint32_t my_row_end = 0;  // largest row this core needs + 1
         for (uint32_t w = 0; w < kWorkers; ++w) {
             my_row_end = std::max(my_row_end, misc[kMiscRowEnd + w]);
@@ -353,9 +561,11 @@ void kernel_main() {
         dirty_maps[kRowEnds * array_words + core_idx] = my_row_end;
         push(0, brisc_reducers);
         wait_at_least(sem_done(1), kPushed);
+        plan_mark(3);
         noc_async_write(
             row_ends_l1 + core_idx * word_bytes, core_noc_addr(0, row_ends_l1 + core_idx * word_bytes), word_bytes);
         exchange(1, [&](auto&& send) { send(row_ends_l1, cores * word_bytes); });
+        plan_mark(4);
 
         // 2. Reduce-scatter. Only rows up to the largest one any core saw are active.
         uint32_t active_rows = 0;
@@ -372,6 +582,7 @@ void kernel_main() {
         post(sem_step, kStepReduce);
         or_step(worker);
         wait_workers(kOred);
+        plan_mark(5);
         for (uint32_t my_chunk = 0; my_chunk < my_chunks; ++my_chunk) {
             if (copies[my_chunk] != 0) {  // chunks no core touched stay zero on core 0 too
                 const uint32_t chunk = core_idx + my_chunk * cores;
@@ -380,6 +591,62 @@ void kernel_main() {
             }
         }
         exchange(2, [&](auto&& send) { send(table_image_l1 + bitmap_off * word_bytes, active_words * word_bytes); });
+        plan_mark(6);
+#ifdef PLAN_ABL_DISPATCH_ONLY
+        const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;
+        for (uint32_t owner = 0; owner < num_devices; ++owner) {
+            table_image[sparse_push::plan_table::kOwnerOff + owner] = 0;
+            table_image[sparse_push::plan_table::kOwnerPrefixOff + owner] = 0;
+        }
+        plan_mark(7);
+        plan_mark(8);
+        plan_mark(9);
+        // owner core_idx's slot on its builder: header here, the words and summary split over the workers (a grid
+        // with fewer cores than owners: BRISC builds them all, as the main plan)
+        using namespace sparse_push::plan_table;
+        if constexpr (num_devices > cores) {
+            post(sem_step, kStepRanks);
+            wait_workers(kRanked);
+            build_slots(active_blocks, split_block);
+        } else if (core_idx < num_devices) {
+            fill_header(active_blocks, split_block);
+            for (uint32_t w = 0; w < kSummaryOff; ++w) {
+                scratch[w] = table_image[w];
+            }
+            for (uint32_t s = 0; s < kSummaryWords; ++s) {
+                scratch[kSummaryOff + s] = 0;
+            }
+        }
+        if constexpr (num_devices <= cores) {
+            post(sem_step, kStepRanks);
+            if (core_idx < num_devices) {
+                slot_share<num_devices, words_per_block>(bitmap, scratch, core_idx, active_blocks, worker);
+            }
+            wait_workers(kRanked);
+        }
+        if (num_devices <= cores && core_idx < num_devices) {
+            const uint32_t owner_blocks =
+                active_blocks > core_idx ? (active_blocks - core_idx + num_devices - 1) / num_devices : 0;
+            const bool summary = owner_blocks * words_per_block <= kSummaryWords * 32;
+            scratch[kWordHasSummary] = summary ? kSummaryMagic : 0;
+            const uint32_t bytes = (bitmap_off + owner_blocks * words_per_block) * word_bytes;
+            noc_async_write(scratch_l1, table.get_noc_addr(core_idx), (bytes + 63) & ~63u);
+            noc_async_write_barrier();
+#ifdef PLAN_FUSED
+            // the slot is in the table: count in on the dispatch cores that read it (TX cores, planner 0)
+            constexpr uint32_t kReadyOff = PLAN_COORDS_OFF + cores + 2;  // [count, x | y << 16 ...]
+            for (uint32_t r = 0; r < PLAN_COMMON(kReadyOff); ++r) {
+                const uint32_t xy = PLAN_COMMON(kReadyOff + 1 + r);
+                noc_semaphore_inc(get_noc_addr(xy & 0xFFFFu, xy >> 16, PLAN_SEM(2)), 1);
+            }
+            noc_async_atomic_barrier();
+#endif
+        }
+        plan_mark(10);
+        plan_mark(11);
+        print_stats();
+        return;
+#endif
 
         // 3. Ranks and per-owner partial counts of this core's block ranges.
         const uint32_t ranges = ceil_div(active_blocks, range_blocks);
@@ -387,6 +654,7 @@ void kernel_main() {
         post(sem_step, kStepRanks);
         ranks(worker);
         wait_workers(kRanked);
+        plan_mark(7);
         for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
             to_root(
                 word_ranks_l1 + first_block * words_per_block * rank_bytes,
@@ -397,18 +665,59 @@ void kernel_main() {
             send(word_ranks_l1, active_words * rank_bytes);
             send(partials_l1, ranges * range_words * word_bytes);
         });
-        for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
-            write_span(
-                (bitmap_off + first_block * words_per_block) * word_bytes,
-                (end_block - first_block) * words_per_block * word_bytes);
-        });
+        plan_mark(8);
+        if constexpr (!owner_major) {
+            for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
+                write_span(
+                    (bitmap_off + first_block * words_per_block) * word_bytes,
+                    (end_block - first_block) * words_per_block * word_bytes);
+            });
+        }
 
         // 4. Owner bases and 5. rewrite, all workers.
         post(sem_step, kStepBases);
         bases_and_rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
             idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
         wait_workers(kRewritten);
-        if (core_idx == 0) {
+        plan_mark(9);
+#if PLAN_RANK_TABLE
+        {
+            // This core's share of the active blocks, one page each: the rank of each bitmap word's first needed row
+            // within its owner's run (the rewrite's range offset + word rank), then the words. Core 0 also writes
+            // page 0, the owners' run bases. Staged in the scatter buckets (free once the indices are rewritten).
+            constexpr uint32_t page_words = PLAN_RANK_PAGE_WORDS;
+            constexpr uint32_t page_bytes = page_words * word_bytes;
+            constexpr uint32_t kBatch = 16;
+            const auto rank_table = TensorAccessor(rank_args, rank_addr, page_bytes);
+            auto* stage = reinterpret_cast<uint32_t*>(PLAN_BUF(kBuckets));
+            const uint32_t stage_l1 = PLAN_BUF(kBuckets);
+            if (core_idx == 0) {
+                const uint32_t* run_bases = misc + kMiscBase;
+                for (uint32_t i = 0; i < page_words; ++i) {
+                    stage[i] = i < num_devices ? run_bases[i] : 0u;
+                }
+                noc_async_write(stage_l1, rank_table.get_noc_addr(0), page_bytes);
+                noc_async_write_barrier();
+            }
+            const uint32_t b0 = active_blocks * core_idx / cores, b1 = active_blocks * (core_idx + 1) / cores;
+            for (uint32_t b = b0; b < b1;) {
+                const uint32_t n = b1 - b < kBatch ? b1 - b : kBatch;
+                for (uint32_t j = 0; j < n; ++j, ++b) {
+                    uint32_t* page = stage + j * page_words;
+                    const uint32_t owner = b % num_devices;
+                    const uint32_t offset = partials[(b / range_blocks) * range_words + owner];
+                    for (uint32_t w = 0; w < words_per_block; ++w) {
+                        const uint32_t word = b * words_per_block + w;
+                        page[w] = offset + word_ranks[word];
+                        page[words_per_block + w] = bitmap[word];
+                    }
+                    noc_async_write(stage_l1 + j * page_bytes, rank_table.get_noc_addr(1 + b), page_bytes);
+                }
+                noc_async_write_barrier();
+            }
+        }
+#endif
+        if (owner_major ? core_idx < num_devices : core_idx == 0) {
             const uint32_t* totals = misc + kMiscTotals;
             const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;
             using namespace sparse_push::plan_table;
@@ -423,17 +732,16 @@ void kernel_main() {
                               word_ranks[first_from_split * words_per_block]
                         : totals[owner];
             }
-            table_image[kWordMagic] = kMagic;
-            table_image[kWordNumDevices] = num_devices;
-            table_image[kWordStripeChunk] = stripe_chunk;
-            table_image[kWordActiveBlocks] = active_blocks;
-            table_image[kWordSplitBlock] = split_block;
-            table_image[kWordPagesPerPacket] = pages_per_packet;
-            table_image[kWordBanks] = banks;
-            table_image[kWordHasSplit] = has_split ? 1 : 0;
-            write_span(0, bitmap_off * word_bytes);  // header and per-owner counts
+            if constexpr (owner_major) {
+                build_slots(active_blocks, split_block);
+            } else {
+                write_header(active_blocks, split_block);
+            }
         }
+        plan_mark(10);
         write_back(0, brisc_indices);
+        plan_mark(11);
+        print_stats();
     };
 
     if constexpr (is_helper) {

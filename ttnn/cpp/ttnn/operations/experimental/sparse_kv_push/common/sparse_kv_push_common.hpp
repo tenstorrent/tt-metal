@@ -11,14 +11,20 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "kernels/sparse_push_constants.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
 
 // One fabric channel per (link, direction the chip has a fabric neighbour in), each with kSendersPerChannel sender
 // cores (reader + writer) feeding one mux core that owns the router connection.
-constexpr uint32_t kMaxDirections = 4;  // E, W, N, S
+constexpr uint32_t kMaxDirections = 4;            // E, W, N, S
+constexpr uint32_t kDirections = kMaxDirections;  // (main's sparse_kv_push names it so)
 constexpr uint32_t kSendersPerChannel = 2;
+
+// Inbox mode: bytes of one requester's slot in an owner's inbox, the header (plan_table::kBitmapOff words) and the
+// bitmap of the owner's blocks, in whole 64 B.
+uint32_t inbox_slot_bytes(uint32_t max_rows, uint32_t stripe_chunk, uint32_t num_devices);
 
 constexpr uint32_t cores_needed(uint32_t links, uint32_t directions = kMaxDirections) {
     return links * directions * (kSendersPerChannel + 1);
@@ -55,6 +61,13 @@ struct FabricRoutes {
     uint32_t max_directions() const;  // the push's core grid is sized for the chip with the most
 };
 const FabricRoutes& fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links);
+
+// One chip's directions, for building its program once fabric_routes has passed; raises with fabric_routes' reason
+// otherwise.
+std::vector<FabricDirection> fabric_directions(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
+    uint32_t num_links);
 
 // Rows travel in packets of pages_per_packet rows, dealt round robin over the DRAM banks. The plan lays out the
 // compact slots and the push writes them, so both take the shape from here.
