@@ -23,7 +23,7 @@ class Check:
     ip: str = "other"  # pcie / gddr / eth / fw / asic / thermal / other — used for console grouping
     console_visible: bool = True  # False → kept in JSON but hidden from console summary
     parts: list[str] = field(default_factory=list)  # chips at fault, as galaxy.format_bdf names them
-    cause: str = ""  # a lost chip's cause class (a verdict.DO_BY_CAUSE key) when a reading shows it, else ""
+    cause: str = ""  # a lost chip's cause class (one of verdict.CAUSES) when a reading shows it, else ""
 
 
 @dataclass

@@ -2,52 +2,189 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The run's verdict: one line per fault saying what, where and what to do,
-then one final line. Printed last, so the end of the log says what needs fixing."""
+"""The run's verdict: per fault what failed and where, its cause class and what
+to repair, then the final verdict and one 'Repair recommendation:' line.
+Printed last, so the end of the log says what needs fixing.
+
+ROWS is the one table of known Blackhole Galaxy faults. A row names the checks
+that report the fault by the constants of the modules that emit them, so a row
+cannot name a check nothing emits (tests/test_diag_verdict.py checks it).
+"""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections import Counter
+from typing import TYPE_CHECKING, Callable, NamedTuple
 
+from .aer import PCIE_AER_DIFF
+from .device_tests import DIDT_MATMUL_GALAXY, GDDR_ACT_ALL, GDDR_ACT_C3, GDDR_FAST, GDDR_FULL
+from .eth_status import ETH_STATUS
 from .eth_summary import _one_line
 from .galaxy import parse_bdf_physical
 from .model import FAIL, WARN
+from .resets import POST_RESET_STATE_STABLE, POST_TEST_RESET_OK, RECOUNT, RESET
+from .retest import RETEST_RESET_OK
+from .sensors import TRAY_POWER
+from .snapshot_checks import (
+    ASIC_LOCATION_PER_UBB,
+    ASIC_THERMAL_PRECHECK,
+    DRAM_STATUS,
+    GDDR_BIST_PER_CHANNEL,
+    GDDR_TRAINING_PER_CHANNEL,
+    PCIE_ENUM_COUNT,
+    PCIE_GEN,
+    PCIE_LANE_WIDTH,
+)
 
 if TYPE_CHECKING:
     from .sensors import TrayCause
 
-_LOST = "tt-smi -glx_reset and recount; if still missing, check that tray's 12 V and its host PCIe cable"
+# Cause classes: one is printed before the repair of every lost chip or tray.
+CAUSES = ("POWER", "POWER-DOWNSTREAM", "PCIE/LINK", "CHIP/BOARD", "UNKNOWN")
 
-# What to do about a fault, by the check that found it, else by its IP block.
-DO_BY_CHECK = {
-    "pcie_enum_count": _LOST,
-    "asic_location_per_ubb": _LOST,
-    "post_test_reset_ok": _LOST,
+
+class Row(NamedTuple):
+    fault: str  # what the fault is, as people name it
+    checks: tuple[str, ...]  # the checks that report it; "x*" is every check named x...
+    cause: str  # the cause class printed before the repair ("" for none); a cause the reads set wins
+    do: str  # the repair; "that tray" becomes the tray when every chip at fault is on one
+    when: Callable[[dict], bool] | None = None  # a row with a test is tried before the rows without
+
+
+def _trays(check: dict) -> Counter:
+    """tray -> how many of the check's chips are on it."""
+    return Counter(pos[0] for pos in map(parse_bdf_physical, check.get("parts") or []) if pos)
+
+
+def _cause(want: str) -> Callable[[dict], bool]:
+    return lambda c: c.get("cause") == want
+
+
+def _says(words: str) -> Callable[[dict], bool]:
+    return lambda c: words in (c.get("details") or "")
+
+
+def _tests(*names: str) -> tuple[str, ...]:
+    """Device test checks, and their retest after the reset (name + RETEST_SUFFIX)."""
+    return tuple(n + "*" for n in names)
+
+
+# Checks that find chips gone from the bus.
+LOST = (PCIE_ENUM_COUNT, ASIC_LOCATION_PER_UBB)
+RESET_LOST = (RESET + "*", RECOUNT + "*", POST_TEST_RESET_OK, RETEST_RESET_OK, POST_RESET_STATE_STABLE)
+GDDR = _tests(GDDR_ACT_C3, GDDR_ACT_ALL, GDDR_FAST, GDDR_FULL) + (
+    GDDR_BIST_PER_CHANNEL,
+    GDDR_TRAINING_PER_CHANNEL,
+    DRAM_STATUS,
+)
+
+_REGLOW = "tt-smi -glx_reset and recount"
+_PCIE = "reseat that tray's host PCIe cable; swap it with a neighbour tray's to see if the fault follows"
+_BOARD = "re-run; if it repeats on the same chip, replace that tray's board"
+
+ROWS: dict[str, Row] = {
+    "F01": Row(
+        "tray loses 12 V under load",
+        (TRAY_POWER,),
+        "POWER",
+        "replace that tray's bus bar set, then that tray if it still drops",
+        lambda c: c["status"] == FAIL and c.get("cause") == "POWER",
+    ),
+    "F02": Row(
+        "HSC under-voltage latch",
+        (TRAY_POWER,),
+        "POWER",
+        "watch that tray's 12 V feed; if its under-voltage latch sets again, replace its bus bar set",
+        lambda c: c["status"] == WARN and c.get("cause") == "POWER",
+    ),
+    "F04": Row(
+        "bad bus bar",
+        LOST + RESET_LOST,
+        "POWER",
+        f"fix that tray's 12 V feed: replace its bus bar set, then {_REGLOW}",
+        _cause("POWER"),
+    ),
+    "F05": Row(
+        "tray missing",
+        LOST,
+        "UNKNOWN",
+        f"{_REGLOW}; if still missing, reseat that tray, then replace it",
+        lambda c: not c.get("cause") and any(n >= 8 for n in _trays(c).values()),
+    ),
+    "F06": Row(
+        "chip lost on reset",
+        RESET_LOST,
+        "CHIP/BOARD",
+        f"{_REGLOW}; if it is lost on reset again, replace that tray's board",
+    ),
+    "F07": Row(
+        "chip drops off PCIe with 12 V good",
+        (TRAY_POWER,) + LOST + RESET_LOST,
+        "POWER-DOWNSTREAM",
+        "that tray's 12 V is good but a VR's power-good is low: replace that tray's board",
+        _cause("POWER-DOWNSTREAM"),
+    ),
+    "F08": Row(
+        "chip missing: PCIe link never trains",
+        LOST,
+        "PCIE/LINK",
+        f"{_REGLOW}; if still missing, swap that tray's host PCIe cable with a neighbour tray's",
+    ),
+    "F09": Row(
+        "PCIe correctable errors",
+        (PCIE_AER_DIFF,),
+        "PCIE/LINK",
+        "reseat that tray's host PCIe cable; swap it with a neighbour tray's: if the errors follow the tray, "
+        "replace that tray's board",
+    ),
+    "F10": Row("PCIe width or speed low", (PCIE_GEN, PCIE_LANE_WIDTH), "PCIE/LINK", _PCIE),
+    "F13": Row(
+        "Ethernet trace ports down",
+        (ETH_STATUS + "*",),
+        "CHIP/BOARD",
+        "a trace port stays inside the tray: replace that tray's board",
+        _says("TRACE port"),
+    ),
+    "F14": Row(
+        "inter-host QSFP-DD link down or bad data",
+        (ETH_STATUS + "*",),
+        "PCIE/LINK",
+        "reseat, then replace, the QSFP-DD cable on those ports",
+        _says("QSFP-DD"),
+    ),
+    "F19": Row(
+        "bf16/bf8 DIDT numeric errors",
+        _tests(DIDT_MATMUL_GALAXY),
+        "CHIP/BOARD",
+        "raise that chip's vdd_min to 760 mV and retest",
+    ),
+    "F21": Row("GDDR fault", GDDR, "CHIP/BOARD", _BOARD),
+    "F27": Row("overheating", (ASIC_THERMAL_PRECHECK,), "", "check that tray's fans and airflow"),
 }
+
+# A check no row names: what to do by its IP block.
 DO_BY_IP = {
-    "pcie": "reseat that tray's host PCIe cable; swap it with a neighbour tray's to see if the fault follows",
+    "pcie": _PCIE,
     "eth": "reseat or replace the cable on those ports; a trace port that stays down points at the tray board",
-    "gddr": "re-run; a fault that repeats on the same chip points at that tray board",
+    "gddr": _BOARD,
     "fw": "flash the same firmware bundle to every chip",
     "thermal": "check that tray's fans and airflow",
 }
 DEFAULT_DO = "see the check's details and its log"
 
-# A tray_power WARN with a POWER cause is an under-voltage latch alone (no trip). A lost chip has its own row.
-DO_LATCH = "watch that tray's 12 V feed; if its under-voltage latch sets again, fix its bus bar or power cable"
 
-# What to do once the tray's power reads (diag/sensors.py) give the cause.
-DO_BY_CAUSE = {
-    "POWER": "fix that tray's 12 V feed (bus bar, power cable, HSC), then tt-smi -glx_reset and recount",
-    "POWER-DOWNSTREAM": (
-        "that tray's 12 V is good but a VR's power-good is low: the tray board or a chip on it; "
-        "swap the tray to see if the fault follows"
-    ),
-}
+def _named(names: tuple[str, ...], name: str) -> bool:
+    return any(name == n or (n.endswith("*") and name.startswith(n[:-1])) for n in names)
 
 
-def _lost(check: dict) -> bool:
-    """A check that found chips gone from the bus."""
-    return check["name"] in DO_BY_CHECK or check["name"].startswith("reset_")
+def row_of(check: dict) -> tuple[str, Row | None]:
+    """(id, row) of the fault a WARN/FAIL check reports, else ("", None).
+    Rows with a test go first, in id order, then the rest."""
+    for tested in (True, False):
+        for rid, row in ROWS.items():
+            if (row.when is not None) == tested and _named(row.checks, check["name"]):
+                if row.when is None or row.when(check):
+                    return rid, row
+    return "", None
 
 
 def attribute_power(report: dict, causes: dict[int, TrayCause]) -> None:
@@ -56,31 +193,25 @@ def attribute_power(report: dict, causes: dict[int, TrayCause]) -> None:
     its details so the one-line verdict keeps it."""
     for phase in report["phases"].values():
         for c in phase["checks"]:
-            if c["status"] not in (FAIL, WARN) or c.get("cause") or not _lost(c):
+            if c["status"] not in (FAIL, WARN) or c.get("cause") or not _named(LOST + RESET_LOST, c["name"]):
                 continue
-            trays = sorted({pos[0] for pos in map(parse_bdf_physical, c.get("parts") or []) if pos} & set(causes))
+            trays = sorted(set(_trays(c)) & set(causes))
             if trays:
                 c["cause"] = causes[trays[0]].cause
                 c["details"] = "; ".join(causes[t].why for t in trays) + " — " + c["details"]
 
 
-def _do(check: dict) -> str:
-    """What to do, with 'that tray' made the tray when every chip at fault is on one."""
-    if check["name"] == "tray_power" and check["status"] == WARN and check.get("cause") == "POWER":
-        do = DO_LATCH
-    elif check.get("cause") in DO_BY_CAUSE:
-        do = DO_BY_CAUSE[check["cause"]]
-    elif check["name"].startswith("reset_"):
-        do = _LOST
-    else:
-        do = DO_BY_CHECK.get(check["name"]) or DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
-    trays = {pos[0] for pos in map(parse_bdf_physical, check.get("parts") or []) if pos}
-    return do.replace("that tray", f"UBB{trays.pop()}") if len(trays) == 1 else do
+def _repair(check: dict, row: Row | None) -> str:
+    """The repair, with 'that tray' made the tray when every chip at fault is on one."""
+    do = row.do if row else DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
+    trays = _trays(check)
+    return do.replace("that tray", f"UBB{next(iter(trays))}") if len(trays) == 1 else do
 
 
 def verdict_lines(report: dict) -> list[str]:
-    """``Fault i: what | where | do`` per WARN/FAIL check of a gating phase,
-    ``Evidence:`` per capture of note, then ``Final verdict: ...``.
+    """Per WARN/FAIL check of a gating phase: ``Fault i: STATUS Fxx fault: what |
+    where``, then ``  Cause: X`` and ``  Repair: ...``; ``Evidence:`` per capture
+    of note; ``Final verdict: ...``; last ``Repair recommendation: ...``.
 
     The same check naming the same chips in several snapshots is one fault.
     A gating phase that errored with no FAIL leaves the run INCOMPLETE: the
@@ -101,10 +232,19 @@ def verdict_lines(report: dict) -> list[str]:
                 seen.add(key)
                 faults.append(c)
 
-    lines = [
-        f"Fault {i}: {c['status']} {'CAUSE ' + c['cause'] + ': ' if c.get('cause') else ''}{_one_line(c, 200)} | {'; '.join(c.get('parts') or []) or 'host'} | {_do(c)}"
-        for i, c in enumerate(faults, 1)
-    ]
+    lines, repairs = [], {}
+    for i, c in enumerate(faults, 1):
+        rid, row = row_of(c)
+        cause = c.get("cause") or (row.cause if row else "")
+        do = _repair(c, row)
+        what = f"{rid} {row.fault}: " if row else ""
+        lines.append(
+            f"Fault {i}: {c['status']} {what}{_one_line(c, 200)} | {'; '.join(c.get('parts') or []) or 'host'}"
+        )
+        if cause:
+            lines.append(f"  Cause: {cause}")
+        lines.append(f"  Repair: {do}")
+        repairs.setdefault((c["status"] != FAIL, do), []).append(i)
     captures = report["phases"].get("captures", {}).get("checks", [])
     lines += [f"Evidence: {_one_line(c, 200)}" for c in captures if c["status"] == WARN]
 
@@ -117,4 +257,8 @@ def verdict_lines(report: dict) -> list[str]:
         final = f"WARN: {len(faults)} warning(s)"
     else:
         final = "PASS"
-    return lines + [f"Final verdict: {final}"]
+    # FAIL repairs first; faults with the same repair share one entry.
+    todo = [
+        f"Fault {', '.join(map(str, ids))}: {do}" for (_, do), ids in sorted(repairs.items(), key=lambda kv: kv[0][0])
+    ]
+    return lines + [f"Final verdict: {final}", f"Repair recommendation: {'; '.join(todo) or 'none'}"]

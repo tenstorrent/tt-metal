@@ -19,6 +19,7 @@ from .snapshot_checks import validate_snapshot
 
 # Keeps the first run's checks and logs.
 RETEST_SUFFIX = "_after_reset"
+RETEST_RESET_OK = "retest_reset_ok"
 
 
 def run_retest(
@@ -54,7 +55,7 @@ def run_retest(
     reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest", gate=gate, hook=hook)
     # reset_* checks don't count toward the verdict; restate under a name that does.
     ok_text, fail_prefix = f"unit back after tt-smi {reset_flag}", "reset before the retest left the unit degraded"
-    if add_reset_outcome(phase, "retest_reset_ok", ok_text, fail_prefix) != PASS:  # no second boot to retest on
+    if add_reset_outcome(phase, RETEST_RESET_OK, ok_text, fail_prefix) != PASS:  # no second boot to retest on
         return None
 
     snap_phase = None

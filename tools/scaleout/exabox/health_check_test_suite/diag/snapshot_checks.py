@@ -26,6 +26,17 @@ from .galaxy import (
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
+# Check names the verdict's rows match on.
+PCIE_ENUM_COUNT = "pcie_enum_count"
+ASIC_LOCATION_PER_UBB = "asic_location_per_ubb"
+PCIE_GEN = "pcie_gen"
+PCIE_LANE_WIDTH = "pcie_lane_width"
+ASIC_THERMAL_PRECHECK = "asic_thermal_precheck"
+GDDR_TRAINING_PER_CHANNEL = "gddr_training_per_channel"
+GDDR_BIST_PER_CHANNEL = "gddr_bist_per_channel"
+DRAM_STATUS = "dram_status"
+ETH_SPEED = "eth_speed"
+
 
 def _parts(bdfs) -> list[str]:
     """Check.parts for these BDFs: each chip once, named by tray and ASIC."""
@@ -86,7 +97,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
     phase.add(
         Check(
-            name="pcie_enum_count",
+            name=PCIE_ENUM_COUNT,
             status=PASS if n == EXPECTED_CHIP_COUNT else FAIL,
             details=enum_details,
             data={
@@ -168,7 +179,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     bad = [d["board_info"]["bus_id"] for d, ok in zip(devs, dram_ok) if not ok]
     phase.add(
         Check(
-            name="dram_status",
+            name=DRAM_STATUS,
             status=PASS if all(dram_ok) else FAIL,
             details=f"{sum(dram_ok)}/{n} dram_status=True"
             + (f"; failed: [{', '.join(format_bdf(b) for b in bad)}]" if bad else ""),
@@ -241,7 +252,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         details.append(f"expected BDFs: {missing_bdfs}")
     phase.add(
         Check(
-            name="asic_location_per_ubb",
+            name=ASIC_LOCATION_PER_UBB,
             status=PASS if asic_loc_ok else FAIL,
             details="all UBBs complete" if asic_loc_ok else "; ".join(details),
             data={
@@ -382,7 +393,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     total_channels = n * 8
     phase.add(
         Check(
-            name="gddr_training_per_channel",
+            name=GDDR_TRAINING_PER_CHANNEL,
             status=PASS if not train_failures else FAIL,
             details=f"{total_channels - len(train_failures)}/{total_channels} channels trained"
             + (
@@ -397,7 +408,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     )
     phase.add(
         Check(
-            name="gddr_bist_per_channel",
+            name=GDDR_BIST_PER_CHANNEL,
             status=PASS if not bist_failures else FAIL,
             details=f"{total_channels - len(bist_failures)}/{total_channels} channels BIST passed"
             + (
@@ -447,7 +458,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
 
     phase.add(
         Check(
-            name="pcie_lane_width",
+            name=PCIE_LANE_WIDTH,
             status=PASS if not lane_mismatches else FAIL,
             details=(
                 f"{n - len(lane_mismatches)}/{n} chips at expected lane width "
@@ -474,7 +485,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     if rev is None:
         phase.add(
             Check(
-                name="pcie_gen",
+                name=PCIE_GEN,
                 status=SKIP,
                 details="board_rev indeterminate; cannot pick expected gen (see board_rev)",
                 data={"per_chip": dict(per_chip_gen), "expected": None, "rev": None},
@@ -506,7 +517,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             bits.append(f"above-spec: {', '.join(format_bdf(bdf) for bdf, _ in over)}")
         phase.add(
             Check(
-                name="pcie_gen",
+                name=PCIE_GEN,
                 status=WARN if under else PASS,
                 details="; ".join(bits),
                 data={
@@ -567,7 +578,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     # 12. ETH speed — no eth speed field in tt-smi 4.1.2 or 5.1.1 schema.
     phase.add(
         Check(
-            name="eth_speed",
+            name=ETH_SPEED,
             status=SKIP,
             details="no eth speed field in tt-smi snapshot schema",
             data={},
@@ -749,7 +760,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         status = PASS if hottest_t < threshold else WARN
         phase.add(
             Check(
-                name="asic_thermal_precheck",
+                name=ASIC_THERMAL_PRECHECK,
                 status=status,
                 details=f"hottest chip {hottest_bdf} @ {hottest_t:.1f}°C (limit {thm_limit}°C)",
                 data={

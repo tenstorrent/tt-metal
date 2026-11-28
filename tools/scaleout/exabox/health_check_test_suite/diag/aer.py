@@ -17,6 +17,7 @@ from .galaxy import format_bdf
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .resets import chip_root_ports
 
+PCIE_AER_DIFF = "pcie_aer_diff"  # the check this module emits
 AER_FILES = ("correctable", "nonfatal", "fatal")
 
 
@@ -54,7 +55,7 @@ def check_aer(phase: Phase, before: dict[str, dict[str, int]], after: dict[str, 
     rose during the run, WARN for a correctable one, else PASS; SKIP when sysfs showed
     no counters. A chip gone by the end is the lost-chip checks' finding, not this one's."""
     if not any(before.values()):
-        phase.add(Check(name="pcie_aer_diff", status=SKIP, details="skipped: no AER counters in sysfs", ip="pcie"))
+        phase.add(Check(name=PCIE_AER_DIFF, status=SKIP, details="skipped: no AER counters in sysfs", ip="pcie"))
         return
     rose = {
         chip: {k: n - before[chip].get(k, 0) for k, n in now.items() if n > before[chip].get(k, 0)}
@@ -65,7 +66,7 @@ def check_aer(phase: Phase, before: dict[str, dict[str, int]], after: dict[str, 
     if not rose:
         phase.add(
             Check(
-                name="pcie_aer_diff",
+                name=PCIE_AER_DIFF,
                 status=PASS,
                 details=f"{len(before)} chips and their root ports: no AER count rose during the run",
                 ip="pcie",
@@ -75,7 +76,7 @@ def check_aer(phase: Phase, before: dict[str, dict[str, int]], after: dict[str, 
     uncorrectable = any(k.split()[-2] != "correctable" for d in rose.values() for k in d)  # sysfs names have no spaces
     phase.add(
         Check(
-            name="pcie_aer_diff",
+            name=PCIE_AER_DIFF,
             status=FAIL if uncorrectable else WARN,
             details="; ".join(
                 f"{format_bdf(chip)}: " + ", ".join(f"{k} +{n}" for k, n in sorted(d.items()))

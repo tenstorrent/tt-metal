@@ -31,6 +31,9 @@ from .snapshot_checks import validate_snapshot
 # is not used on Galaxy units, it can leave chips that re-enumerate but read
 # 0xffffffff until a -glx_reset.
 RESET_FLAGS = ("-glx_reset",)
+# Check names this module emits; RESET and RECOUNT are prefixes.
+RESET, RECOUNT = "reset_", "recount_"
+POST_TEST_RESET_OK, POST_RESET_STATE_STABLE = "post_test_reset_ok", "post_reset_state_stable"
 
 
 def chip_root_ports(sys_root: Path = Path("/sys")) -> dict[str, str]:
@@ -184,7 +187,7 @@ def reset_loop(
         return missing
 
     for i, flag in enumerate(plan):
-        check_name = f"reset_{i+1}_{flag.lstrip('-')}"
+        check_name = f"{RESET}{i+1}_{flag.lstrip('-')}"
         missing = _glx(check_name, flag)
         if missing is None:
             break
@@ -203,7 +206,7 @@ def reset_loop(
                     f"still missing {', '.join(missing)}" if missing else "all back"
                 )
                 phase.add(
-                    Check(name=f"recount_{check_name}", status=FAIL if missing else PASS, details=said, parts=missing)
+                    Check(name=f"{RECOUNT}{check_name}", status=FAIL if missing else PASS, details=said, parts=missing)
                 )
         # Post-reset snapshot: validate the unit's state after this iteration.
         # Skipped on dry-run / offline.
@@ -258,7 +261,7 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
     report["phases"]["snapshot"]["checks"].append(
         asdict(
             Check(
-                name="post_reset_state_stable",
+                name=POST_RESET_STATE_STABLE,
                 status=summary_status,
                 details=summary_details,
                 ip="other",
@@ -304,7 +307,7 @@ def run_post_test_reset(
     # enumeration here would leave no trace on the verdict. Restate the
     # outcome under a name that counts.
     add_reset_outcome(
-        phase, "post_test_reset_ok", f"unit healthy after {' '.join(plan)}", "post-test reset left the unit degraded"
+        phase, POST_TEST_RESET_OK, f"unit healthy after {' '.join(plan)}", "post-test reset left the unit degraded"
     )
 
 

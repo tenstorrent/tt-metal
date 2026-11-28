@@ -240,9 +240,11 @@ class TestLostTrayCause(SensorCase):
         row = report["phases"]["snapshot"]["checks"][0]
         self.assertEqual(row["cause"], "POWER")
         self.assertTrue(row["details"].startswith("UBB2 12 V: HSC 0x40"))
-        line = next(ln for ln in verdict_lines(report) if "pcie_enum_count" in ln)
-        self.assertIn("FAIL CAUSE POWER: pcie_enum_count: UBB2 12 V", line)
-        self.assertIn("fix UBB2's 12 V feed", line)
+        lines = verdict_lines(report)
+        i = next(i for i, ln in enumerate(lines) if "pcie_enum_count" in ln)
+        self.assertIn("FAIL F04 bad bus bar: pcie_enum_count: UBB2 12 V", lines[i])
+        self.assertEqual(lines[i + 1], "  Cause: POWER")
+        self.assertTrue(lines[i + 2].startswith("  Repair: fix UBB2's 12 V feed"))
 
     def test_lost_tray_with_no_power_reading_stays_unattributed(self):
         snap = Phase(name="snapshot")

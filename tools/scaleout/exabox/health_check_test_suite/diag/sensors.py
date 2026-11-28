@@ -33,6 +33,8 @@ from .common import log
 from .galaxy import expected_bdf, format_bdf
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
+TRAY_POWER = "tray_power"  # check names this module emits
+
 # Tray -> I2C bus of its HSCs (and its CPLD), and the two HSC addresses on each.
 HSC_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}
 HSC_ADDRS = (0x40, 0x42)
@@ -272,7 +274,7 @@ def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str
     after = read_power(bmc)
     if after is None or before is None:
         log(f"tray power: skipped: {bmc.why}")
-        phase.add(Check(name="tray_power", status=SKIP, details=f"skipped: {bmc.why}", ip="board"))
+        phase.add(Check(name=TRAY_POWER, status=SKIP, details=f"skipped: {bmc.why}", ip="board"))
         return {}
     for t in HSC_BUS:
         hscs = ", ".join(f"HSC {a:#04x} {after.hsc[(t, a)] or 'no answer'}" for a in HSC_ADDRS)
@@ -305,7 +307,7 @@ def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str
         found = True
         phase.add(
             Check(
-                name="tray_power",
+                name=TRAY_POWER,
                 status=FAIL if trip else WARN,
                 details=f"UBB{t}: {'; '.join(notes + unread + ([why] if cause == 'POWER-DOWNSTREAM' else []))}",
                 data={"before": _as_data(before, t), "after": _as_data(after, t)},
@@ -317,7 +319,7 @@ def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str
     if not found:
         phase.add(
             Check(
-                name="tray_power",
+                name=TRAY_POWER,
                 status=PASS,
                 details=f"{len(after.hsc)} tray HSCs: no trip, under-voltage latch or low VIN; every VR power-good high",
                 data={"after": {t: _as_data(after, t) for t in HSC_BUS}, "bricks": after.bricks},

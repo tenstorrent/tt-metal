@@ -52,6 +52,7 @@ from .galaxy import (
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
 TRIAGE_SCRIPT = "tools/triage/triage.py"
+ETH_STATUS = "eth_status_"  # prefix of every check this module emits
 TRIAGE_REQUIREMENTS = "tools/triage/requirements.txt"
 
 # What triage imports beyond the standard library. tools/triage/requirements.txt

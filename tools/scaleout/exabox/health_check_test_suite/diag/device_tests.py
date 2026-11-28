@@ -23,6 +23,15 @@ from .model import FAIL, PASS, Check, Phase
 
 # tt-metal deployment test binary candidate paths relative to repo root.
 # build_metal.sh defaults to build_Release/; raw cmake invocations often use build/.
+# Check names: each test's check is named by its key below.
+ETH_LINK_UP = "eth_link_up"
+ETH_BANDWIDTH = "eth_bandwidth"
+GDDR_FAST = "gddr_fast"
+GDDR_FULL = "gddr_full"
+DIDT_MATMUL_GALAXY = "didt_matmul_galaxy"
+GDDR_ACT_C3 = "gddr_act_c3"
+GDDR_ACT_ALL = "gddr_act_all"
+
 DEPLOYMENT_BIN_CANDIDATES = [
     "build_Release/test/tt_metal/unit_tests_deployment",
     "build/test/tt_metal/unit_tests_deployment",
@@ -41,13 +50,13 @@ DEPLOYMENT_BIN_CANDIDATES = [
 # Each entry is the gtest filter plus, optionally, environment set for that run
 # only (recorded in the check as env_overrides and prefixed to its command line).
 TESTS = {
-    "eth_link_up": {"filter": "*TensixDeploymentEthernet*LinkUp", "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"}},
-    "eth_bandwidth": {"filter": "*TensixDeploymentEthernet*Bandwidth*", "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"}},
-    "gddr_fast": {
+    ETH_LINK_UP: {"filter": "*TensixDeploymentEthernet*LinkUp", "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"}},
+    ETH_BANDWIDTH: {"filter": "*TensixDeploymentEthernet*Bandwidth*", "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"}},
+    GDDR_FAST: {
         "filter": "*DramDeployment_PersistentOptimalWorkersAllDramBanks",
         "env": {"DRAM_TEST_FAST": "1"},
     },
-    "gddr_full": {"filter": "*DramDeployment_*"},
+    GDDR_FULL: {"filter": "*DramDeployment_*"},
 }
 
 # Every variable any gtest entry overrides. A check's env_overrides reports the
@@ -71,7 +80,7 @@ GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.
 # soak catches more: a marginal chip on the bench unit failed 2/10 checks at
 # 5000 iterations but passed shorter runs — bump iterations for deep triage.
 PYTESTS = {
-    "didt_matmul_galaxy": {
+    DIDT_MATMUL_GALAXY: {
         "target": "tests/didt/test_minimal_matmul.py::test_minimal_matmul",
         "args": [
             "-k",
@@ -92,12 +101,12 @@ PYTESTS = {
     },
     # SDPA K-read mimic: ctrl 3, then all 8 ctrls, 300 s each (~10.3 min). Catches the 64 MB alias
     # (bit 26) DramDeployment misses. A hit skips the remaining passes. Timeout is a marker on the test.
-    "gddr_act_c3": {
+    GDDR_ACT_C3: {
         "target": "tests/dram/test_dram_act_patterns.py::test_dram_act_c3_screen",
         "args": ["-s"],
     },
     # Superset of gddr_act_c3: all 8 ctrls, then corner ctrls 7, 3, 4, 0 alone, 300 s each (~25.5 min).
-    "gddr_act_all": {
+    GDDR_ACT_ALL: {
         "target": "tests/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
         "args": ["-s"],
     },

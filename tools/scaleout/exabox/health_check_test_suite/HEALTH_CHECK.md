@@ -614,12 +614,27 @@ set). No clear is sent when any HSC reads OFF, when the run had no load, or with
 
 ## Verdict
 
-The run ends with one line per WARN/FAIL check of a gating phase, then the
-final line, also stored in the report as `verdict`. Each fault says what failed,
-where (the chips by BDF, tray and ASIC, or `host`) and what to do. The same check
-naming the same chips in several snapshots is one fault. `Final verdict` is `PASS`,
-`WARN: n warning(s)`, `FAIL: n fault(s)`, or `INCOMPLETE (not a fault)` when a
-gating phase errored and nothing failed.
+The run ends with one fault per WARN/FAIL check of a gating phase, then the
+final verdict and one repair line, also stored in the report as `verdict`:
+
+```
+Fault 1: FAIL F08 chip missing: PCIe link never trains: pcie_enum_count: 31/32 | 0000:46:00.0 (UBB2/U6)
+  Cause: PCIE/LINK
+  Repair: tt-smi -glx_reset and recount; if still missing, swap UBB2's host PCIe cable with a neighbour tray's
+Evidence: kernel_events: AER on 46:00.0
+Final verdict: FAIL: 1 fault(s)
+Repair recommendation: Fault 1: tt-smi -glx_reset and recount; ...
+```
+
+`verdict.ROWS` is the one table of known faults. A row names the checks that
+report it by the constants of the modules that emit them, its cause class
+(`POWER`, `POWER-DOWNSTREAM`, `PCIE/LINK`, `CHIP/BOARD`, `UNKNOWN`) and its
+repair; a cause the power reads set wins over the row's. A check no row names
+gets a repair by its IP block. The same check naming the same chips in several
+snapshots is one fault. `Evidence` lines are the WARN captures. `Final verdict`
+is `PASS`, `WARN: n warning(s)`, `FAIL: n fault(s)`, or `INCOMPLETE (not a
+fault)` when a gating phase errored and nothing failed. The recommendation lists
+FAIL repairs first and merges faults with the same repair.
 
 ## sys-triage phase
 
