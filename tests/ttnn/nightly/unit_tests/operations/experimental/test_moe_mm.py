@@ -669,3 +669,74 @@ def test_moe_gate_mm_row_dispatch_repeat(device, num_iters):
     tt_values, _tt_indices = prepare_output_tensor(ttnn.to_torch(allocated["tt_output"]), layout["ring2cores"])
     metrics = get_accuracy_metrics(torch_top8[0], tt_values)
     assert metrics["pcc"] >= PCC_THRESHOLD, f"repeated moe_gate_mm PCC {metrics['pcc']:.6f}"
+
+
+_READ_CMD_BUF_CTRL_PROBE = """
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr) = NOC_CMD_BUF_READ_REG(noc_index, read_cmd_buf, NOC_CTRL);
+}
+"""
+
+
+def _read_cmd_buf_static_vcs(device, cores):
+    """Static VC that each core's read cmd buf hands to the next reader kernel (NOC_CTRL bits 13-14)."""
+    core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
+    shard_spec = ttnn.ShardSpec(core_range_set, (ttnn.TILE_SIZE, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([len(cores) * ttnn.TILE_SIZE, ttnn.TILE_SIZE]),
+        ttnn.uint32,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+    )
+    runtime_args = ttnn.RuntimeArgs()
+    for core in cores:
+        runtime_args[core.x][core.y] = [out.buffer_address()]
+    # Same reader config as moe_gate_mm's dm0, so the probe runs on the same RISC and read cmd buf.
+    probe = ttnn.KernelDescriptor(
+        kernel_source=_READ_CMD_BUF_CTRL_PROBE,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=core_range_set,
+        runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op([out, out], ttnn.ProgramDescriptor(kernels=[probe], cbs=[], semaphores=[]))
+    noc_ctrl = ttnn.to_torch(out).to(torch.int64)[:: ttnn.TILE_SIZE, 0]
+    return ((noc_ctrl >> 13) & 0x3).tolist()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, id="dispatch_row")],
+    indirect=True,
+)
+def test_moe_gate_mm_restores_read_cmd_buf_vc(device):
+    """dm0 programs each DRAM bank's VC into the read cmd buf, which persists across launches. The next reader on
+    those cores must find the firmware default VC=1, after a first launch and after a program-cache hit."""
+    if not is_wormhole_b0():
+        pytest.skip("moe_gate_mm's ring is hardcoded for Wormhole's 12 DRAM views")
+
+    layout = _moe_gate_mm_layout(device)
+    if layout is None:
+        pytest.skip("moe_gate_mm requires exactly 12 DRAM-aligned cores")
+    cores = [core for core, _dram_bank, _is_sender in layout["ring2cores"].values()]
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        allocated = _allocate_moe_gate_mm(device, layout, seed=0)
+        for launch in ("first launch", "program-cache hit"):
+            ttnn.experimental.deepseek.moe.moe_gate_mm(
+                allocated["tt_input"],
+                w_tensor=allocated["tt_w"],
+                output_tensor=allocated["tt_output"],
+                layer_id=0,
+                column_id=0,
+            )
+            vcs = _read_cmd_buf_static_vcs(device, cores)
+            assert vcs == [1] * len(cores), f"{launch}: read cmd buf static VC per core {vcs}, expected all 1"
+    finally:
+        device.disable_and_clear_program_cache()

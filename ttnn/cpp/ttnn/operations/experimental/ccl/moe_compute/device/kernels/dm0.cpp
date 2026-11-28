@@ -449,6 +449,10 @@ void kernel_main() {
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
     cb_r2c_w2.push_back(w2_tiles_per_block);
+
+    // The custom VC programmed into the read cmd buf's NOC_CTRL persists across kernel launches; restore the
+    // firmware default (VC=1) so later readers on this core don't inherit it.
+    noc_read_init_state<read_cmd_buf>(noc_index);
 }
 
 #undef ADVANCE_TRID
