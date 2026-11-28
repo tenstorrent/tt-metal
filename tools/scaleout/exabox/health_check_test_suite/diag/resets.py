@@ -239,18 +239,24 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
     if not post_reset_phases:
         return
 
-    def _check_sig(checks: list) -> tuple:
+    def _check_sig(checks: list, names: set) -> tuple:
         # Compare on (name, status) only. `details` and `data` carry
         # telemetry (temps, voltages, error counters) that fluctuates
         # between snapshots without being a status concern. Status
         # changes are the signal — a chip dropping out, GDDR un-training,
         # FW versions going inconsistent — those all flip a check's status.
-        return tuple(sorted((c.get("name", ""), c.get("status", "")) for c in checks))
+        return tuple(sorted((c.get("name", ""), c.get("status", "")) for c in checks if c.get("name", "") in names))
 
-    initial_sig = _check_sig(report["phases"]["snapshot"]["checks"])
+    # Only checks both snapshots ran are compared: a check the initial
+    # snapshot alone ran (e.g. a SKIP for lack of sudo) is not a change; a
+    # snapshot that shares none (its capture failed) is.
+    initial = report["phases"]["snapshot"]["checks"]
     matched, differed = [], []
     for name, p in post_reset_phases:
-        (matched if _check_sig([asdict(c) for c in p.checks]) == initial_sig else differed).append((name, p))
+        post = [asdict(c) for c in p.checks]
+        both = {c.get("name", "") for c in initial} & {c.get("name", "") for c in post}
+        same = both and _check_sig(post, both) == _check_sig(initial, both)
+        (matched if same else differed).append((name, p))
     for name, p in differed:
         report["phases"][name] = asdict(p)
     # Preserve the actual final snapshot so the verdict reflects the true end

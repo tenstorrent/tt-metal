@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
@@ -25,7 +26,8 @@ sys.path.insert(0, str(SUITE_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from diag import common, resets  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
+from diag.verdict import verdict_lines  # noqa: E402
 
 
 def root_port(bdf: str) -> str:
@@ -244,6 +246,29 @@ class TestPostTestResetOk(unittest.TestCase):
         with mock.patch.object(resets, "reset_loop", loop), mock.patch.object(resets, "resolve_tt_smi", lambda p: "s"):
             resets.run_post_test_reset(None, ("-glx_reset",), Phase(name="p"), False, gate="g", hook="h")
         self.assertEqual((loop.call_args.kwargs.get("gate"), loop.call_args.kwargs.get("hook")), ("g", "h"))
+
+
+class TestFoldPostResetSnapshots(unittest.TestCase):
+    def fold(self, initial: list[Check], post: list[Check]) -> dict:
+        report = {"phases": {"snapshot": {"status": PASS, "checks": [asdict(c) for c in initial]}}}
+        resets.fold_post_reset_snapshots(report, [(f"snapshot_after_{i}", Phase("s", checks=post)) for i in range(3)])
+        return report
+
+    def test_a_check_only_the_initial_snapshot_ran_is_not_a_change(self):
+        count = Check(name="pcie_enum_count", status=PASS)
+        report = self.fold([count, Check(name="host_fru_info", status=SKIP)], [count])
+        stable = report["phases"]["snapshot"]["checks"][-1]
+        self.assertEqual((stable["status"], stable["details"]), (PASS, "3/3 post-reset snapshots matched initial"))
+        self.assertNotIn("Fault", "".join(verdict_lines(report)))
+
+    def test_a_chip_lost_on_reset_still_gives_f06(self):
+        report = self.fold([Check(name="pcie_enum_count", status=PASS)], [Check(name="pcie_enum_count", status=FAIL)])
+        self.assertEqual(report["phases"]["snapshot"]["checks"][-1]["status"], WARN)
+        self.assertIn("F06", verdict_lines(report)[0])
+
+    def test_a_failed_post_reset_capture_is_a_change(self):
+        report = self.fold([Check(name="pcie_enum_count", status=PASS)], [Check(name="snapshot_capture", status=FAIL)])
+        self.assertEqual(report["phases"]["snapshot"]["checks"][-1]["status"], WARN)
 
 
 if __name__ == "__main__":
