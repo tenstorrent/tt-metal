@@ -65,7 +65,7 @@ def close_device(device: "ttnn.device.Device"):
     Example:
         >>> device_id = 0
         >>> device = ttnn.open_device(device_id = device_id)
-        >>> success = ttnn.close_device(device)
+        >>> ttnn.close_device(device)
         Closing device 0
 
     """
@@ -171,10 +171,8 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
 
     Example:
         >>> with manage_device(device_id=0) as device:
-            >>> # Perform operations with the device
-            >>> tensor = ttnn.zeros((2, 3), device=device)
-            >>> print(tensor)
-        ttnn.Tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+        ...     # Perform operations with the device
+        ...     tensor = ttnn.zeros((2, 3), device=device)
     """
     device = open_device(device_id=device_id)
     try:
@@ -212,8 +210,10 @@ def setup_fast_dispatch(device, *, allow_destructive=False):
 
     Args:
         device: The device to enable Fast Dispatch on.
+
+    Keyword Args:
         allow_destructive: If True, proceed with a warning instead of refusing.
-            The resident L1 may be corrupted.
+            The resident L1 may be corrupted. Keyword-only.
 
     Yields:
         None: Use the device inside the block; it is in Fast Dispatch mode.

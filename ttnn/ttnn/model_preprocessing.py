@@ -537,7 +537,7 @@ def from_torch(
 ) -> ParameterDict:
     """
 
-    preprocess_model(initialize_model: Optional[Callable[[], torch.nn.Module]]=None, *, model_name: Optional[str]=None, version: Optional[str]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: Optional[str] = None, run_model: Optional[Callable], reader_patterns_cache: Optional[Dict]) -> ParameterDict
+    from_torch(*, model_name: Optional[str]=None, version: Optional[str]=None, initialize_model: Optional[Callable[[], torch.nn.Module]]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: str = "", run_model: Optional[Callable] = None, reader_patterns_cache: Optional[dict] = None) -> ParameterDict
 
     Preprocess modules and parameters of a given model.
 
@@ -689,7 +689,7 @@ def preprocess_model(
 ) -> ParameterDict:
     """
 
-    preprocess_model(initialize_model: Optional[Callable[[], torch.nn.Module]]=None, *, model_name: Optional[str]=None, version: Optional[str]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: Optional[str] = None, run_model: Optional[Callable], reader_patterns_cache: Optional[Dict]) -> ParameterDict
+    preprocess_model(*, model_name: Optional[str]=None, version: Optional[str]=None, initialize_model: Optional[Callable[[], torch.nn.Module]]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: str = "", run_model: Optional[Callable] = None, reader_patterns_cache: Optional[dict] = None) -> ParameterDict
 
     Preprocess modules and parameters of a given model.
 

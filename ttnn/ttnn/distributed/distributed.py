@@ -687,7 +687,7 @@ def open_mesh_device(
 
 def close_mesh_device(mesh_device):
     """
-    close_mesh_device(multi_device: ttnn.Multi) -> None:
+    close_mesh_device(mesh_device: ttnn.MeshDevice) -> None:
 
     Close the device and remove it from the device cache.
     """
