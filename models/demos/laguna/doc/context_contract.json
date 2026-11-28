@@ -1,0 +1,782 @@
+{
+  "schema_version": 3,
+  "as_of": "2026-08-22",
+  "hf_model": "poolside/Laguna-XS-2.1",
+  "terminology": {
+    "p150": "one Blackhole ASIC/device as enumerated by tt-smi",
+    "p150x2": "two independently enumerated P150 Blackhole ASIC/devices in a 1x2 mesh; on the qualification host these are one physical dual-P150 card",
+    "p150x4": "four independently enumerated Blackhole ASIC/devices in a 1x4 mesh"
+  },
+  "context_semantics": {
+    "hf_config_declares_tokens": 262144,
+    "serving_limit_includes_input_and_output": true,
+    "policy": "A selected serving profile may advertise only its end-to-end qualified context. Component-level cache addressability is not serving qualification.",
+    "hf_262144_status": "experimental p150x2 probe rejected for latency and remains unqualified; not advertised by any production profile"
+  },
+  "launcher_default": {
+    "profile": "p150x2",
+    "reason": "D1 is ruled out by full-model weight OOM. D2 passes topology, correctness, full 131K KV/trace, memory, cold API, online decode, exact-cap, and canonical prefix-cache gates. D4 remains the explicit regression profile."
+  },
+  "vllm_plugin_policy": {
+    "unset": "normal vLLM plugin auto-discovery",
+    "explicit_allowlist_required_exact_entries": ["tt", "tt_model_registry", "laguna_tt_ext"],
+    "reason": "Every Laguna launch requires the TT platform, TT model registry, and model-local plugin. The local plugin owns the qualified Laguna tool parser in all profiles as well as prefix-cache and hybrid-KV hooks."
+  },
+  "profiles": {
+    "p150": {
+      "device_count": 1,
+      "mesh_shape": [1, 1],
+      "configured_context_tokens": 65536,
+      "max_num_seqs": 1,
+      "fabric_config": "DISABLED",
+      "ccl_topology": null,
+      "ccl_num_links": 0,
+      "mesh_graph_descriptor": "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto",
+      "decode_sdpa_program_config_enabled": false,
+      "decode_sdpa_env": "TT_LAGUNA_DECODE_SDPA_PC=0",
+      "kv_policy": "uniform_bfloat8_b",
+      "prefix_cache_enabled": false,
+      "qualification_status": "rejected_full_model_weights_oom_at_lm_head",
+      "qualification_artifact": null,
+      "topology_measurement": {
+        "date": "2026-08-21",
+        "tt_visible_devices": "0",
+        "mesh_graph_descriptor": "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto",
+        "open_close_cycles": 3,
+        "eager_check": "passed",
+        "traced_check": "passed",
+        "scope": "mesh/topology only",
+        "evidence": "reported bring-up run; committed raw artifact pending"
+      },
+      "max_context_serving_gate": {
+        "input_tokens": 64512,
+        "output_tokens": 1024
+      }
+    },
+    "p150x2": {
+      "device_count": 2,
+      "mesh_shape": [1, 2],
+      "configured_context_tokens": 131072,
+      "max_num_seqs": 1,
+      "fabric_config": "FABRIC_1D_RING",
+      "ccl_candidates": [
+        {"topology": "linear", "num_links": 1},
+        {"topology": "linear", "num_links": 2},
+        {"topology": "ring", "num_links": 1},
+        {"topology": "ring", "num_links": 2}
+      ],
+      "selected_physical_pair": {
+        "tt_visible_devices": "0,1",
+        "host_board_relationship": "one physical dual-P150 card containing two P150 Blackhole ASICs"
+      },
+      "selected_ccl": {"topology": "ring", "num_links": 2},
+      "mesh_graph_descriptor": null,
+      "decode_sdpa_program_config_enabled": true,
+      "decode_sdpa_env": "TT_LAGUNA_DECODE_SDPA_PC=1",
+      "kv_policy": "uniform_bfloat8_b",
+      "prefix_cache_enabled": true,
+      "prefix_cache_profile_default": 1,
+      "prefix_cache_policy": "qualified",
+      "prefix_cache_quantum_tokens": 8192,
+      "prefix_cache_physical_block_tokens": 64,
+      "prefix_cache_admission": "complete_canonical_prompt_chunks",
+      "prefix_cache_operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0",
+      "streaming_prefill_enabled": true,
+      "streaming_prefill_profile_default": 1,
+      "streaming_prefill_outer_chunk_tokens": 8192,
+      "streaming_prefill_operator_rollback": "TT_LAGUNA_STREAMING_PREFILL=0 with LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1; unqualified",
+      "qualification_status": "qualified_selected_default",
+      "qualification_artifact": "/home/ttuser/laguna-qualification/p150x2-qualified-noalloc-20260821T123447",
+      "prefix_cache_qualification_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/results/full_qualification.json",
+      "topology_measurements": [
+        {
+          "date": "2026-08-21",
+          "tt_visible_devices": "0,1",
+          "topology": "ring",
+          "num_links": 2,
+          "open_close_cycles": 3,
+          "eager_check": "passed",
+          "traced_check": "passed"
+        },
+        {
+          "date": "2026-08-21",
+          "tt_visible_devices": "2,3",
+          "topology": "ring",
+          "num_links": 2,
+          "open_close_cycles": 3,
+          "eager_check": "passed",
+          "traced_check": "passed"
+        },
+        {
+          "date": "2026-08-21",
+          "tt_visible_devices": "0,1",
+          "topology": "linear",
+          "num_links": 2,
+          "open_close_cycles": 3,
+          "eager_check": "passed",
+          "traced_check": "passed"
+        }
+      ],
+      "topology_evidence_note": "reported bring-up runs; committed raw artifacts pending",
+      "max_context_serving_gate": {
+        "input_tokens": 130048,
+        "output_tokens": 1024,
+        "passed": true
+      }
+    },
+    "p150x4": {
+      "device_count": 4,
+      "mesh_shape": [1, 4],
+      "configured_context_tokens": 131072,
+      "max_num_seqs": 8,
+      "fabric_config": "FABRIC_1D_RING",
+      "ccl_topology": "ring",
+      "ccl_num_links": 2,
+      "mesh_graph_descriptor": null,
+      "decode_sdpa_program_config_enabled": true,
+      "decode_sdpa_env": "TT_LAGUNA_DECODE_SDPA_PC=1",
+      "kv_policy": "uniform_bfloat8_b",
+      "prefix_cache_enabled": false,
+      "qualification_status": "legacy_measured_regression_profile",
+      "qualification_artifact": null,
+      "artifact_note": "The previous contract cited doc/vllm_integration/sweep_vllm.tsv, but that raw file is absent from this checkout. Produce a fresh D4 artifact before applying the 10% regression gate."
+    }
+  },
+  "unsupported_or_disabled": {
+    "prefix_cache_outside_qualified_p150x2": {
+      "profiles": ["p150", "p150x4"],
+      "required_production_env": "TT_LAGUNA_PREFIX_CACHE=0",
+      "status": "disabled_and_unqualified",
+      "reason": "The runtime-offset implementation and frozen-cache warm set are qualified only for the p150x2 two-chip, max-num-seqs-1 serving envelope. Model initialization rejects enabled prefix caching on any other device count."
+    },
+    "hybrid_kv": {
+      "required_production_env": "TT_LAGUNA_HYBRID_KV=0",
+      "experimental_env": "TT_LAGUNA_HYBRID_KV=1",
+      "status": "production_disabled_experimental_cache_off_p150x2",
+      "reason": "Production and prefix-cache qualification retain uniform KV. The explicit experimental p150x2 path preserves four distinct block-table groups while aliasing equal slots onto ten physical K/V tensor pairs; it requires prefix caching off, max_num_seqs=1, scheduler chunks of 8192 tokens, LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1, and the complete explicit plugin allowlist when VLLM_PLUGINS is set."
+    },
+    "moe_token_dispatch": {
+      "required_production_env": "TT_LAGUNA_MOE_TOKEN_DISPATCH=0",
+      "experimental_env": "TT_LAGUNA_MOE_TOKEN_DISPATCH=1",
+      "status": "production_disabled_one_layer_hardware_qualified_only",
+      "reason": "The production-stacked layer-1 8192-token gate passed PCC, warm-latency, memory, and cache-stability gates, but cross-layer, cross-bucket, cumulative boot/residency, and full-model token gates remain outstanding.",
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, DFlash/context/multi-sequence/tile-sparse paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1"
+    },
+    "moe_prefill_tile_sparse": {
+      "required_production_env": "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE=0",
+      "experimental_env": "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE=1",
+      "status": "production_disabled_unqualified",
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, DFlash/context/multi-sequence/token-dispatch paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1"
+    },
+    "dflash": {
+      "required_production_env": "TT_LAGUNA_DFLASH=0",
+      "experimental_env": "TT_LAGUNA_DFLASH=1",
+      "status": "production_disabled_correctness_scoped_latency_rejected",
+      "reason": "Target verification and committed tokens were exact, but target verification alone cost at least 94.440 ms per committed token before draft cost versus about 50.5 ms for the qualified baseline.",
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, speculative/context/multi-sequence/sparse-MoE paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1",
+      "laguna_s_launcher_envelope": "Laguna-S-2.1 with poolside/Laguna-S-2.1-DFlash: p150x4, LAGUNA_MAX_NUM_SEQS=1, TT_LAGUNA_HYBRID_KV=0 (uniform KV, max_model_len <= 32768), streaming prefill on, prefix cache off, speculative/context/multi-sequence/sparse-MoE paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1. Launcher and device-free contracts only; not yet run on hardware."
+    },
+    "experimental_feature_stacking": {
+      "status": "rejected_fail_closed",
+      "reason": "A single experimental acknowledgement does not authorize combinations of independently qualified envelopes. The launcher rejects untested DFlash, hybrid-KV, multi-sequence, context-probe, token-dispatch, and tile-sparse overlaps except that the 262144 context probe explicitly requires hybrid KV."
+    },
+    "scheduler_chunked_prefill": {
+      "status": "required_disabled_for_p150x2_prefix_cache",
+      "note": "Laguna's internal bounded/pipelined prefill remains enabled and is not vLLM scheduler-level chunked prefill."
+    },
+    "context_262144": {
+      "status": "experimental_p150x2_probe_rejected_for_latency_unqualified",
+      "production_context_tokens": 131072,
+      "reason": "No production profile advertises 262144. The fail-closed cache-off hybrid-KV probe proved an exact repeat beyond the production boundary, but its exact-cap request exceeded the deliberate 1200-second client timeout. This rejects the 262144-token serving target for latency and does not constitute a capacity pass.",
+      "required_probe_configuration": {
+        "TT_LAGUNA_CONTEXT_PROBE": "1",
+        "TT_LAGUNA_HYBRID_KV": "1",
+        "TT_LAGUNA_PREFIX_CACHE": "0",
+        "LAGUNA_MAX_NUM_SEQS": "1",
+        "LAGUNA_MAX_MODEL_LEN": "262144",
+        "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1"
+      },
+      "completed_probe": {
+        "date": "2026-08-22",
+        "boundary": {
+          "input_tokens": 131136,
+          "output_tokens": 16,
+          "repetitions": 2,
+          "both_completed": true,
+          "exact_repeat": true,
+          "proof": "The harness submitted the exact-cap leg only after both boundary responses completed and passed its token-count and token-equality assertions."
+        },
+        "exact_cap": {
+          "input_tokens": 262112,
+          "output_tokens": 32,
+          "request_tokens": 262144,
+          "maximum_observed_kv_usage": 0.9709341025,
+          "client_timeout_seconds": 1200,
+          "completed": false,
+          "oom_or_device_fault_observed": false,
+          "abort_returned_kv_usage_to": 0
+        },
+        "disposition": "rejected_for_latency_unqualified_not_a_capacity_pass",
+        "artifact": "/tmp/laguna-context262k-probe-20260822/qualification.json",
+        "server_log": "/tmp/laguna-context262k-probe-20260822/laguna_serve_20260822-121656.log"
+      }
+    }
+  },
+  "prefill_runtime_contract": {
+    "production_prefix_cache_profiles": ["p150x2"],
+    "operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0 is always accepted without an experimental acknowledgement and passes --no-enable-prefix-caching",
+    "resume_support_status": "production_qualified_on_p150x2",
+    "cache_admission": {
+      "physical_kv_block_tokens": 64,
+      "canonical_quantum_tokens": 8192,
+      "lookup_policy": "floor raw candidate hits to complete canonical prompt chunks before references are acquired",
+      "insertion_policy": "cache only complete canonical prompt checkpoints; exclude partial prompt chunks and generated decode KV",
+      "ownership_safety": "rejected tail blocks remain fresh and writable",
+      "kv_group_policy": "exactly one uniform FullAttentionSpec group",
+      "max_num_seqs": 1,
+      "scheduler_chunked_prefill": false,
+      "speculative_decode": false,
+      "external_kv_connectors": false
+    },
+    "prefix_resume_range": "vLLM supplies full tokens, absolute exclusive prompt_lens, and absolute cached-prefix start_pos; Laguna uploads only tokens[start_pos:prompt_lens]",
+    "bucket_length_basis": "prompt_lens - start_pos",
+    "model_position_basis": "absolute start_pos",
+    "resume_alignment": "the scheduler admits start_pos only at the 8192-token canonical quantum; the model additionally validates 64-token KV-block alignment",
+    "runtime_start_inputs": {
+      "paged_fill": "each request row is host-rebased so column zero represents start_pos; device slices use only fixed relative pipeline offsets",
+      "rope": "absolute position ids are copied into persistent inputs and indexed embedding writes persistent cos/sin outputs",
+      "sdpa": "chunk_start_idx_tensor carries the absolute start as runtime data"
+    },
+    "private_scratch_kv": {
+      "physical_blocks_per_layer": 1,
+      "logical_capacity_increase": 0,
+      "block_id": "the first physical block outside vLLM's logical block-id range",
+      "attention_padding": "a persistent prefill-only attention table maps whole padding blocks to the zero-initialized scratch block",
+      "fill_padding": "a separate persistent paged-fill table maps padding to -1, the paged_fill_cache write-skip sentinel, so writer cores cannot race on scratch",
+      "purpose": "prevent zero-filled scheduler columns from aliasing physical block 0 without allowing concurrent padding writes to race on scratch",
+      "decode_page_table_modified": false
+    },
+    "extended_private_prefill_addressability": {
+      "p150_policy": "legacy monolithic max_model_len + largest_bucket",
+      "p150x2_page_table_horizon": "max_model_len rounded up once to the next 8192-token outer-chunk boundary",
+      "p150x2_rope_horizon": "max_model_len rounded up once to the next 8192-token outer-chunk boundary",
+      "p150_horizon_tokens": 131072,
+      "p150x2_horizon_tokens": 131072,
+      "production_advertised_context_changed": false
+    },
+    "warmup": {
+      "plugin_calls_prefill_warmup_twice": true,
+      "d2_compute_bucket_ladder": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
+      "d2_canonical_nonzero_position_long_stream_case": true,
+      "complete_prefill_warmup_passes": 1,
+      "mechanism": "Laguna's private _prefill_programs_warmed latch survives the plugin's public-flag reset and suppresses the redundant second finite-ladder plus canonical-long-stream pass",
+      "runtime_offset_slots_preallocated": true,
+      "program_cache_frozen_after_trace": true,
+      "program_cache_misses_allowed_after_trace": false
+    },
+    "terminal_row_selection": {
+      "index": "prompt_lens - start_pos - 1",
+      "selector": "host one-hot copied into a persistent per-bucket device buffer",
+      "output": "persistent one-row device buffer",
+      "program_compilation": "once per bucket during the single full ladder warmup",
+      "persistent_selector_and_output_buffers": true,
+      "allocation_claim_scope": "no per-request selector/output buffer; this is not a global allocation-free prefill claim"
+    },
+    "device_free_contract_tests": [
+      "tests/test_generator_vllm_prefix_resume.py",
+      "tests/test_prefill_page_table.py",
+      "tests/test_prefill_runtime.py",
+      "vllm_ext/tests/test_prefix_cache_quantum.py"
+    ],
+    "device_contract_test": "tests/test_prefix_cache_hardware.py",
+    "end_to_end_qualification_client": "tests/prefix_cache_qualification.py"
+  },
+  "qualification_gates": {
+    "topology": {
+      "process_isolation": "Reset devices and use a new Python process for every device selection, mesh size, topology, and link-count attempt.",
+      "required_checks": [
+        "three clean mesh open/close cycles",
+        "correct eager reduction",
+        "correct traced reduction with three replays",
+        "no watcher, timeout, CCL, or reset errors"
+      ]
+    },
+    "memory": {
+      "initial_trace_region_size_bytes": 1500000000,
+      "min_total_dram_free_fraction": 0.1,
+      "min_largest_contiguous_free_bytes_per_bank": 134217728,
+      "required_snapshots": [
+        "weights_loaded",
+        "uniform_kv_allocated_at_profile_context",
+        "maximum_context_warmup_complete",
+        "decode_trace_captured_and_replayed"
+      ],
+      "trace_calibration": "Reduce the trace reservation only if the measured margin fails, then repeat trace capture/replay and all downstream gates."
+    },
+    "accuracy": {
+      "representative_layers": [0, 1, 4],
+      "min_layer_pcc": 0.995,
+      "min_full_model_top1": 0.9,
+      "min_full_model_top5": 0.98,
+      "required_full_model_top100": 1.0,
+      "autoregressive_smoke": "must be valid and nondegenerate"
+    },
+    "serving": {
+      "p150x2_prefix_cache_default_enabled": true,
+      "operator_rollback_verification_required": true,
+      "allocator_warning_policy": "Record active-trace warnings. TT's warning is thread-local and once-only, so warning presence alone is not failure; corruption, allocator error, device death, or decode-replay failure is failure.",
+      "required": [
+        "health endpoint",
+        "models endpoint with profile context",
+        "deterministic chat completion",
+        "deterministic repeated cold request plus successful decode replay afterward",
+        "automatic poolside_v1 tool call",
+        "pool coding-agent smoke",
+        "profile maximum-context input plus 1024 output tokens"
+      ]
+    },
+    "prefix_cache": {
+      "qualified_profile": "p150x2",
+      "production_default": "TT_LAGUNA_PREFIX_CACHE=1",
+      "engine_must_report_enabled": true,
+      "operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0",
+      "cache_off_oracle_required": true,
+      "cache_on_repetitions": 3,
+      "canonical_quantum_tokens": 8192,
+      "physical_kv_block_tokens": 64,
+      "partial_expected_cached_tokens": [0, 32768, 65536, 122880],
+      "full_expected_cached_tokens": [24576, 57344],
+      "poison_order_expected_cached_tokens": [0, 0, 24576],
+      "decode_boundary_expected_cached_tokens": 0,
+      "minimum_metric_hit_tokens": 491520,
+      "performance": {
+        "full_32768_minimum_ttft_speedup": 3.0,
+        "full_65536_minimum_ttft_speedup": 2.0,
+        "hit_ttft_must_improve_candidate_cold": true,
+        "cache_on_cold_ttft_max_oracle_ratio": 1.05,
+        "cache_on_cold_and_hit_tpot_max_oracle_ratio": 1.02
+      },
+      "required_safety": [
+        "cold and hit output token ids exactly match the cache-off oracle",
+        "canonical cached-token counts and Prometheus hit totals match",
+        "oldest-hash and decode-produced-KV poisoning regressions pass",
+        "flexible SDPA, indexed RoPE, and full/sliding representative layers change runtime offsets with program-cache misses forbidden",
+        "program cache is frozen after trace and the server records no miss or critical fault",
+        "post-trace DRAM margin passes and final health remains good"
+      ],
+      "promotion_gate": true,
+      "status": "passed_and_promoted"
+    },
+    "performance": {
+      "base_decode_acceptance_tool": "vllm bench serve",
+      "prefix_cache_acceptance_tool": "tests/prefix_cache_qualification.py raw-token two-phase client",
+      "decode_metric_definition": "decode_tokens_per_second = 1000 / mean_tpot_ms",
+      "aggregate_output_throughput_is_gate": false,
+      "report_ttft_and_aggregate_output_throughput": true,
+      "max_concurrency": 1,
+      "benchmark_warmups": 0,
+      "measured_requests_per_workload": 3,
+      "fixed_output_tokens": 128,
+      "workloads": [
+        {"input_tokens": 1024, "min_median_decode_tokens_per_second": 15.0},
+        {"input_tokens": 32768, "min_median_decode_tokens_per_second": 10.0}
+      ],
+      "max_absolute_deviation_from_median_fraction": 0.05,
+      "min_individual_run_fraction_of_threshold": 0.9,
+      "p150x4_comparison": "not a D2 selection gate because D4 uses twice as many ASICs; D4 remains an explicit regression profile and must be remeasured before changing its path"
+    }
+  },
+  "selection_policy": {
+    "preferred": "p150x2",
+    "p150_status": "Rejected: the full 40-layer model OOMs at the final LM-head allocation even at max_seq_len=4096, before KV allocation or warmup.",
+    "selected_configuration": "p150x2 ring/two-link on TT_VISIBLE_DEVICES=0,1",
+    "p150x2_acceptance": "Passed: exact-cap, cold API, memory, correctness, decode, and canonical prefix-cache gates pass; the server advertises 131072 with qualified prefix caching enabled by default.",
+    "no_candidate_passes": "Keep p150x4 as default and report failed gates without lowering context or thresholds."
+  },
+  "planning_estimates_not_measurements": {
+    "source": "Static tensor-sharding and KV/trace accounting from bring-up analysis; values are approximate decimal GB and do not replace allocator snapshots.",
+    "device_dram_total_bytes": 34178731008,
+    "p150": {
+      "estimated_weights_gb_per_device": 21.76,
+      "estimated_total_gb_per_device_at_65536": 28.9
+    },
+    "p150x2": {
+      "estimated_weights_gb_per_device": 11.11,
+      "estimated_total_gb_per_device_at_131072": 18.3
+    },
+    "p150x4": {
+      "estimated_weights_gb_per_device": 5.79
+    },
+    "uncertainty": "Prefill activation peaks, allocator fragmentation, fabric buffers, and implementation overhead may not be fully represented. The measured memory gate is authoritative."
+  },
+  "measured_results": {
+    "p150": {
+      "status": "rejected_full_model_weight_capacity",
+      "topology": "Device 0 passed three eager+traced/open-close cycles on 2026-08-21.",
+      "representative_packed_tests": {
+        "passed": 10,
+        "total": 12,
+        "initial_status": "10 of 12 with custom k64 decode SDPA",
+        "failure_scope": "two long-position cases with the custom k64 decode SDPA program configuration",
+        "diagnostic": "Both failed cases pass with TT_LAGUNA_DECODE_SDPA_PC=0, which is now automatic for D1."
+      },
+      "full_model_load": {
+        "status": "oom_at_final_lm_head",
+        "max_seq_len_tokens": 4096,
+        "failure_phase": "weights; before KV allocation or warmup",
+        "dram_per_bank_mib_approx": {
+          "allocated": 2692.0,
+          "free": 80.1,
+          "largest_contiguous_free": 26.27,
+          "requested_allocation": 27.30
+        },
+        "conclusion": "The current D1 weight layout cannot load the model. Reducing context cannot fix this failure."
+      },
+      "note": "D1 performance and serving qualification were not run after the decisive weight-capacity failure."
+    },
+    "p150x2": {
+      "status": "qualified_selected_default",
+      "artifact_root": "/home/ttuser/laguna-qualification/p150x2-qualified-noalloc-20260821T123447",
+      "topology": "Ring/two-link passed three cycles on pairs 0,1 and 2,3; linear/two-link passed three cycles on pair 0,1 on 2026-08-21.",
+      "selected_configuration": {
+        "tt_visible_devices": "0,1",
+        "topology": "ring",
+        "num_links": 2,
+        "context_tokens": 131072,
+        "max_num_seqs": 1,
+        "prefix_cache_enabled": true,
+        "prefix_cache_policy": "qualified",
+        "prefix_cache_quantum_tokens": 8192,
+        "kv_block_size_tokens": 64,
+        "streaming_prefill_enabled": true,
+        "streaming_prefill_outer_chunk_tokens": 8192,
+        "scheduler_chunked_prefill": false,
+        "kv_group_policy": "single_uniform_full_attention",
+        "clean_environment_launcher_config_verified": true
+      },
+      "representative_packed_tests": {
+        "passed": 12,
+        "total": 12,
+        "layers": [0, 1, 4],
+        "decode_positions": [32, 513, 2048],
+        "path_active_checks_included": true
+      },
+      "direct_traced_decode_sdpa_boundaries": {
+        "passed": 1,
+        "total": 1,
+        "nondegenerate_nonzero_v": true,
+        "page_block_size": 64,
+        "k_chunk_size": 64,
+        "positions": [62, 63, 64, 126, 127, 128, 131070, 131071]
+      },
+      "full_model_131k_smoke": {
+        "layers": 40,
+        "uniform_kv_tokens": 131072,
+        "prefill": "passed",
+        "trace_replay": "passed",
+        "device_vs_host_greedy": {"passed": 8, "total": 8},
+        "status": "passed"
+      },
+      "post_trace_memory_prior_build": {
+        "free_fraction": 0.2239,
+        "largest_contiguous_free_mib_per_bank": 544.8,
+        "gate_passed": true,
+        "note": "First live D2 server before private scratch KV and the doubled private RoPE/prefill horizon; preserve exact byte counters from the raw log."
+      },
+      "intermediate_scratch_extended_pt_boot": {
+        "implementation": "one private scratch KV block per layer plus private prefill page-table and RoPE horizon through 262144",
+        "status": "passed_memory_health_and_models_but_predates_final_trace_safe_selector_and_race_free_fill_page_table",
+        "weights": {"free_fraction": 0.4899, "largest_contiguous_free_mib_per_bank": 1273.4},
+        "uniform_kv": {"free_fraction": 0.2325, "largest_contiguous_free_mib_per_bank": 609.7},
+        "prefill_warmup": {"free_fraction": 0.2194, "largest_contiguous_free_mib_per_bank": 526.2},
+        "trace": {"free_fraction": 0.2193, "largest_contiguous_free_mib_per_bank": 526.0},
+        "prefill_full_ladder_passes": 1,
+        "engine_init_seconds": 532.01,
+        "compilation_seconds": 502.74,
+        "health_http_status": 200,
+        "models_max_model_len": 131072,
+        "qualification_scope": "intermediate only; repeat after final selector and fill-page-table changes"
+      },
+      "authoritative_post_fix_cache_off_server": {
+        "prefix_cache_enabled": false,
+        "prefill_full_ladder_passes": 1,
+        "engine_init_seconds": 527.76,
+        "compilation_seconds": 499.24,
+        "memory": {
+          "weights": {"free_fraction": 0.4899, "largest_contiguous_free_mib_per_bank": 1273.4},
+          "uniform_kv": {"free_fraction": 0.2325, "largest_contiguous_free_mib_per_bank": 609.7},
+          "prefill_warmup": {"free_fraction": 0.2194, "largest_contiguous_free_mib_per_bank": 526.1},
+          "trace": {"free_fraction": 0.2193, "largest_contiguous_free_mib_per_bank": 525.8},
+          "gate_passed": true
+        },
+        "cold_api": {
+          "health_http_status": 200,
+          "models_max_model_len": 131072,
+          "raw_129_plus_1_first_seconds": 0.251,
+          "raw_repeat_exact": true,
+          "chat_exact": true,
+          "tool_call_valid": true,
+          "pool_coding_agent_smoke": {
+            "passed": true,
+            "shell_tool": "pwd",
+            "tool_exit_code": 0,
+            "final_text": "LAGUNA_POOL_OK",
+            "overall_exit_code": 0,
+            "duration_seconds": 21.78,
+            "artifact": "api/pool_smoke.log"
+          },
+          "decode_replay_128_exact": true,
+          "decode_replay_seconds_each_approx": 6.42,
+          "decode_replay_tokens_per_second_approx": 19.9
+        },
+        "allocator_observation": {
+          "active_trace_warnings": 1,
+          "scope": "expected thread-local once-only warning on first eager prefill",
+          "allocator_error": false,
+          "corruption": false,
+          "device_death": false,
+          "decode_replay_failure": false
+        },
+        "cold_chat_latency_sweep": {
+          "date": "2026-08-21",
+          "artifact": "doc/vllm_integration/p150x2_latency_sweep_20260821.tsv",
+          "method": "OpenAI chat endpoint, OSL 512, concurrency 1, prefix cache off, one boot-warmed measured request per requested ISL",
+          "requested_input_tokens": [128, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 130048],
+          "actual_prompt_tokens": [82, 1066, 1939, 4138, 8234, 16426, 32810, 65578, 130090],
+          "decode_tokens_per_second": [19.9653, 19.8161, 19.8038, 19.7738, 19.7165, 19.5999, 19.3775, 18.9479, 18.1471],
+          "completed": 9,
+          "failed": 0,
+          "runtime_compile_or_retrace": false,
+          "final_health_http_status": 200,
+          "passed": true
+        }
+      },
+      "canonical_prefix_cache_qualification": {
+        "status": "passed_and_promoted_default",
+        "date": "2026-08-21",
+        "artifact_root": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821",
+        "cache_off_oracle_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-off-oracle.json",
+        "cache_on_candidate_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/results/full_qualification.json",
+        "cache_on_server_log": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/logs/laguna_serve_20260821-165119.log",
+        "hardware_junit_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/hardware-kernel-layer-canonical-admission.xml",
+        "run_id": "canonical-8k-final-20260821",
+        "configuration": {
+          "device_count": 2,
+          "max_num_seqs": 1,
+          "uniform_kv": true,
+          "kv_group_policy": "single_uniform_full_attention",
+          "physical_kv_block_tokens": 64,
+          "canonical_quantum_tokens": 8192,
+          "cache_admission_policy": "complete_canonical_prompt_chunks",
+          "scheduler_chunked_prefill": false,
+          "internal_prefill_chunk_tokens": 8192,
+          "speculative_decode": false,
+          "external_kv_connectors": false
+        },
+        "initialization": {
+          "engine_init_seconds": 524.97,
+          "compilation_seconds": 497.13,
+          "prefill_full_ladder_passes": 1
+        },
+        "memory": {
+          "weights": {"free_fraction": 0.4899, "largest_contiguous_free_mib_per_bank": 1273.4},
+          "uniform_kv": {"free_fraction": 0.2325, "largest_contiguous_free_mib_per_bank": 609.7},
+          "prefill_warmup": {"free_fraction": 0.2145, "largest_contiguous_free_mib_per_bank": 511.0},
+          "trace": {"free_fraction": 0.2144, "largest_contiguous_free_mib_per_bank": 510.8},
+          "gate_passed": true
+        },
+        "program_cache": {
+          "entries_frozen_after_trace": 889,
+          "misses_allowed_after_trace": false,
+          "serving_time_miss_or_compile": false
+        },
+        "hardware_runtime_offset_tests": {
+          "passed": 5,
+          "total": 5,
+          "flexible_sdpa": true,
+          "indexed_rope_cos_sin": true,
+          "representative_full_and_sliding_layers": true,
+          "program_cache_misses_forbidden_during_changed_offsets": true
+        },
+        "correctness": {
+          "cache_off_oracle_passed": true,
+          "cache_on_cold_and_hit_exact_output_ids": true,
+          "partial_prefix_tokens": [2048, 32768, 65536, 129984],
+          "partial_expected_and_observed_cached_tokens": [0, 32768, 65536, 122880],
+          "full_prompt_tokens": [32768, 65536],
+          "full_raw_candidate_cached_tokens": [32704, 65472],
+          "full_expected_and_observed_cached_tokens": [24576, 57344],
+          "poison_order_expected_and_observed_cached_tokens": [0, 0, 24576],
+          "decode_boundary_potential_hit_tokens": 8192,
+          "decode_boundary_expected_and_observed_cached_tokens": 0,
+          "passed": true
+        },
+        "metrics": {
+          "query_token_delta": 1472572,
+          "hit_token_delta": 491520,
+          "minimum_expected_hit_tokens": 491520,
+          "cache_off_hit_token_delta": 0,
+          "passed": true
+        },
+        "latency": {
+          "repetitions_per_state": 3,
+          "input_32768_output_128": {
+            "oracle_median_ttft_ms": 52681.834343,
+            "oracle_median_tpot_ms": 51.51042,
+            "oracle_median_e2e_ms": 59226.832179,
+            "candidate_cold_median_ttft_ms": 52654.972804,
+            "candidate_cold_median_e2e_ms": 59199.313229,
+            "hit_median_ttft_ms": 15889.831831,
+            "hit_median_e2e_ms": 22433.116685,
+            "candidate_cold_median_tpot_ms": 51.547527,
+            "hit_median_tpot_ms": 51.521505,
+            "hit_speedup_vs_candidate_cold": 3.3137526793250047,
+            "cold_ttft_ratio_vs_oracle": 0.9994901176214724,
+            "cold_tpot_ratio_vs_oracle": 1.0007203785175893,
+            "hit_tpot_ratio_vs_oracle": 1.0002151991771762,
+            "gate_passed": true
+          },
+          "input_65536_output_128": {
+            "oracle_median_ttft_ms": 134040.18885,
+            "oracle_median_tpot_ms": 52.58734,
+            "oracle_median_e2e_ms": 140718.561505,
+            "candidate_cold_median_ttft_ms": 133891.980817,
+            "candidate_cold_median_e2e_ms": 140572.885361,
+            "hit_median_ttft_ms": 23011.513614,
+            "hit_median_e2e_ms": 29692.112205,
+            "candidate_cold_median_tpot_ms": 52.605116,
+            "hit_median_tpot_ms": 52.604568,
+            "hit_speedup_vs_candidate_cold": 5.8184777873777636,
+            "cold_ttft_ratio_vs_oracle": 0.9988943015205248,
+            "cold_tpot_ratio_vs_oracle": 1.0003380281261613,
+            "hit_tpot_ratio_vs_oracle": 1.0003276073670964,
+            "gate_passed": true
+          },
+          "passed": true
+        },
+        "health": {
+          "initial": true,
+          "final": true,
+          "models_max_model_len": 131072
+        },
+        "allocator_and_faults": {
+          "known_once_per_thread_active_trace_warnings": 1,
+          "critical_faults": 0,
+          "program_cache_misses": 0,
+          "corruption": false,
+          "device_death": false
+        },
+        "operator_rollback": {
+          "env": "TT_LAGUNA_PREFIX_CACHE=0",
+          "requires_experimental_acknowledgement": false,
+          "launcher_status": "operator_rollback_disabled",
+          "cli_arg": "--no-enable-prefix-caching",
+          "verified": true
+        },
+        "overall_passed": true
+      },
+      "streaming_prefill_qualification": {
+        "status": "passed_and_promoted_default",
+        "date": "2026-08-22",
+        "artifact": "doc/vllm_integration/p150x2_hybrid_kv_qualification_20260822.md",
+        "full_stack_prompt_tokens": 16400,
+        "legacy_computed_rows": 32768,
+        "streaming_computed_rows": 24576,
+        "legacy_median_seconds": 46.804378,
+        "streaming_median_seconds": 33.622952,
+        "speedup": 1.392037,
+        "hidden_pcc": 1.0,
+        "logits_pcc": 1.0,
+        "argmax_exact": true,
+        "top10_exact": true,
+        "program_cache_misses": 0
+      },
+      "production_latency_sweep_20260822": {
+        "status": "passed",
+        "artifact_markdown": "doc/vllm_integration/p150x2_latency_sweep_20260822.md",
+        "artifact_tsv": "doc/vllm_integration/p150x2_latency_sweep_20260822.tsv",
+        "configuration": "p150x2 production defaults; context 131072; streaming prefill on; canonical prefix caching on; uniform KV; OSL 512; concurrency 1; unique salt per row",
+        "requested_input_tokens": [128, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 130048],
+        "actual_prompt_tokens": [82, 1066, 1939, 4138, 8234, 16426, 32810, 65578, 130090],
+        "ttft_ms": [215.07499, 2213.248366, 2563.049286, 8983.831799, 19679.643795, 33930.83672, 67811.632137, 156630.156203, 380812.158697],
+        "tpot_ms": [50.069871, 50.453539, 50.494126, 50.563984, 50.708412, 51.00303, 51.596682, 52.768491, 55.096388],
+        "decode_tokens_per_second": [19.972091, 19.820215, 19.804284, 19.776923, 19.720594, 19.606678, 19.381091, 18.950703, 18.15001],
+        "cache_hit_tokens": 0,
+        "cached_tokens": 0,
+        "completed": 9,
+        "failed": 0,
+        "output_tokens_each": 512,
+        "final_health_http_status": 200,
+        "runtime_compile_or_cache_miss": false,
+        "critical_faults": 0
+      },
+      "standalone_warm_prompt128_generate128": {
+        "ttft_ms": 190.7,
+        "logits_only": {"milliseconds_per_token": 39.203, "tokens_per_second": 25.51},
+        "device_token_output": {"milliseconds_per_token": 49.949, "tokens_per_second": 20.02},
+        "including_host_readback": {"milliseconds_per_token": 50.634, "tokens_per_second": 19.75},
+        "acceptance_artifact": false
+      },
+      "cold_online_performance": {
+        "tool": "vllm bench serve",
+        "max_concurrency": 1,
+        "benchmark_warmups": 0,
+        "requests_per_workload": 3,
+        "input_1024_output_128": {
+          "completed": 3,
+          "errors": 0,
+          "mean_ttft_ms": 1278.96,
+          "mean_tpot_ms": 50.46,
+          "decode_tokens_per_second": 19.82,
+          "per_request_decode_tokens_per_second": [19.81544, 19.81317, 19.82272],
+          "max_deviation_from_median_fraction": 0.00037,
+          "aggregate_output_tokens_per_second": 16.650,
+          "decode_gate_tokens_per_second": 15.0,
+          "decode_gate_passed": true
+        },
+        "input_32768_output_128": {
+          "completed": 3,
+          "errors": 0,
+          "mean_ttft_ms": 53546.66,
+          "mean_tpot_ms": 51.53,
+          "decode_tokens_per_second": 19.41,
+          "per_request_decode_tokens_per_second": [19.40947, 19.39730, 19.41004],
+          "max_deviation_from_median_fraction": 0.00063,
+          "aggregate_output_tokens_per_second": 2.130,
+          "decode_gate_tokens_per_second": 10.0,
+          "decode_gate_passed": true,
+          "cold_prefill_caveat": "53.55 second TTFT for this cache-off baseline; qualified canonical-prefix hits reduce repeated-prefix TTFT"
+        },
+        "exact_cap_input_130048_output_1024": {
+          "completed": 1,
+          "errors": 0,
+          "sum_input_and_output_tokens": 131072,
+          "ttft_ms": 381378.79,
+          "mean_tpot_ms": 55.2128,
+          "decode_tokens_per_second": 18.11,
+          "aggregate_output_tokens_per_second": 2.3386,
+          "duration_seconds": 437.862,
+          "peak_kv_occupancy_fraction": 1.0,
+          "post_request_kv_occupancy_fraction": 0.0,
+          "post_request_health_http_status": 200,
+          "new_warning_count": 0,
+          "fault_markers": 0,
+          "capacity_gate_passed": true,
+          "cold_prefill_caveat": "381.38 second TTFT for this cache-off capacity request; no reusable prefix was seeded"
+        },
+        "status": "decode_and_exact_cap_gates_passed"
+      },
+      "pending": []
+    },
+    "p150x4_historical": {
+      "status": "reported_measurement_without_raw_artifact_in_checkout",
+      "date": "2026-07-31",
+      "reported_served_input_lengths": [128, 4096, 32768, 65536, 131072],
+      "reported_oom_input_length": 262144,
+      "reported_decode_tokens_per_second_at_isl_131072": 12.1,
+      "reported_decode_tokens_per_second_at_isl_1024_range": [27.0, 29.0],
+      "provenance": "Carried forward from the previous README/context contract. Its cited doc/vllm_integration/sweep_vllm.tsv is not present, so remeasure D4 for an auditable regression comparison."
+    }
+  },
+  "runbook": "doc/bringup_profiles.md"
+}

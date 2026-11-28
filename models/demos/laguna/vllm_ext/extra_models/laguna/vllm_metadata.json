@@ -1,0 +1,4 @@
+{
+  "arch": "LagunaForCausalLM",
+  "main_class": "models.demos.laguna.tt.generator_vllm:LagunaForCausalLM"
+}

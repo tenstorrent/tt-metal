@@ -1,0 +1,7 @@
+{
+  "model": "poolside/Laguna-S-2.1",
+  "dtype": "fp32",
+  "prompt_len": 235,
+  "gen_len": 100,
+  "hf_top1_eq_forced": 0.8500000238418579
+}

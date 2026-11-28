@@ -1,0 +1,60 @@
+# item 3.1 — keep the serving path source-only. These are run outputs / artifacts, NOT source, and must
+# never land in a commit (the standing pre-commit cleanup TODO). Source docs (*.md), configs (*.json that
+# are inputs, e.g. selected_precision_config.json / context_contract.json), and the small recorded result
+# tables the docs cite (*.tsv) are tracked deliberately; everything below is excluded.
+
+# logs (server, sweeps, validation runs, activity/autonomous traces)
+*.log
+
+# python / runtime scratch
+__pycache__/
+*.pyc
+*.pyo
+
+# vLLM readiness-runner working dir (engine logs, generated configs)
+readiness_vllm/
+
+# tracy / profiler captures
+*.tracy
+tracy/
+profile_log_device*.csv
+ops_perf_results*.csv
+
+# large captured tensors / dumps
+*.pt.tmp
+*.npy
+watcher.log
+
+# agent-eval trajectories (bulky per-turn conversation dumps, >500 KB, exceed the repo large-file limit;
+# the outcomes are captured in the committed preds.json / results.md / report). Regenerable evidence.
+*.traj.json
+# harbor/terminal-bench per-run job dirs + swebench harness run logs (bulky run outputs)
+jobs/
+logs/run_evaluation/
+
+# spec-decode / bg-run logs (run_bg.sh archives)
+doc/vllm_integration/_runs/
+*.rawout
+
+# bench / eval OUTPUT artifacts (regenerable; keep report HTML + script + STATUS instead)
+doc/vllm_integration/stage_d*/
+doc/vllm_integration/w1_diag/
+doc/vllm_integration/**/r_*.json
+doc/vllm_integration/**/sweep.tsv
+doc/vllm_integration/**/sweep.log
+swebench_*.json
+doc/optimized_multichip_decoder/perf_before_after_layer4.json
+
+# HTML reports (published as Artifacts, not version-controlled)
+*.html
+
+# bench/eval RUN outputs (regenerable — never version-controlled). Model contract/config JSONs are kept.
+doc/vllm_integration/smoke/
+doc/vllm_integration/stage_ce/
+doc/vllm_integration/prefill_fast_validate/
+doc/vllm_integration/sweep_vllm.tsv
+doc/vllm_integration/reset_batch_probe.tsv
+doc/datatype_sweep/experts_bfp8.json
+
+# self-contained vLLM serving env built by setup_vllm.sh (multi-GB; never committed)
+.venv/
