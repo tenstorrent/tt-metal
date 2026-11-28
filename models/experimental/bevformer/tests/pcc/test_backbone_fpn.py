@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import RESNET_KWARGS
+from models.experimental.bevformer.model_config import RESNET_KWARGS, tt_fpn_kwargs, tt_resnet_kwargs
 from models.experimental.bevformer.tests.common import (
     BACKBONE_FPN_PCC,
     BACKBONE_OUTPUT_DTYPES,
@@ -29,6 +29,7 @@ from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
     create_resnet_parameters,
 )
+from models.experimental.bevformer.tt.tt_common import reduced_grid
 from models.experimental.bevformer.tt.tt_fpn import TTFPN
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
@@ -43,8 +44,11 @@ def test_backbone_fpn(device, reset_seeds):
     torch_features = torch_backbone(torch_input)
     torch_outputs = torch_fpn(list(torch_features))
 
-    backbone_parameters = create_resnet_parameters(torch_backbone, torch_input)
-    fpn_parameters = create_fpn_parameters(torch_fpn, torch_features)
+    on_reduced_grid = reduced_grid(device)
+    backbone_parameters = create_resnet_parameters(torch_backbone, torch_input, tt_resnet_kwargs(on_reduced_grid))
+    fpn_parameters = create_fpn_parameters(
+        torch_fpn, torch_features, tt_fpn_kwargs(len(torch_fpn.fpn_convs), on_reduced_grid)
+    )
 
     tt_backbone = TTResNet(backbone_parameters, device, out_indices=RESNET_KWARGS["out_indices"])
     # test_fpn feeds the FPN these dtypes on their own.

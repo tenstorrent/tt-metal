@@ -25,7 +25,14 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, GRID_DTYPE, INVERSE_SIGMOID_EPS
-from models.experimental.bevformer.tt.tt_common import TTFFN, l1_linear, layer_norm, signpost, stack_layers
+from models.experimental.bevformer.tt.tt_common import (
+    TTFFN,
+    activation_memory_config,
+    l1_linear,
+    layer_norm,
+    signpost,
+    stack_layers,
+)
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
@@ -43,6 +50,7 @@ class TTMultiheadAttention:
     def __init__(self, params, device):
         self.params = params
         self.num_heads = params.num_heads
+        self.memory_config = activation_memory_config(device)
         grid = device.compute_with_storage_grid_size()
         # SDPA's default 32-row chunks leave each core a sliver of the queries and keys, so the
         # per-chunk overhead dominates; 128 x 256 is the fastest pair on Blackhole for the
@@ -54,21 +62,21 @@ class TTMultiheadAttention:
     def __call__(self, query, query_pos):
         """``query`` and ``query_pos`` are ``(bs, nq, C)``."""
         p = self.params
-        qk = l1_linear(ttnn.add(query, query_pos, memory_config=ttnn.L1_MEMORY_CONFIG), p.qk_proj)
+        qk = l1_linear(ttnn.add(query, query_pos, memory_config=self.memory_config), p.qk_proj)
         v = l1_linear(query, p.v_proj)
 
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.concat([qk, v], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.concat([qk, v], dim=-1, memory_config=self.memory_config),
             num_heads=self.num_heads,
             transpose_key=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self.memory_config,
         )
         # scale=1: the head_dim**-0.5 is folded into the Q weights.
         out = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, scale=1.0, program_config=self.sdpa_config, memory_config=ttnn.L1_MEMORY_CONFIG
+            q, k, v, is_causal=False, scale=1.0, program_config=self.sdpa_config, memory_config=self.memory_config
         )
 
-        out = ttnn.transformer.concatenate_heads(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.transformer.concatenate_heads(out, memory_config=self.memory_config)
         return l1_linear(out, p.out_proj)
 
 
@@ -83,6 +91,7 @@ class TTDetrTransformerDecoderLayer:
         """``params`` is one entry of ``create_decoder_parameters(...).layers``. The cross-attention
         samples a ``bev_shape`` ``(bev_h, bev_w)`` map."""
         self.params = params
+        self.memory_config = activation_memory_config(device)
         self.self_attn = TTMultiheadAttention(params.self_attn, device)
         # The module hands reference_points to the fused op unconverted, so they stay float32.
         self.cross_attn = TTMSDeformableAttention(
@@ -101,15 +110,15 @@ class TTDetrTransformerDecoderLayer:
         signpost(header="DecoderLayer SelfAttn Start")
         self_attn_output = self.self_attn(query, query_pos)
         signpost(header="DecoderLayer SelfAttn End")
-        query = layer_norm(self_attn_output, norms[0], residual=query, memory_config=ttnn.L1_MEMORY_CONFIG)
+        query = layer_norm(self_attn_output, norms[0], residual=query, memory_config=self.memory_config)
         signpost(header="DecoderLayer CrossAttn Start")
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
         signpost(header="DecoderLayer CrossAttn End")
-        query = layer_norm(query, norms[1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        query = layer_norm(query, norms[1], memory_config=self.memory_config)
         signpost(header="DecoderLayer FFN Start")
         ffn_output = self.ffn(query)
         signpost(header="DecoderLayer FFN End")
-        query = layer_norm(ffn_output, norms[2], residual=query, memory_config=ttnn.L1_MEMORY_CONFIG)
+        query = layer_norm(ffn_output, norms[2], residual=query, memory_config=self.memory_config)
         signpost(header="TTNN DecoderLayer Forward End")
         return query
 
@@ -124,6 +133,7 @@ class TTDetectionTransformerDecoder:
         layer's; every layer runs either way, as each refines the previous one's points."""
         self.batch_first = batch_first
         self.all_layers = all_layers
+        self.memory_config = activation_memory_config(device)
         self.layers = [TTDetrTransformerDecoderLayer(p, device, bev_shape) for p in params.layers]
 
     @staticmethod
@@ -157,7 +167,7 @@ class TTDetectionTransformerDecoder:
         # points are the previous layer's sigmoid, and inverse_sigmoid(sigmoid(z)) is z clamped
         # to its eps bound, so the logits are carried instead of recomputed.
         output, query_pos, reference_points = (
-            ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG) for t in (output, query_pos, reference_points)
+            ttnn.to_memory_config(t, self.memory_config) for t in (output, query_pos, reference_points)
         )
         logits = ttnn.logit(reference_points, eps=INVERSE_SIGMOID_EPS)
         intermediate = []

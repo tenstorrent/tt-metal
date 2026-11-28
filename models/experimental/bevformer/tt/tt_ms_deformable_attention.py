@@ -23,7 +23,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
+from .tt_common import grid_linear, grid_linear_kwargs, l1_if_fits, reduced_grid, signpost
 
 from loguru import logger
 
@@ -98,6 +98,34 @@ def heads_packed_offsets(rows, num_heads):
     return ttnn.reshape(rows, (bs, num_queries, num_heads, per_head))
 
 
+class QueryCounts:
+    """An attention's full query counts for ``multi_scale_deformable_attn_fused`` on a reduced grid,
+    one (bs,) count tensor per shape, None on the full grid.
+
+    Built on the attention's first forward and reused after it, which saves a fill op per forward.
+    """
+
+    def __init__(self):
+        self._counts = {}
+
+    def __call__(self, device, bs, num_queries):
+        if not reduced_grid(device):
+            return None
+        key = (bs, num_queries)
+        if key not in self._counts:
+            self._counts[key] = full_query_counts(device, bs, num_queries)
+        return self._counts[key]
+
+
+def full_query_counts(device, bs, num_queries):
+    """A (bs,) uint32 tensor of ``num_queries``, filled on the device.
+
+    ttnn.full writes a small uint32 tensor from the host, which a trace capture rejects.
+    """
+    counts = ttnn.empty((bs,), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.fill(counts, num_queries, output_tensor=counts)
+
+
 def multi_scale_deformable_attn_fused(
     value,
     reference_points,
@@ -169,6 +197,13 @@ def multi_scale_deformable_attn_fused(
 
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+
+    if num_valid_queries_tensor is None and not num_valid_queries and reduced_grid(value.device()):
+        # Without counts each core takes its list of tiles as runtime args, which on a few cores
+        # outgrows their limit. With counts on device a core gets only its index and derives its run.
+        num_valid_queries_tensor = full_query_counts(
+            value.device(), attention_weights.shape[0], attention_weights.shape[1]
+        )
 
     if value_memory == "dram":
         target_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -304,6 +339,7 @@ class TTMSDeformableAttention:
         self.device = device
         self.params = params
         self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
+        self.query_counts = QueryCounts()
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
 
         self.head_dim = self.embed_dims // self.num_heads
@@ -404,7 +440,7 @@ class TTMSDeformableAttention:
         # Project value. It stays tiled (B, S, H*D); with a head-major layout,
         # untilize_and_split_heads turns it into that layout in one pass.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
+        value = grid_linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
 
         # Apply key padding mask if provided
         if key_padding_mask is not None:
@@ -415,6 +451,10 @@ class TTMSDeformableAttention:
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         sampling_offsets, attention_weights = self.sampling_operands(query, consume_query=consume_query)
 
+        if num_valid_queries is None and num_valid_queries_tensor is None:
+            num_valid_queries_tensor = self.query_counts(
+                value.device(), attention_weights.shape[0], attention_weights.shape[1]
+            )
         output = multi_scale_deformable_attn_fused(
             value=value,
             reference_points=reference_points,
@@ -432,7 +472,7 @@ class TTMSDeformableAttention:
         # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-            output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+            output = grid_linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
         if ENABLE_LOGGING:
             logger.info("MSDA Adding Residual")
@@ -475,7 +515,7 @@ class TTMSDeformableAttention:
         # Generate attention weights. The softmax is over (levels, points) jointly, so
         # (bs, Q, heads, levels*points) is both the natural shape here and exactly the
         # packed layout the op consumes -- it is never split into (levels, points).
-        attention_weights = ttnn.linear(
+        attention_weights = grid_linear(
             query,
             self.params.attention_weights.weight,
             bias=self.params.attention_weights.bias,
@@ -512,7 +552,7 @@ class TTMSDeformableAttention:
         # The Linear's channels are already (head, level, point, xy): the op reads each head's
         # offsets from the query's page when they fill whole alignment units of the buffer, else
         # the reshape below gives each head a page.
-        sampling_offsets = ttnn.linear(
+        sampling_offsets = grid_linear(
             query,
             self.params.sampling_offsets.weight,
             bias=getattr(self.params.sampling_offsets, "bias", None),

@@ -30,6 +30,7 @@ from models.experimental.bevformer.reference.ms_deformable_attention import MSDe
 from models.experimental.bevformer.tests.common import PRESETS, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt import tt_ms_deformable_attention
+from models.experimental.bevformer.tt.tt_common import reduced_grid
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
     TTMSDeformableAttention,
     multi_scale_deformable_attn_fused,
@@ -118,8 +119,8 @@ def _run_tt(device, config, tt_parameters, torch_inputs):
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries",
     [
-        ("nuscenes_tiny", 1, 900),
-        ("nuscenes_base", 1, 2500),
+        ("surround_tiny", 1, 900),
+        ("surround_base", 1, 2500),
     ],
 )
 @pytest.mark.parametrize("seed", [0, 1, 2])
@@ -147,7 +148,7 @@ def test_msda_output_is_deterministic(device):
     input slot held, so the one-time zeroing of the input CB and the zero weight
     compute gives that corner are what keep stale bytes out of the result.
     """
-    config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 900, 0)
+    config, _, tt_parameters, torch_inputs = _build(device, "surround_tiny", 1, 900, 0)
 
     first = _run_tt(device, config, tt_parameters, torch_inputs)
     second = _run_tt(device, config, tt_parameters, torch_inputs)
@@ -157,7 +158,7 @@ def test_msda_output_is_deterministic(device):
 
 @pytest.mark.parametrize("value_memory, buffer_type", [("l1", ttnn.BufferType.L1), ("dram", ttnn.BufferType.DRAM)])
 def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memory, buffer_type):
-    config, ref_model, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 64, 0)
+    config, ref_model, tt_parameters, torch_inputs = _build(device, "surround_tiny", 1, 64, 0)
     query, value, reference_points, spatial_shapes = torch_inputs
     placements = _record_value_placement(monkeypatch)
 
@@ -187,7 +188,7 @@ def test_msda_auto_keeps_value_in_l1_on_large_blackhole(device, monkeypatch, bat
     if l1_num_banks < 90:
         pytest.skip(f"strict fused-MSDA L1 placement requires 90 L1 banks; found {l1_num_banks}")
 
-    config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_base", batch_size, 2500, 0)
+    config, _, tt_parameters, torch_inputs = _build(device, "surround_base", batch_size, 2500, 0)
     placements = _record_value_placement(monkeypatch)
 
     _run_tt(device, config, tt_parameters, torch_inputs)
@@ -261,6 +262,9 @@ def _blocked_l1(device, free_per_bank):
 
 def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
     """Cover both a conservative capacity fallback and a post-check L1 OOM."""
+    # On a reduced grid the case does not fit L1 at all: the L1 attempt fails for real while the
+    # value is staged, before the op runs, so only the full grid pins the order of the attempts.
+    full_grid = not reduced_grid(device)
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
 
     expected = multi_scale_deformable_attn_fused(
@@ -275,7 +279,7 @@ def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
     ttnn.deallocate(expected)
 
     # Without the blocker this case fits L1, so the blocker alone flips the decision.
-    assert ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+    assert not full_grid or ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
         value,
         reference_points,
         sampling_offsets,
@@ -317,15 +321,21 @@ def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
             spatial_shapes,
             value_memory="auto",
         )
-        assert attempted_memory_configs == [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG]
-        assert [memory_config for memory_config, _ in staged_values] == [
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ]
+        if full_grid:
+            assert attempted_memory_configs == [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG]
+            assert [memory_config for memory_config, _ in staged_values] == [
+                ttnn.L1_MEMORY_CONFIG,
+                ttnn.DRAM_MEMORY_CONFIG,
+            ]
+        else:
+            assert attempted_memory_configs[-1] == ttnn.DRAM_MEMORY_CONFIG
         assert all(not staged.is_allocated() for _, staged in staged_values)
         assert actual.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         torch.testing.assert_close(ttnn.to_torch(actual), expected_torch, rtol=0, atol=0)
         ttnn.deallocate(actual)
+        # The rest forces or blocks L1, which a reduced grid's L1 cannot hold to begin with.
+        if not full_grid:
+            return
 
         attempted_memory_configs.clear()
         staged_values.clear()
@@ -430,6 +440,8 @@ def test_msda_l1_check_charges_head_major_staging(device):
     buffers against 95% of the free span, so the two thresholds must differ by the value's
     charge difference / 0.95. At the head-major threshold the real call must then run in L1.
     """
+    if reduced_grid(device):
+        pytest.skip("The case's L1 footprint is sized for the full grid's L1 banks")
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
     batch, num_keys, channels = value.shape
     head_dim = channels // FALLBACK_NUM_HEADS
@@ -517,6 +529,8 @@ def test_msda_l1_check_charges_head_major_staging(device):
 )
 def test_msda_auto_falls_back_to_dram_through_head_major_producer(device, monkeypatch, l1_failure):
     """The head-major path retries in DRAM after an L1 failure, frees what it staged, and matches packed."""
+    # On a reduced grid the head-major producer itself fails in L1, before the op runs.
+    full_grid = not reduced_grid(device)
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
     call = partial(
         multi_scale_deformable_attn_fused, value, reference_points, sampling_offsets, attention_weights, spatial_shapes
@@ -548,8 +562,14 @@ def test_msda_auto_falls_back_to_dram_through_head_major_producer(device, monkey
         patch.setattr(ttnn.experimental, "fused_msda_from_offsets", fail_in_l1)
         actual = call(value_layout="head_major", value_memory="auto")
 
-    assert attempted == [(ttnn.L1_MEMORY_CONFIG, "head_major"), (ttnn.DRAM_MEMORY_CONFIG, "head_major")]
-    assert [memory_config for memory_config, _ in staged_values] == [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG]
+    if full_grid:
+        assert attempted == [(ttnn.L1_MEMORY_CONFIG, "head_major"), (ttnn.DRAM_MEMORY_CONFIG, "head_major")]
+        assert [memory_config for memory_config, _ in staged_values] == [
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ]
+    else:
+        assert attempted == [(ttnn.DRAM_MEMORY_CONFIG, "head_major")]
     assert all(not staged.is_allocated() for _, staged in staged_values)
     assert actual.memory_config() == ttnn.DRAM_MEMORY_CONFIG
     torch.testing.assert_close(ttnn.to_torch(actual), expected_torch, rtol=0, atol=0)
@@ -558,6 +578,8 @@ def test_msda_auto_falls_back_to_dram_through_head_major_producer(device, monkey
 
 def test_msda_head_major_value_follows_value_memory(device, monkeypatch):
     """A value already head-major is moved to the memory value_memory selects, like any other value."""
+    if reduced_grid(device):
+        pytest.skip("The case's head-major value does not fit a reduced grid's L1, so there is nothing to move")
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
     head_major = ttnn.experimental.untilize_and_split_heads(
         value, FALLBACK_NUM_HEADS, memory_config=ttnn.L1_MEMORY_CONFIG

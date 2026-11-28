@@ -19,8 +19,9 @@ import warnings
 # Enable/disable logging output
 ENABLE_LOGGING = False
 
-from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
+from .tt_common import grid_linear, grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import (
+    QueryCounts,
     grouped_softmax,
     heads_packed_offsets,
     msda_value_layout,
@@ -126,6 +127,7 @@ class TTTemporalSelfAttention:
             raise ValueError(f"spatial_shapes must have shape ({num_levels}, 2), got {tuple(spatial_shapes.shape)}")
         # The fused op's levels: every BEV map's, map-major.
         self.map_spatial_shapes = spatial_shapes.repeat(num_bev_queue, 1)
+        self.query_counts = QueryCounts()
 
         self.linear_kwargs = grid_linear_kwargs(device)
 
@@ -191,7 +193,7 @@ class TTTemporalSelfAttention:
             identity = query
 
         def linear(x, linear_params, memory_config=memory):
-            return ttnn.linear(
+            return grid_linear(
                 x, linear_params.weight, bias=linear_params.bias, memory_config=memory_config, **self.linear_kwargs
             )
 
@@ -202,13 +204,13 @@ class TTTemporalSelfAttention:
         # live buffer, so the value takes the top and the intermediates staged after it, all but the
         # op's own offsets and weights, are freed before the op runs.
         if value is None:
-            projected = ttnn.linear(query, params.value_proj.weight, bias=params.value_proj.bias)
+            projected = grid_linear(query, params.value_proj.weight, bias=params.value_proj.bias)
             maps = ttnn.concat([projected] * queue, dim=1)
             ttnn.deallocate(projected)
         else:
             # Upstream's (B * queue, nk, embed_dims) stack is each sample's maps one after another.
             maps = ttnn.reshape(
-                ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias),
+                grid_linear(value, params.value_proj.weight, bias=params.value_proj.bias),
                 (bs, queue * num_queries, embed_dims),
             )
         if self.value_layout == "head_major":
@@ -274,6 +276,9 @@ class TTTemporalSelfAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.map_spatial_shapes,
+            num_valid_queries_tensor=self.query_counts(
+                self.device, attention_weights.shape[0], attention_weights.shape[1]
+            ),
             reference_mode=reference_mode,
             value_layout=self.value_layout,
         )

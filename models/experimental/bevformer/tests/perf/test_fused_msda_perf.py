@@ -3,7 +3,7 @@
 
 """Tracy harness for BEVFormer's fused multi-scale deformable attention.
 
-Same shapes as ``tests/pcc/test_fused_msda.py`` -- nuscenes tiny
+Same shapes as ``tests/pcc/test_fused_msda.py`` -- surround tiny
 (Q=900, H=4, L=1) and base (Q=2500, H=8, L=4) -- and the same structure as
 ``test_encoder_layer_perf.py``: a PCC gate that doubles as the warmup, then a signposted
 region so the report covers already-compiled, already-cached programs.
@@ -71,8 +71,8 @@ DEVICE_PERF_ITERS = 1
 
 # (config_name, batch_size, num_queries) -- mirrors the PCC file's parametrization.
 WORKLOADS = [
-    ("nuscenes_tiny", 1, 900),
-    ("nuscenes_base", 1, 2500),
+    ("surround_tiny", 1, 900),
+    ("surround_base", 1, 2500),
 ]
 
 KERNEL_VARIANTS = [
@@ -357,6 +357,16 @@ def test_fused_msda_kernel_perf(
     model = _tt_model(device, config, tt_parameters, spatial_shapes)
 
     value_p, refs, offsets_p, attn_p = _packed_operands(model, tt_query, tt_value, tt_refs)
+    if variant.endswith("_l1") and not ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+        value_p,
+        refs,
+        offsets_p,
+        attn_p,
+        _spatial_shapes_list(spatial_shapes),
+        reference_mode="pillar",
+        value_layout="head_major" if variant.startswith("head_major") else "auto",
+    ):
+        pytest.skip("the value and output do not fit this grid's L1")
 
     if variant == "packed_multi_dram":
         assert value_p.memory_config() == ttnn.DRAM_MEMORY_CONFIG

@@ -29,7 +29,7 @@ from torchvision.transforms.functional import rotate
 
 from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
 from models.experimental.bevformer.tt.model_preprocessing import bev_grid_length, ego_shift
-from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import grid_linear, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_encoder import CameraProjection, TTBEVFormerEncoder
 
 
@@ -193,8 +193,8 @@ class TTPerceptionTransformer:
         signpost(header="TTNN PerceptionTransformer Forward Start")
         bs = len(frame.img_metas)
         mlp = self.params.can_bus_mlp
-        can_bus = ttnn.linear(frame.can_bus, mlp.linear1.weight, bias=mlp.linear1.bias, activation="relu")
-        can_bus = ttnn.linear(can_bus, mlp.linear2.weight, bias=mlp.linear2.bias, activation="relu")
+        can_bus = grid_linear(frame.can_bus, mlp.linear1.weight, bias=mlp.linear1.bias, activation="relu")
+        can_bus = grid_linear(can_bus, mlp.linear2.weight, bias=mlp.linear2.bias, activation="relu")
         can_bus = layer_norm(can_bus, mlp.norm)
         bev_queries = ttnn.add(bev_queries, can_bus)
         # The encoder takes the cameras' features batch-first, (bs, num_cams, num_keys, C), as its
