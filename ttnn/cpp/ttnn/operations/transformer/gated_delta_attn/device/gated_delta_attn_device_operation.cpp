@@ -15,6 +15,7 @@ namespace ttnn::prim {
 static void validate_tensor(const Tensor& t, const std::string& name) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(t.is_allocated(), "{} must be allocated", name);
+    TT_FATAL(!t.is_sharded(), "{} must be interleaved (unsharded)", name);
     TT_FATAL(t.memory_config().buffer_type() == BufferType::DRAM, "{} must be in DRAM", name);
     TT_FATAL(t.layout() == Layout::TILE, "{} must be tiled", name);
     TT_FATAL(t.dtype() == DataType::FLOAT32, "{} must be float32, got {}", name, t.dtype());
@@ -22,6 +23,18 @@ static void validate_tensor(const Tensor& t, const std::string& name) {
 
 void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    const uint32_t BH = attrs.num_heads;
+    const uint32_t NC = attrs.num_chunks;
+    const uint32_t C = attrs.chunk_size;
+    const uint32_t Dk = attrs.key_dim;
+    const uint32_t Dv = attrs.val_dim;
+
+    TT_FATAL(BH >= 1, "num_heads (BH) must be >= 1, got {}", BH);
+    TT_FATAL(NC >= 1, "num_chunks (NC) must be >= 1, got {}", NC);
+    TT_FATAL(
+        !attrs.output_mem_config.is_sharded() && attrs.output_mem_config.buffer_type() == BufferType::DRAM,
+        "output_mem_config must be interleaved DRAM");
+
     validate_tensor(in.L_unit, "L_unit");
     validate_tensor(in.v_beta_sc, "v_beta_sc");
     validate_tensor(in.k_bd_sc, "k_bd_sc");
@@ -33,12 +46,6 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     if (in.initial_state.has_value()) {
         validate_tensor(*in.initial_state, "initial_state");
     }
-
-    const uint32_t BH = attrs.num_heads;
-    const uint32_t NC = attrs.num_chunks;
-    const uint32_t C = attrs.chunk_size;
-    const uint32_t Dk = attrs.key_dim;
-    const uint32_t Dv = attrs.val_dim;
 
     // The device kernels are hardwired to exactly four 32-wide block rows (Ct == Kt == Vt == 4):
     // the compute kernel calls fwd_sub_4rows unconditionally and the reader always fetches the 4
