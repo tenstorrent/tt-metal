@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -155,7 +154,8 @@ uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t num_
 std::optional<ttnn::CoreGrid> find_expected_dram_grid(
     uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw, uint32_t num_batches) {
     TT_FATAL(num_batches >= 1, "find_expected_dram_grid: num_batches must be >= 1, got {}", num_batches);
-    uint32_t Ht = static_cast<uint32_t>(std::ceil(static_cast<double>(input_nhw) / ttnn::types::TILE_SIZE));
+    // Each batch's H*W is padded to whole tiles on device, so round up per batch, as group_norm does.
+    uint32_t Ht = num_batches * tt::div_up(tt::div_up(input_nhw, num_batches), ttnn::types::TILE_SIZE);
 
     // Prefer gx values where all x-columns are fully utilized (gx % nvc == 0),
     // falling back to grids with unused columns only if no fully-utilized grid exists.

@@ -2767,3 +2767,13 @@ def test_group_norm_output_defaults_to_input_memory_config(device, input_memory)
     assert_numeric_metrics(
         ref, ttnn.to_torch(tt_output).float(), pcc_threshold=0.999, rtol=0.02, atol=0.05, frobenius_threshold=0.01
     )
+
+
+# The DRAM grid helper must count each batch's H*W padded to whole tiles, as group_norm does, so its grid is accepted.
+def test_group_norm_accepts_dram_grid_from_helper(device):
+    N, C, H, W, G = 8, 256, 28, 28, 32
+    tt_input = ttnn.from_torch(torch.rand(N, 1, H * W, C), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.determine_expected_group_norm_dram_grid_size(
+        device=device, num_channels=C, num_groups=G, input_nhw=N * H * W, num_batches=N
+    )
+    ttnn.group_norm(tt_input, num_groups=G, core_grid=grid, inplace=False)
