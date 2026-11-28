@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_sharded_to_interleaved writer, one instance per write lane on every core of the input's
-// shard grid. The core's shard is resident in L1 behind cb_input_shard (a CB bound to the input's
-// own buffer), so store_block writes each tile of the core's block straight from its shard slot to
-// its interleaved output page: one NoC write per tile, no NoC read, one barrier per kernel.
+// Owner-writes sharded -> interleaved: this core's resident shard rectangle is written straight to its
+// interleaved output pages, one NoC write per tile, and drained by one barrier. No NoC read, no CB handshake.
 //
-// Raw dataflow API, no kernel_lib helper: the library has no writer from a resident L1 source to
-// NoC-addressed interleaved pages (eltwise copy goes through unpack/pack and would regroup bfp8
-// exponents; the local-copy helpers target local L1 only).
+// Helper deviation: raw dataflow NoC writes. No kernel_lib helper writes from a resident L1 shard to
+// NoC-addressed interleaved pages (eltwise copy stages through DEST and re-derives bfp8 exponents; the
+// local-copy helpers target local L1). The design's API Mapping records the same gap.
+//
+// One instance runs per write lane. The host hands each lane a disjoint rectangle of the shard, so the
+// kernel has no lane-specific code: the processor and NoC come from the kernel config.
 
 #include <cstdint>
 
@@ -16,28 +17,29 @@
 
 namespace {
 
-// Slots keep the nominal shard stride even in a short last shard, so the row stride is
-// shard_tile_cols pages, never block_tile_cols. Interleaved pages lie in different banks, so each
-// tile is its own write; page_size fits one NoC packet (host-asserted).
+// Writes one block: `rows x cols` tiles. Source slots keep the nominal shard stride even in a clipped
+// last shard (the buffer's slot map advances by the nominal shard shape), so the row stride is the
+// shard's, never the block's. Consecutive pages of a row sit in different banks, so every tile is its
+// own write; nothing waits here, the caller drains once.
 template <uint32_t page_size, typename Accessor>
 FORCE_INLINE void store_block(
     const Accessor& output,
-    uint32_t first_slot_addr,
-    uint32_t first_page,
-    uint32_t block_tile_rows,
-    uint32_t block_tile_cols,
-    uint32_t shard_row_stride_bytes,
-    uint32_t tensor_tile_cols) {
-    uint32_t row_slot_addr = first_slot_addr;
-    uint32_t row_page = first_page;
-    for (uint32_t r = 0; r < block_tile_rows; ++r) {
-        uint32_t slot_addr = row_slot_addr;
-        for (uint32_t c = 0; c < block_tile_cols; ++c) {
-            noc_async_write<page_size>(slot_addr, output.get_noc_addr(row_page + c), page_size);
-            slot_addr += page_size;
+    uint32_t src_addr,
+    uint32_t src_row_stride_bytes,
+    uint32_t dst_page,
+    uint32_t dst_row_stride_pages,
+    uint32_t rows,
+    uint32_t cols) {
+    for (uint32_t r = 0; r < rows; ++r) {
+        uint32_t src = src_addr;
+        uint32_t page = dst_page;
+        for (uint32_t c = 0; c < cols; ++c) {
+            noc_async_write<page_size>(src, output.get_noc_addr(page), page_size);
+            src += page_size;
+            ++page;
         }
-        row_slot_addr += shard_row_stride_bytes;
-        row_page += tensor_tile_cols;
+        src_addr += src_row_stride_bytes;
+        dst_page += dst_row_stride_pages;
     }
 }
 
@@ -49,33 +51,41 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<2>();
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t tensor_tile_cols = get_common_arg_val<uint32_t>(1);
-    const uint32_t shard_tile_cols = get_common_arg_val<uint32_t>(2);
+    const uint32_t src_row_stride_slots = get_common_arg_val<uint32_t>(1);  // nominal shard_tile_cols
+    const uint32_t dst_row_stride_pages = get_common_arg_val<uint32_t>(2);  // tensor_tile_cols
 
-    // num_blocks_this_core is 0 on a grid core without a shard (or without a lane piece).
-    const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(0);
-    const uint32_t block_first_slot = get_arg_val<uint32_t>(1);
-    const uint32_t block_first_page = get_arg_val<uint32_t>(2);
-    const uint32_t block_tile_rows = get_arg_val<uint32_t>(3);
-    const uint32_t block_tile_cols = get_arg_val<uint32_t>(4);
+    // This lane's rectangle of the shard, and the block extents that tile it (Phase 0: one block).
+    const uint32_t src_first_slot = get_arg_val<uint32_t>(0);
+    const uint32_t dst_first_page = get_arg_val<uint32_t>(1);
+    const uint32_t rect_tile_rows = get_arg_val<uint32_t>(2);
+    const uint32_t rect_tile_cols = get_arg_val<uint32_t>(3);
+    const uint32_t block_tile_rows = get_arg_val<uint32_t>(4);
+    const uint32_t block_tile_cols = get_arg_val<uint32_t>(5);
 
     const auto output = TensorAccessor(output_args, output_addr, page_size);
-    // cb_input_shard is never waited on or popped: the shard is resident before launch.
-    const uint32_t shard_base_addr = get_read_ptr(cb_input_shard);
+    const uint32_t src_row_stride_bytes = src_row_stride_slots * page_size;
+    const uint32_t rect_src_addr = get_read_ptr(cb_input_shard) + src_first_slot * page_size;
 
-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-        DeviceZoneScopedN("S2I-STORE-BLOCK");
-        store_block<page_size>(
-            output,
-            shard_base_addr + block_first_slot * page_size,
-            block_first_page,
-            block_tile_rows,
-            block_tile_cols,
-            shard_tile_cols * page_size,
-            tensor_tile_cols);
+    for (uint32_t block_row = 0; block_row < rect_tile_rows; block_row += block_tile_rows) {
+        const uint32_t rows =
+            rect_tile_rows - block_row < block_tile_rows ? rect_tile_rows - block_row : block_tile_rows;
+        for (uint32_t block_col = 0; block_col < rect_tile_cols; block_col += block_tile_cols) {
+            DeviceZoneScopedN("S2I-STORE-BLOCK");
+            const uint32_t cols =
+                rect_tile_cols - block_col < block_tile_cols ? rect_tile_cols - block_col : block_tile_cols;
+            store_block<page_size>(
+                output,
+                rect_src_addr + block_row * src_row_stride_bytes + block_col * page_size,
+                src_row_stride_bytes,
+                dst_first_page + block_row * dst_row_stride_pages + block_col,
+                dst_row_stride_pages,
+                rows,
+                cols);
+        }
     }
 
     {
+        // Also on a lane with no tiles: every issued write is acked before the next program starts.
         DeviceZoneScopedN("S2I-WRITE-BARRIER");
         noc_async_write_barrier();
     }

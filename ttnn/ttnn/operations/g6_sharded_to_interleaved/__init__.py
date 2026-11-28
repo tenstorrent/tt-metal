@@ -4,7 +4,6 @@
 from .g6_sharded_to_interleaved import (
     EXCLUSIONS,
     INPUT_TAGGERS,
-    PROPERTIES,
     SUPPORTED,
     describe_plan,
     g6_sharded_to_interleaved,
@@ -12,11 +11,10 @@ from .g6_sharded_to_interleaved import (
 )
 
 __all__ = [
-    "EXCLUSIONS",
-    "INPUT_TAGGERS",
-    "PROPERTIES",
-    "SUPPORTED",
-    "describe_plan",
     "g6_sharded_to_interleaved",
+    "INPUT_TAGGERS",
+    "SUPPORTED",
+    "EXCLUSIONS",
     "validate",
+    "describe_plan",
 ]
