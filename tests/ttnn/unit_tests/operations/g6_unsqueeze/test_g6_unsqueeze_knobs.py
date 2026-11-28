@@ -71,3 +71,18 @@ def test_descriptor_cache_patches_addresses(device):
         assert torch.equal(got.contiguous().view(torch.int32), x.unsqueeze(2).contiguous().view(torch.int32))
         results.append(tt_x)
     assert len(g6u_pd._DESCRIPTOR_CACHE) == 1
+
+
+@pytest.mark.parametrize(
+    "shape,want_ranges",
+    [((1, 512), 1), ((1, 256), 1), ((1, 1, 4100), 1), ((1, 416), None)],  # 13 cores: prime -> row-wise fallback
+)
+def test_core_placement_rectangle(device, shape, want_ranges):
+    """Refinement 1: the core set is one most-square rectangle when the core count factors into the
+    grid (p1 4x4, p2 4x2, full grid 11x10); otherwise the row-wise fallback, still bit-exact."""
+    plan = _run(device, shape)
+    n_ranges = len(plan.core_ranges.ranges())
+    if want_ranges is not None:
+        assert n_ranges == want_ranges, g6u_pd.describe_plan(plan)
+        assert plan.placement.startswith("rect")
+    assert plan.core_ranges.num_cores() == plan.num_cores

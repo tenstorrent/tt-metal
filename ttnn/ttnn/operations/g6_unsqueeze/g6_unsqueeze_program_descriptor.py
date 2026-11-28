@@ -5,7 +5,8 @@
 ProgramDescriptor built from it.
 
 Topology (op_design.md, Blocking Model): `w_tile` split across cores (contiguous tile range per
-core, `split_work_to_cores(row_wise=True)`), `tile_half` split across the two data-movement RISCs of
+core, `split_work_to_cores(row_wise=True)` over the
+most-square single-rectangle core pool from `_core_pool`), `tile_half` split across the two data-movement RISCs of
 each core (HALVES_PER_RISC = 1). No compute kernel, no cross-core traffic. Each RISC owns a private
 staging CB (`cb_face_stage_half{h}`) sized `buffer_depth * block_w_tiles * halves_per_risc` faces
 + 64 B alignment slack.
@@ -58,6 +59,7 @@ G6UnsqueezePlan = namedtuple(
         "core_assignments",  # [(CoreCoord, start_tile, core_w_tiles)]
         "tensor_w_tiles",
         "face_bytes",
+        "placement",  # "rect WxH" (one core range) or "row-wise" (num_cores_to_corerangeset fallback)
     ],
 )
 
@@ -78,6 +80,36 @@ def _block_cap(buffer_depth, halves_per_risc, face_bytes):
     return cap
 
 
+def _core_rectangle(num_cores, grid):
+    """Most-square w x h rectangle at the grid origin with exactly `num_cores` cores, or None.
+
+    One rectangle = one core range: the binaries and launch messages are written once instead of once
+    per range (BB-17), and the cores sit in a compact block (short NoC hops). Most-square minimizes
+    the bounding box; ties prefer the wider (row-major) shape.
+    """
+    best = None
+    for h in range(1, grid.y + 1):
+        if num_cores % h:
+            continue
+        w = num_cores // h
+        if w > grid.x:
+            continue
+        if best is None or abs(w - h) < abs(best[0] - best[1]):
+            best = (w, h)
+    return best
+
+
+def _core_pool(num_cores, grid):
+    """The single source of the core set: one rectangle when `num_cores` factors into the grid,
+    else the row-wise line of `num_cores_to_corerangeset` (e.g. a prime count wider than the grid)."""
+    rect = _core_rectangle(num_cores, grid)
+    if rect is None:
+        return ttnn.num_cores_to_corerangeset(num_cores, grid, True), "row-wise"
+    w, h = rect
+    pool = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(w - 1, h - 1))])
+    return pool, f"rect {w}x{h}"
+
+
 def select_plan(input_tensor) -> G6UnsqueezePlan:
     halves_per_risc = HALVES_PER_RISC
     if halves_per_risc not in (1, 2):
@@ -89,7 +121,7 @@ def select_plan(input_tensor) -> G6UnsqueezePlan:
     num_cores = min(grid.x * grid.y, tensor_w_tiles)
     if MAX_CORES is not None:
         num_cores = min(num_cores, MAX_CORES)
-    core_pool = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
+    core_pool, placement = _core_pool(num_cores, grid)
     (n_used, all_cores, group_1, group_2, tiles_1, tiles_2) = ttnn.split_work_to_cores(core_pool, tensor_w_tiles, True)
     core_w_tiles_max = max(tiles_1, tiles_2)
 
@@ -121,6 +153,7 @@ def select_plan(input_tensor) -> G6UnsqueezePlan:
         core_assignments=assignments,
         tensor_w_tiles=tensor_w_tiles,
         face_bytes=face_bytes,
+        placement=placement,
     )
 
 
@@ -129,7 +162,8 @@ def describe_plan(plan) -> str:
     lines = [
         f"g6_unsqueeze plan: regime={plan.regime} cores={plan.num_cores} tiles={plan.tensor_w_tiles} "
         f"core_w_tiles_max={plan.core_w_tiles_max} block_w_tiles={plan.block_w_tiles} "
-        f"buffer_depth={plan.buffer_depth} halves_per_risc={plan.halves_per_risc}"
+        f"buffer_depth={plan.buffer_depth} halves_per_risc={plan.halves_per_risc}",
+        f"  placement={plan.placement} core_ranges={len(plan.core_ranges.ranges())}",
     ]
     for core, start, n in plan.core_assignments:
         lines.append(f"  core ({core.x},{core.y}): tiles [{start}, {start + n})")

@@ -29,3 +29,24 @@
   - `test_g6_unsqueeze_precision_baseline.py`.
   - `test_descriptor_cache_patches_addresses` in `test_g6_unsqueeze_knobs.py`.
   - Existing: `test_g6_unsqueeze.py`, `test_g6_unsqueeze_knobs.py`.
+
+## Refinement 1 — Core placement, core-range count and NoC selection on p1
+- Date: 2026-11-28
+- What was done:
+  - Replaced `num_cores_to_corerangeset` in `select_plan()` with `_core_pool()`, still the single
+    source of the core set. It picks the most-square w×h rectangle at the grid origin with exactly
+    `num_cores` cores, and falls back to the row-wise set when the count does not factor into the grid.
+  - p1 now runs on one 4×4 core range instead of two (11×1 + 5×1; BB-17). p2 runs on one 4×2 range.
+  - New plan field `placement`; `describe_plan()` reports the placement and the core-range count.
+  - Kernels, transfers, CBs and the L1 ledger are unchanged. Reused: `split_work_to_cores`, the whole
+    descriptor path. Added: the rectangle chooser.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0) on (1,512), (1,256), (1,1,4100), (1,416),
+  the knob/streaming/ragged shapes and the golden special-value, poisoned-padding and trace cases.
+- Golden test progress: 20/20 passing (`EVAL_CAPTURE_L1=0`).
+- Perf: not measured. p1 (16 tiles) is below the task brief's >32-tile measurement floor, and that
+  floor overrides the heading's instruction to measure p1. No variant was chosen on unmeasured evidence:
+  diagonal / per-instance NoC and `bank_stagger` were not built. Finding: p1 remains launch-bound at
+  ~1.4 µs (Phase 0 figure).
+- Issues encountered: None.
+- Tests added: `test_core_placement_rectangle` in `test_g6_unsqueeze_knobs.py`. It checks one range
+  for p1, p2 and the full grid, the row-wise fallback for 13 cores, and bit-exact output.

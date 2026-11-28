@@ -1,0 +1,38 @@
+{
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op[1x512-dim2-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op[1x256-dim2-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-gate-math_fidelity]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-input_gen]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-poison_padding]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim-1-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-sequence]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-trace]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  }
+}

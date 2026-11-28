@@ -1,0 +1,12 @@
+{
+  "supported": {
+    "dtype": [
+      "FLOAT32"
+    ],
+    "layout": [
+      "TILE"
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}

@@ -1,0 +1,20 @@
+{
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-gate-math_fidelity]": {
+    "math_fidelity": null,
+    "gate": "bit_exact"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE]": {},
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-input_gen]": {
+    "input_gen": "special_values"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-poison_padding]": {
+    "poison_padding": NaN
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim-1-dtype=FLOAT32-layout=TILE]": {},
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-sequence]": {
+    "sequence": "[[1, 256], [1, 512]]"
+  },
+  "eval/golden_tests/g6_unsqueeze/test_golden.py::test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-trace]": {
+    "trace": true
+  }
+}

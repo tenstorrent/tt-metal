@@ -48,7 +48,7 @@
 - **Golden baseline**: 20 / 20 passing with `EVAL_CAPTURE_L1=0` (9 supported_pass, 11 regression tests
   without axes). Device time: p1 ≈ 1.35–1.45 µs, p2 ≈ 1.35–1.40 µs.
 
-### [ ] Refinement 1 — Core placement, core-range count and NoC selection on p1
+### [x] Refinement 1 — Core placement, core-range count and NoC selection on p1
 
 **Type**: perf
 
@@ -77,6 +77,19 @@ transfer. The traffic is identical across candidates, so any win is launch or No
   faster.
 - No regression on the guard set: p2 (`resident`, 8 cores), the forced-`streaming` knob test shape, and
   `HALVES_PER_RISC=2`.
+
+**Outcome**: `select_plan()` now builds the core set with `_core_pool()`. It picks the most-square
+rectangle at the origin with exactly `num_cores` cores: p1 4×4 (**one range, not 11+5**), p2 4×2 (one
+range), full grid 11×10. Counts that do not factor into the grid (for example a prime 13) fall back to
+the row-wise `num_cores_to_corerangeset`. `describe_plan()` reports `placement=` and `core_ranges=`.
+The data path is unchanged and bit-exact; unit tests 59/59 and golden 20/20 pass (`EVAL_CAPTURE_L1=0`).
+**No device-ns was measured.** p1's largest tensor is 16 tiles, below the >32-tile perf-measurement
+floor of the task brief, which overrides this heading's measure-p1 instruction. So the single-range win
+(one binary/launch-message write instead of two, per BB-17) is structural and unquantified here. The
+`noc_placement` diagonal / per-instance NoC selection and `bank_stagger` variants were not built: with
+no measurement allowed on the only target cell, there is no evidence to pick among them. p1 remains
+fixed-cost (launch) bound at ~1.4 µs. Next lever if a >32-tile production cell ever appears: A/B the
+rectangle against the row line and test bank-staggered issue order on that cell.
 
 ### [ ] Refinement 2 — Output write transfer shape on p1
 
