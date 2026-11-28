@@ -24,7 +24,7 @@
 - **Compute config**: none (no compute kernel; the contract forbids `compute_kernel_config`)
 - **Golden baseline**: graded run 15 supported_pass + 3 xfail_expected + 1 supported_fail. The fail is the trace case `loose6`, caused by the harness: L1 capture disables the program cache (verification_report.md, H1). With `EVAL_CAPTURE_L1=0`: 16 / 16 supported pass.
 
-### [ ] Refinement 1 — int32 and ROW_MAJOR (regime R2, row-major chunk scatter)
+### [x] Refinement 1 — int32 and ROW_MAJOR (regime R2, row-major chunk scatter)
 
 **Goal**: add `ttnn.int32` to `SUPPORTED["dtype"]` and `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` by building regime R2 of `op_design.md` natively in the existing writer kernel.
 - A ROW_MAJOR `[N]` tensor is one page of `4N` bytes.
