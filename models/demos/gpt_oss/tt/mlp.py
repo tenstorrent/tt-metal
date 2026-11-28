@@ -185,9 +185,11 @@ class MLP:
 
             # Every prefill runs on the routed experts when they are built with the GPTQ weights (prefills the routed
             # path does not take on its own are padded into it, __call__), so the per-expert prefill weights would be
-            # an unused copy of the experts.
+            # an unused copy of the experts. Only when decode has weights of its own (the fused or the batched dense
+            # decode): any other decode batch runs on the per-expert weights.
             routed_only_prefill = (
                 mesh_config is not None
+                and (self.indexed_decode or self.dense_decode)
                 and prefill_gptq_enabled()
                 and routed_prefill_supported(mesh_device, mesh_config, hf_config, use_throughput_experts)
             )

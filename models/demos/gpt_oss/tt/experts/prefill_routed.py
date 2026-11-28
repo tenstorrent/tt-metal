@@ -116,10 +116,13 @@ TP_COMBINE_L1_BYTES = 48 << 20
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
 # bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
 ROUTED_L1_CAP_BYTES = 72 << 20
-# Version of the routed-expert weight caches the weight-cache completion marker records (model_config.py). 2: the
-# fused decode model's routed experts read the decode streams (TP mode) and cache only their biases.
-# 3: the GPTQ layers' files hold transposed-tile tensors ("_tt"; before, host-transposed normal tiles, "_kt").
-ROUTED_PREFILL_WEIGHTS_VERSION = 3
+# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py). The
+# GPTQ layers' files have their own names ("_tt" + source hash) and marker entry (":gptq<ROUTED_GPTQ_CACHE_VERSION>"),
+# so a GPTQ-only change bumps that instead (a bump here makes every Blackhole 1xN mesh's gpt-oss-20b cache rebuild).
+ROUTED_PREFILL_WEIGHTS_VERSION = 1
+# Version of the GPTQ routed caches (GPT_OSS_PREFILL_GPTQ). 2: the fused decode model's routed experts read the decode
+# streams (TP mode) and cache only their biases.
+ROUTED_GPTQ_CACHE_VERSION = 2
 # Name version of the EP mode's cache files (unchanged by the TP mode).
 ROUTED_EP_FILES_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -660,7 +663,7 @@ class RoutedPrefillExperts:
             # Own cache files per GPTQ source. The source as given, not its resolved path: a Hub location names its
             # pinned revision, and the resolved path also holds the machine's Hub cache root, which would give every
             # machine (and the shared CI cache) its own file names.
-            # "_tt": the files hold transposed-tile tensors (earlier "_kt" files held host-transposed normal tiles).
+            # "_tt": the files hold transposed-tile tensors.
             prefix += "_tt" + hashlib.sha1(gptq_spec.rstrip("/").encode()).hexdigest()[:10]
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict

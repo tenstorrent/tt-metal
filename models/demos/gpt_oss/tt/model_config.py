@@ -487,6 +487,7 @@ class ModelArgs:
     def _routed_prefill_weights_version(self):
         """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
         from models.demos.gpt_oss.tt.experts.prefill_routed import (
+            ROUTED_GPTQ_CACHE_VERSION,
             ROUTED_PREFILL_NUM_EXPERTS,
             ROUTED_PREFILL_WEIGHTS_VERSION,
             prefill_gptq_enabled,
@@ -504,7 +505,7 @@ class ModelArgs:
             bf8 = routed_prefill_bf8_layers()
             # The bf8 layer set and the GPTQ switch change which routed caches must exist, so both are in the marker.
             version = f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
-            return f"{version}:gptq" if prefill_gptq_enabled() else version
+            return f"{version}:gptq{ROUTED_GPTQ_CACHE_VERSION}" if prefill_gptq_enabled() else version
         return None
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
