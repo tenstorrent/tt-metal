@@ -126,3 +126,77 @@
 - Golden test progress: targeted slice (`EVAL_CAPTURE_L1=0`, `-k "ROW_MAJOR or 16x1x5120 or loose"`) 35/35 pass; the full suite is left to the harness gate.
 - Issues encountered: the Tracy capture tool intermittently exits with code 3 (no CSV); re-running is enough. `G6_ABLATION=1` added to the perf-sweep harness so stubbed-kernel ablation runs record timing without the bit-exact assert.
 - Tests added: `test_g6_reshape_row_major.py` knob matrix += `per_mover_read`, `no_bank_split`, `shared_8_cores` settings and two cases (`(3,10)→(5,6)` int32: whole-page atoms straddling input rows under the bank split; `(1,4095)→(1365,3)` bf16: 6-byte half-word copies); the flagged-plan pin asserts `shared_read` and `bank_split`. 100/100 under `--dev`; unit directory 173 passed.
+
+## Perf 1 — fan-out perf tournament on the tile mover (focus: q553; guard: L0)
+- Date: 2026-11-28. Board: Blackhole p150b, chip 0, 1350 MHz. Times are `DEVICE KERNEL DURATION [ns]`, profiler build, median of launches 2..12 (`generated/meta/g6_reshape/bench/bench_cases.py`, BENCH_CASES form), one process per case. Differences within ~2–3 % are treated as noise.
+- Focus: INPUTS q553, bf16 TILE DRAM-interleaved (1,1,6,256)→(1,1,1536), `tile_face_row`, 48 atoms on 48 cores, one per core (the only production case not faster than stock in the operator's A/B). Mandatory guard: the flagged loose case L0 (int32 RM [1,4096]→[4096,1], 1886 ns, must not grow). SUPPORTED unchanged.
+- The operator's findings are confirmed: before this pass q553 was op 1735 / stock 1739 ns (my run), a tie.
+
+### Measured breakdown (q553, before)
+- Only mover 0 (NCRISC) works; mover 1 (BRISC) runs an empty 101 ns kernel. BRISC and NCRISC kernels start together, so the idle kernel does not lengthen the span. Start skew across cores is about 170 ns.
+- NCRISC per-core zone timeline (median ns): kernel start→gather 65, `g6.gather` 440 (walk + plan writes + issuing 2 × 32 B reads), `g6.await` 275 (DRAM read latency), `g6.permute` 186 (2 face-row copies + flush/invalidate/fence), `g6.store` 273 (re-reading the tile table + 2 × 32 B writes), `g6.drain` 180 (write acks). Kernel total 1531 ns.
+- The stages run in series on one RISC with nothing overlapping except reads in flight at the end of the gather, so the timeline itself is the ablation. The host_move_list experiment confirmed it with peeled floors: an empty kernel on the same cores is 185 ns; compile-time-constant transfers alone are 856 ns, or 805 ns split over both RISCs.
+- Roofline (/perf-ceiling-dm): about 13 ns DRAM bound. No NoC or DRAM resource binds. The headroom is about 900 ns of RISC-V overhead in walk/plan/permute/store on top of one DRAM read round trip plus one write-ack round trip (about 460 ns, irreducible).
+- Ranked bottleneck: gather walk (440) > store (273) ≈ await (275, irreducible) > permute (186) > drain (180, irreducible).
+
+### Portfolio floated (3 perf-part-optimizer subagents, in parallel)
+1. `planfree_tile_mover`: plan-free / lean tile mover with closed-form sources, cheaper arithmetic, direct stores from staging, and write lists built in the read shadow (operator candidate 1).
+2. `two_mover_split`: use both movers when a core owns one atom (sub-atom half split, 24×2 cores, lone mover on BRISC, drop the idle kernel) (operator candidate 2).
+3. `host_move_list`: the host precomputes every transfer into runtime args, so the device does no walk; this also measures the launch floor.
+
+### Per-idea verdicts (q553 unless noted; each subagent's own baseline run in its session)
+- **planfree_tile_mover: WIN.** Menu: `pf_image` (fully plan-free walk replayed after the barrier) 1845 vs 1734, and q349 3810 vs 3304 — **measured regression**, because re-walking costs more than reading the plan back. `pf_direct` 1419. `lean` (direct path, lambdas outlined by GCC) 1499; with `always_inline` lambdas 1205. Single-packet NoC calls flat (1210). `lean_pre` (write list built before the read barrier) 1091. **`lean_pre_all`** (same, plus a pre-barrier store list on the image path) 1091, and faster on every guard: q364 6796→3894, q508 1739→1051, q349 3304→3079, q370 8612→8332, q490 2237→2103, f120 1609→1454, f168 1706→1652.
+- **two_mover_split: WIN** with the `half_tiles` rule. Measured on the old mover: q553 1781→1494, q508 −12.5 %, q494 −13.8 %, q349 −7.5 %, q370/q490/f120 flat. Nulls: `drop_idle` 1766 (flat), `solo_brisc` 1734 (within noise), `cores_half` (24×2) 1787 (flat). Blanket `half_all` measured regressions: q364 +13 % (8121 vs 7164) and f120 +14 % (1853 vs 1620).
+- **host_move_list: WIN, not graduated.** `hml_bank_split` q553 1741→1026, q508 1017, q494 1192, q490 1885, f120 1144, q349 2937. The always-zero-copy variant regresses q349 (3341 vs 2937). Floor: 805 ns (compile-time constants, both RISCs), 897 ns with zones compiled out. Reasons it was not graduated:
+  - It replaces the device walk only up to the runtime-arg cap: 4096 words per core, about 1360 transfers per mover. The (1,n,6,256)→(1,1,n,1536) family passes the cap at n=2048, so the op would have to keep the device mover as a fallback, i.e. carry two tile movers.
+  - On the focus case it ties the graduated single path: 1026 vs 1029 ns.
+  - Its remaining margins (f120 1144 vs 1472, q494 1192 vs 1465, q490 1885 vs 2024) are all on cells already 1.9–3.6× ahead of stock.
+  - Recorded as the top candidate for a later round (it would need the fallback, or a move list read from DRAM past the cap).
+
+### Graduated
+- **G1, `lean_pre_all`** (commit "Perf 1: lean tile mover …"). One mover source, with two realizations chosen at compile time from geometry (`kStoreDirect`, host `_store_direct`):
+  - Direct, plan-free path for `tile_face_row` with H_out == 1. Closed-form sources with add-only steps. Read runs coalesce. Face-rows are written straight from staging: no plan, no permute copy, no invalidate or fence. The write list is built between read issue and read barrier.
+  - Image path for every other geometry, with its store list now also built in the read shadow. The old in-loop store code was deleted.
+  - Carve-out, written as one: `tile_element_run` pieces are element-granular, so they are inexpressible without the image. On H_out > 1, per-face-row writes lose the image path's 2–16-face-row merged writes; the measured evidence is host_move_list's zero-copy variant on q349, 3341 vs 2937 ns.
+  - The plan CB grows by 64 B per atom for the store list (`STORE_ENTRY_BYTES_PER_ATOM`, inside `_fit_block_atoms`' L1 budget).
+  - Zones: direct path g6.gather / g6.await / g6.store / g6.drain; image path unchanged (5).
+- **G2, `half_tiles` sub-atom split** (commit "Perf 1: split a core's atom halves …"). Both movers of a core take the core's atom range and mover m does face-column half m (runtime args 2–3 `half_lo`/`half_hi`). This applies wherever the core's last atom has two halves and either the core has one atom or dst H > atom_rows.
+  - Carve-outs, each a measured regression: single-half atoms (f120 +14 % under the blanket split, mover 1 would idle); one atom per output tile with several atoms per core (q364 +13 %).
+  - CT arg `kHalfSplit` folds the half range to [0,2) when no core of the program splits. With the runtime bound, f78 measured 1660 vs 1606 ns (+3.4 %, repeated twice); folded it is 1607–1610.
+  - `describe_plan` reports `half_lo`/`half_hi`; the debug test's plan invariant now counts half-atoms.
+- Kept: the RM path (`g6_reshape_rm_mover.cpp`) is untouched.
+
+### Whole-op before/after (final = HEAD, one sweep; "before" and stock from the operator's ab.json, same board)
+| case | op before (ab.json) | after G1 | after G1+G2 (final) | stock (ab.json) | final vs stock |
+|---|---|---|---|---|---|
+| q553 | 1744 | 1094 | **1029** | 1707 (my run: 1737) | 1.66x |
+| L0 | 1886 | 1870 | **1851** | 366510 | 198x |
+| q349 | 3627 | 3073 | **2873** | 10452 | 3.64x |
+| q353 | 1969 | 1745 | **1513** | 9782 | 6.47x |
+| q357 | 3745 | 3213 | **3006** | 10470 | 3.48x |
+| q364 | 6384 | 3913 | **3896** | 29104 | 7.47x |
+| q367 | 1898 | 1205 | **1034** | 4411 | 4.27x |
+| q370 | 9641 | 8305 | **8184** | 25284 | 3.09x |
+| q382 | 2573 | 2310 | **2141** | 8399 | 3.92x |
+| q490 | 2450 | 2095 | **2024** | 5839 | 2.88x |
+| q494 | 1868 | 1667 | **1465** | 5319 | 3.63x |
+| q498 | 2454 | 2093 | **2078** | 5859 | 2.82x |
+| q505 | 4073 | 2302 | **2304** | 22750 | 9.87x |
+| q508 | 1805 | 1045 | **1045** | 3991 | 3.82x |
+| q511 | 5364 | 4776 | **4661** | 13696 | 2.94x |
+| f78 | 1738 | 1606 | **1610** | 3299 | 2.05x |
+| f120 | 1601 | 1444 | **1472** | 3150 | 2.14x |
+| f123 | 1648 | 1456 | **1476** | 3141 | 2.13x |
+| f168 | 1859 | 1660 | **1591** | 3082 | 1.94x |
+| f172 | 1800 | 1651 | **1606** | 3152 | 1.96x |
+
+- **q553: op 1029 ns, stock 1737 ns** (medians of 11, same session, chip 0). Op range 1018–1086 and stock range 1702–1771 no longer overlap.
+- Guard-set no-regression: every TILE production case is faster than before or flat (f120 +2 % vs G1 alone, inside noise). L0 1851 ≤ 1886. The RM cases are untouched (RM path unchanged).
+- Correctness: golden suite 59/59 after each graduation. `tests/ttnn/unit_tests/operations/g6_reshape/` 173/173 under `--dev` (ASSERTs on). Bit-exact.
+
+### Operator candidates
+- operator candidate 1: graduated - as `lean_pre_all`: plan-free direct stores from staging for `tile_face_row` H_out == 1 (q553's case), store lists built in the read shadow everywhere. The fully plan-free walk replay is a measured regression (q553 1845, q349 +15 %) and was not taken - q553 1735 → 1094 ns.
+- operator candidate 2: graduated - as the `half_tiles` sub-atom half split (24×2 cores and a lone BRISC mover measured flat) - q553 1094 → 1029 ns (on the old mover: 1781 → 1494).
+
+### Helper bypasses — none
+No raw LLK was graduated. Both graduated paths use the dataflow_api NoC calls and TensorAccessor; the direct path uses `noc_async_read_one_packet` / `noc_async_write_one_packet`. The host_move_list experiment used `get_noc_addr_from_bank_id` directly, but it was not graduated.

@@ -1,0 +1,26 @@
+RESULT q553 stock n=11 median=1737 min=1702 max=1771 nrows_total=12
+RESULT q553 new n=11 median=1029 min=1018 max=1086 nrows_total=12
+RESULT L0 new n=11 median=1851 min=1833 max=1989 nrows_total=12
+RESULT q349 new n=11 median=2873 min=2828 max=2932 nrows_total=12
+RESULT q353 new n=11 median=1513 min=1472 max=1581 nrows_total=12
+RESULT q357 new n=11 median=3006 min=2905 max=3097 nrows_total=12
+RESULT q364 new n=11 median=3896 min=3820 max=3990 nrows_total=12
+RESULT q367 new n=11 median=1034 min=1019 max=1087 nrows_total=12
+RESULT q370 new n=11 median=8184 min=8007 max=8510 nrows_total=12
+RESULT q382 new n=11 median=2141 min=2085 max=2261 nrows_total=12
+RESULT q490 new n=11 median=2024 min=1991 max=2117 nrows_total=12
+RESULT q494 new n=11 median=1465 min=1384 max=1508 nrows_total=12
+RESULT q498 new n=11 median=2078 min=2036 max=2220 nrows_total=12
+RESULT q505 new n=11 median=2304 min=2275 max=2409 nrows_total=12
+RESULT q508 new n=11 median=1045 min=1029 max=1065 nrows_total=12
+RESULT q511 new n=11 median=4661 min=4576 max=4899 nrows_total=12
+RESULT f78 new n=11 median=1610 min=1588 max=1661 nrows_total=12
+RESULT f120 new n=11 median=1472 min=1462 max=1494 nrows_total=12
+RESULT f123 new n=11 median=1476 min=1423 max=1578 nrows_total=12
+RESULT f168 new n=11 median=1591 min=1556 max=1799 nrows_total=12
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 70; wrapper exit: 1)
+Traceback (most recent call last):
+  File "/localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/operations/g6_reshape/perf_experiments/_coord/parse.py", line 7, in <module>
+    rows = [r for r in csv.DictReader(open(m.group(1))) if r["DEVICE KERNEL DURATION [ns]"].strip()]
+AttributeError: 'NoneType' object has no attribute 'group'
+RESULT f172 new n=11 median=1606 min=1546 max=1816 nrows_total=12
