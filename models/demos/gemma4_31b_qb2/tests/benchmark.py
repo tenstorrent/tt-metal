@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import random
 import statistics
 import time
@@ -27,6 +28,23 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def cached_gpqa_csv():
+    """The pinned revision's gpqa_diamond.csv in the shared Hugging Face cache (HF_HOME, which CI mounts read-only),
+    or None. Reading it needs no Hugging Face token, so runs that get none (every branch run) still have GPQA."""
+    from huggingface_hub import try_to_load_from_cache
+
+    if not os.environ.get("HF_HOME"):
+        return None
+    path = try_to_load_from_cache(
+        "Idavidrein/gpqa",
+        "gpqa_diamond.csv",
+        cache_dir=os.path.join(os.environ["HF_HOME"], "hub"),
+        revision=DATASET_REVISION,
+        repo_type="dataset",
+    )
+    return path if isinstance(path, str) else None
+
+
 def load_gpqa():
     import datasets
     from lm_eval.api.task import ConfigurableTask
@@ -39,6 +57,10 @@ def load_gpqa():
     path = TaskManager().task_index["r1_gpqa_diamond"]["yaml_path"]
     config = load_yaml_config(path)
     config["dataset_kwargs"] = {"revision": DATASET_REVISION}
+    csv = cached_gpqa_csv()
+    if csv:
+        # The same file the Hub config gpqa_diamond loads with the csv builder, at the same revision.
+        config.update(dataset_path="csv", dataset_name=None, dataset_kwargs={"data_files": {"train": csv}})
     task = ConfigurableTask(config=config)
     docs = task.validation_docs()
     if len(docs) != 198:
