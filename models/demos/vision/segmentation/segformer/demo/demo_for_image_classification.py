@@ -24,7 +24,7 @@ from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_for_image_clas
 
 
 def run_segformer_classification_demo(
-    device, imagenet_label_dict, iterations, device_batch_size, model_location_generator, resolution=512
+    device, imagenet_label_dict, iterations, device_batch_size, model_location_generator, resolution=224
 ):
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     logger.info("ImageNet-1k validation Dataset")
