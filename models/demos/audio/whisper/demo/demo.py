@@ -461,9 +461,11 @@ def run_demo_whisper_for_conditional_generation_dataset(
         else load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     )
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    # perform model inference
-    total_wer = 0
-    total_cer = 0
+    # Score like the openai/whisper evaluation: the tokenizer's English text normalizer on both sides and
+    # corpus-level WER/CER over the utterances that were actually transcribed.
+    normalize = AutoProcessor.from_pretrained(model_repo).tokenizer.normalize
+    references = []
+    predictions = []
     total_inputs = len(ds)
     for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
         current_batch_size = min(batch_size, total_inputs - i)
@@ -507,16 +509,16 @@ def run_demo_whisper_for_conditional_generation_dataset(
         logger.debug(f"Dataset text (Inputs {batch_start}--{batch_end}) Sample: {reference_sentences}")
         logger.debug(f"ttnn Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
         for j in range(current_batch_size):
-            reference = ds[i + j]["text"].lower()
             # Handle both timestamp format (list of segments) and plain text format
             if isinstance(ttnn_output[j], list):
-                predicted = " ".join([segment["text"] for segment in ttnn_output[j]]).lower()
+                predicted = " ".join([segment["text"] for segment in ttnn_output[j]])
             else:
-                predicted = ttnn_output[j].lower()
-            total_wer += jiwer.wer(reference, predicted)
-            total_cer += jiwer.cer(reference, predicted)
-    logger.info(f"Average Word Error Rate: {total_wer / len(ds):.4f}")
-    logger.info(f"Average Character Error Rate: {total_cer / len(ds):.4f}")
+                predicted = ttnn_output[j]
+            references.append(normalize(ds[i + j]["text"]))
+            predictions.append(normalize(predicted))
+    logger.info(f"Scored {len(references)} of {total_inputs} utterances")
+    logger.info(f"Word Error Rate: {jiwer.wer(references, predictions):.4f}")
+    logger.info(f"Character Error Rate: {jiwer.cer(references, predictions):.4f}")
 
 
 def run_demo_whisper_for_translation_dataset(
