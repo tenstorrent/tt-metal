@@ -119,7 +119,7 @@ def test_planes_to_host_defers_assembly(monkeypatch, fake_device, defer):
     assert events == []  # a deferred readback waits on its own event, not the whole device
 
 
-def test_kept_host_planes_take_the_next_read(monkeypatch, fake_device):
+def test_kept_host_planes_take_the_next_read(monkeypatch, fake_device, expect_error):
     """With ``host_planes`` a read lands in host tensors a finished read handed back, never in ones still in flight."""
     allocated = []
 
@@ -153,4 +153,6 @@ def test_kept_host_planes_take_the_next_read(monkeypatch, fake_device):
     third, third_expected = read(2)
     assert len(allocated) == 6
     np.testing.assert_array_equal(third.result(), third_expected)
+    with expect_error(RuntimeError, "taken once"):
+        third.result()  # its host tensors are the next read's by now
     assert [len(free) for free in kept.values()] == [2]

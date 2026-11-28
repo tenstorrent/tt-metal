@@ -170,7 +170,7 @@ def _yuv_planar_d2h(
     Output: ``(T, H*W + 2*(H/2 * W/2))`` numpy uint8 — per-frame
     ``[Y plane | Cb plane | Cr plane]`` in row-major.
 
-    Kicks off all three ``cpu(blocking=False)`` calls before a single
+    Kicks off all three non-blocking reads before a single
     ``synchronize_device`` so the reads overlap.  With ``defer=True`` the
     transfer still completes here and everything after it comes back as a
     callable instead: pulling each device's shards out of the host tensors
@@ -333,9 +333,14 @@ def _yuv_planar_d2h(
         return out
 
     def _finish():
+        nonlocal hosts
+        if hosts is None:
+            msg = "this read's host tensors went back to host_planes: its result is taken once"
+            raise RuntimeError(msg)
         out = _host_half()
         if free is not None:
             free.append(hosts)  # only now: every byte of them is in ``out``
+            hosts = None  # the next read owns them
         return out
 
     if defer:
