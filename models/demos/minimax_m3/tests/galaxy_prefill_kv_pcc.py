@@ -63,12 +63,13 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
   PREFILL_RESULTS_JSONL  append one JSON line per run (perf + min PCC + status)         [default: unset]
   PREFILL_ISL         default isl= for every run (single-run mode too)                   [default: trace length]
   PREFILL_WARMUP_ITERS untimed whole-sequence passes before the timed iterations of each run. Programs are
-                      keyed by cache capacity and chunk kind (first / cache-read / ragged), not by ISL, and
-                      compile() warms those three; iteration 0 still carries host-side first-call costs
+                      keyed by cache capacity, chunk kind (first / cache-read / ragged) and, with packed forwards,
+                      the forward width (a forward runs on its non-empty chunks, so the last one's width follows
+                      the ISL); compile() warms all of them. Iteration 0 still carries host-side first-call costs
                       (e.g. the MoE padding-config upload per new ragged tail), so 1 is a good default for perf
                                                                                                    [default 0]
-  PREFILL_COMPILE     "0" -> skip runtime.compile()'s three-variant warm-up entirely (then iteration 0 pays
-                      the program-cache misses)                                                    [default 1]
+  PREFILL_COMPILE     "0" -> skip runtime.compile()'s warm-up entirely (then iteration 0 pays the
+                      program-cache misses)                                                        [default 1]
   The chunk size (PREFILL_CHUNK_SIZE) is FIXED for the process: it is baked into the MoE dispatch
   buffers at build time. Multi-run mode is therefore chunked-only (PREFILL_CHUNKED=0 is rejected); a
   one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
@@ -449,7 +450,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     if capacity != runtime.config.max_seq_len or state["kv_cache"] is None:
         t0 = time.perf_counter()
         warm = (
-            "re-warming the 3 chunk program variants"
+            "re-warming the chunk program variants"
             if os.getenv("PREFILL_COMPILE", "1") != "0"
             else "no warm-up (PREFILL_COMPILE=0)"
         )

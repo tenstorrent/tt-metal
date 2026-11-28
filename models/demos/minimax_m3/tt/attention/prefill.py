@@ -130,7 +130,9 @@ def attention_forward(
         xqkv_fused.deallocate(True)
         if config.is_sparse:
             hidden_states.deallocate(True)
-        # Empty chunks (the tail) get zero rows; concatenating all chunks keeps one concat program per forward width.
+        # Empty chunks (the tail) get zero rows. TtPrefillRuntime.prefill_forward drops a forward's empty chunks
+        # before the layers, so only a direct Model call with empty chunks takes this; ttnn.concat hashes which
+        # inputs alias, so each count of empty chunks is a program of its own.
         empties = len(chunks) - len(real)
         zeros = ttnn.zeros_like(outs[0]) if empties else None
         tt_sdpa_out = ttnn.concat(outs + [zeros] * empties, dim=2)

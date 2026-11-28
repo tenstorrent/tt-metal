@@ -238,7 +238,7 @@ def _moe_with_recorder(monkeypatch, overlap):
         routing_setup=lambda **k: routing,
         dispatch_module=_Dispatch(),
         routed_expert=lambda *a: (log.append(("experts",)), _T("exp_out"))[1],
-        combine_module=lambda *a: (log.append(("combine",)), _T("combined"))[1],
+        combine_module=lambda *a, **k: (log.append(("combine",)), _T("combined"))[1],
         reduce_module=SimpleNamespace(num_links=2),
         overlap=_Overlap() if overlap else None,
     )

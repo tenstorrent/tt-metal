@@ -40,7 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, PrefillChunk, pad_chunks, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
@@ -172,6 +172,8 @@ class TtPrefillRuntime:
             sequence_parallel=True,
             use_ep_moe=self.config.use_ep_moe,
             ep_seq_len_per_chip=self.config.forward_tokens_budget // self.config.sp_factor,
+            # A forward with empty chunks runs at its real chunks' rows: a multiple of one chunk's rows per chip.
+            ep_chunk_len_per_chip=self.config.chunk_size // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
             first_layer_idx=self.config.first_layer_idx,
             layer_indices=self.config.layer_indices,
@@ -329,40 +331,85 @@ class TtPrefillRuntime:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
+    @staticmethod
+    def _row_prefix(t: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+        """Each chip's first ``rows`` rows; dim 2 is the sequence of both the token ids [1, 1, s] and the
+        activation [1, 1, s, emb]."""
+        start = [0] * len(t.shape)
+        end = list(t.shape)
+        end[2] = rows
+        return ttnn.slice(t, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    @staticmethod
+    def _pad_rows(t: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+        """Zero rows appended on dim 2 up to ``rows`` per chip (the D2D socket's full forward width)."""
+        pad = [(0, 0)] * len(t.shape)
+        pad[2] = (0, rows - t.shape[2])
+        out = ttnn.pad(t, pad, value=0.0)
+        ttnn.deallocate(t)
+        return out
+
     def compile(self, kv_cache) -> None:
         """Warm the program cache so no served forward pays a first-run JIT.
 
-        For a fixed cache capacity a chunk runs one of exactly THREE program sets per layer, so three warm-up
-        forwards cover the served loop: (i) the FIRST chunk (start == 0: no-cache attention variants,
+        For a fixed cache capacity and forward width a chunk runs one of THREE program sets per layer, so with one
+        chunk per forward three warm-up forwards cover the served loop (with more chunks per forward, every
+        narrower width too, see below): (i) the FIRST chunk (start == 0: no-cache attention variants,
         exact-size gathers), followed by cache-read chunks when forward_tokens_budget > chunk_size, (ii) a full
         CACHE-READ chunk (start > 0), (iii) a RAGGED chunk (end < start + chunk_size: the MoE padding-config
-        variant). (ii) and (iii) fill the rest of the forward with empty chunks (zero rows). Every
+        variant). (ii) and (iii) fill the rest of the forward with empty chunks. Every
         per-chunk offset — kv_actual / cached_len, logical_n, kv_len, chunk_start_idx, gathered_dim_size,
         slot — is a runtime argument excluded from the op hashes (update_padded_kv_cache, ring_joint SDPA with
         kv_actual_isl, indexer_score_msa, topk_large_indices valid_length, sparse_sdpa_msa,
         high_bw_all_gather), so sweeping every KV-length bucket (the previous behaviour: max_seq_len /
         chunk_size chunks, 196 at 1M) re-ran the same programs and still missed variant (iii). What IS hashed
         is the cache capacity itself (gather buffer shapes, sparse_sdpa T), which is why reconfigure_capacity()
-        invalidates this warm-up. The warm-up writes slots the real run overwrites."""
+        invalidates this warm-up. The warm-up writes slots the real run overwrites.
+
+        A forward of n non-empty chunks runs its layers at n chunks' width (prefill_forward), so (ii) and (iii)
+        run at one chunk's width. With forward_chunks > 1 the plan adds a lone FIRST chunk at one chunk's width,
+        full and ragged, and each width n = 2 .. forward_chunks with n first + cache-read chunks, full and with
+        the last chunk ragged ((i) is the full one at the full width). With one chunk per forward the plan is
+        (i)-(iii)."""
         assert self.model_built
         cfg = self.config
         chunk, n_chunks = cfg.chunk_size, cfg.forward_chunks
         per_slot = cfg.max_seq_len // chunk
         cache_read_start = chunk if per_slot >= 2 else 0
-        empty = PrefillChunk(slot_id=0, actual_start=0, actual_end=0)
 
         def fill(k):  # k-th chunk of filling slots 0, 1, ... in order; empty once every slot is full
             slot_id, i = divmod(k, per_slot)
-            return PrefillChunk(slot_id, i * chunk, (i + 1) * chunk) if slot_id < cfg.num_users else empty
+            return PrefillChunk(slot_id, i * chunk, (i + 1) * chunk) if slot_id < cfg.num_users else EMPTY_CHUNK
 
         plan = [
             [fill(k) for k in range(n_chunks)],
-            [PrefillChunk(0, cache_read_start, cache_read_start + chunk)] + [empty] * (n_chunks - 1),
-            [PrefillChunk(0, cache_read_start, cache_read_start + chunk // 2)] + [empty] * (n_chunks - 1),
+            pad_chunks([PrefillChunk(0, cache_read_start, cache_read_start + chunk)], n_chunks),
+            pad_chunks([PrefillChunk(0, cache_read_start, cache_read_start + chunk // 2)], n_chunks),
         ]
+        extra = []
+        if n_chunks > 1:  # a lone first chunk (start 0) at one chunk's width, full and ragged
+            extra += [pad_chunks([PrefillChunk(0, 0, chunk)], n_chunks)]
+            extra += [pad_chunks([PrefillChunk(0, 0, chunk // 2)], n_chunks)]
+        for width in range(n_chunks, 1, -1):  # widths forward_chunks .. 2
+            full = [fill(k) for k in range(width)]
+            last = full[-1]
+            if last.is_empty:
+                continue  # fewer slots than chunks: this width never occurs
+            ragged = full[:-1] + [PrefillChunk(last.slot_id, last.actual_start, last.actual_start + chunk // 2)]
+            extra += [pad_chunks(full, n_chunks), pad_chunks(ragged, n_chunks)]
+
+        def key(forward):
+            return tuple((c.slot_id, c.actual_start, c.actual_end) for c in forward)
+
+        # Skip repeats: (i) is the full width, and with a small cache (ii) is the lone first chunk.
+        seen = {key(forward) for forward in plan}
+        for forward in extra:
+            if key(forward) not in seen:
+                seen.add(key(forward))
+                plan.append(forward)
         logger.info(
             f"TtPrefillRuntime.compile() — warming first / cache-read / ragged forwards ({n_chunks} x {chunk}-token "
-            f"chunks, capacity {cfg.max_seq_len})"
+            f"chunks, capacity {cfg.max_seq_len}): {len(plan)} forwards"
         )
         t0 = time.perf_counter()
         for chunks in plan:
@@ -417,10 +464,11 @@ class TtPrefillRuntime:
         metadata_msg=None,
     ):
         """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` ``chunks`` (common/prefill/prefill_chunk.py) into the
-        engine-owned ``kv_cache``. Norms, projections and the MoE run once on all rows; the attention core
-        (RoPE, KV write, SP gathers, SDPA) runs per non-empty chunk against its slot_id. With ``skip_lm_head``
-        (the default) returns None — single-rank is headless, the populated cache is the output, read back
-        via ``gather_layer``; otherwise returns the LM-head logits (one-chunk forwards only).
+        engine-owned ``kv_cache``. The layers run on the non-empty chunks' rows only (the empty chunks are the
+        tail, so their rows are dropped): norms, projections and the MoE run once on those rows; the attention
+        core (RoPE, KV write, SP gathers, SDPA) runs per non-empty chunk against its slot_id. With
+        ``skip_lm_head`` (the default) returns None — single-rank is headless, the populated cache is the output,
+        read back via ``gather_layer``; otherwise returns the LM-head logits (one-chunk forwards only).
 
         Each chunk's [actual_start, actual_end) is the absolute KV-position range of its real tokens:
         actual_start is the cache write offset (the valid prefix already cached) and actual_end is past the last
@@ -438,8 +486,9 @@ class TtPrefillRuntime:
         Args:
             input_tensor: on the first rank, this forward's SP-sharded uint32 token tensor (make_forward_input
                 or the H2D socket), embedded on device here then deallocated. On a non-first rank, the
-                hidden-state activation handed over the D2D socket — used directly (the first decoder layer
-                consumes/frees it), NOT embedded.
+                hidden-state activation handed over the D2D socket at the full forward width, NOT embedded:
+                used directly (the first decoder layer consumes/frees it), or, when the forward has empty
+                chunks, its non-empty chunks' rows are sliced off and the full-width tensor is freed here.
             kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the chunks'
                 KV is written into it. The same object is passed on every call.
             chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
@@ -467,13 +516,34 @@ class TtPrefillRuntime:
         )
         assert skip_lm_head or len(chunks) == 1, "a packed forward is headless (KV only)"
 
+        # The empty chunks are the tail (validate_chunks) and every SP chip holds the chunks back to back, so the
+        # real rows are each chip's first n_real * chunk_local rows. The layers run on those rows and the
+        # non-empty chunks only; a forward of n_real chunks costs about what a runtime built for n_real costs.
+        chunk_rows = cfg.chunk_size // cfg.sp_factor
+        n_real = sum(1 for c in chunks if not c.is_empty)
+        has_empty = n_real < len(chunks)
+        layer_chunks = chunks[:n_real]
+        rows, full_rows = n_real * chunk_rows, len(chunks) * chunk_rows
+
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
         if cfg.is_first_rank:
-            x_embd = self._embed_tokens(input_tensor)
+            tokens = self._row_prefix(input_tensor, rows) if has_empty else input_tensor
+            x_embd = self._embed_tokens(tokens)
+            ttnn.deallocate(input_tensor)
+            if has_empty:
+                ttnn.deallocate(tokens)
+        elif has_empty:
+            # The first decoder layer frees its input; the full-width activation is freed here instead.
+            x_embd = self._row_prefix(input_tensor, rows)
             ttnn.deallocate(input_tensor)
         else:
             x_embd = input_tensor
+        # The attention splits the rows into len(chunks) equal blocks and the MoE padding config counts each
+        # block's real rows (tt/attention/prefill.py, tt/packed_rows.py): rows and chunks must agree.
+        assert (
+            x_embd.shape[2] == len(layer_chunks) * chunk_rows
+        ), f"{x_embd.shape[2]} rows per chip for {len(layer_chunks)} chunks of {chunk_rows}"
 
         # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks each chunk's rows
         # on-device from kv_actual_global (= the chunk's actual_start, threaded via indexed_rope=True). No per-chunk
@@ -512,10 +582,13 @@ class TtPrefillRuntime:
             # Each chunk's real-token range drives its attention core and the MoE padding config. Without
             # the ranges the padded tails are routed and dispatched as if real: wasted dispatch work that
             # also eats per-expert dispatch-buffer capacity.
-            chunks=chunks,
+            chunks=layer_chunks,
         )
         if not cfg.is_last_rank:
-            # Middle rank: hand the slice's output hidden state to the next rank.
+            # Middle rank: hand the slice's output hidden state to the next rank, at the D2D socket's full
+            # forward width (the empty chunks become zero rows).
+            if has_empty:
+                out = self._pad_rows(out, full_rows)
             return out
         if skip_lm_head:
             if out is not None:

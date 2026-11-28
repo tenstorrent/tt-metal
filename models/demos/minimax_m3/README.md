@@ -235,8 +235,8 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 | `PREFILL_GOLDEN_ROOT` | `dirname(PREFILL_TRACE_DIR)`, else the variant's golden dir | Directory bare `trace=` names resolve under. |
 | `PREFILL_MAX_SEQ_LEN` | unset (fit) | Multi-run only: pin the KV-cache capacity for runs without `capacity=`; unset fits the cache to each run's padded length (re-allocates cache + rebuilds RoPE, no weight reload). On a 1D fabric the MSA index_k gather moves close to the whole slot capacity per chunk, so an over-sized cache costs time. |
 | `PREFILL_ISL` | trace length | Prefill N tokens: the trace's real tokens tiled cyclically (truncated if shorter). KV PCC still checks the first `min(N, trace)` tokens. Per-spec `isl=` overrides. |
-| `PREFILL_WARMUP_ITERS` | `0` | Untimed whole-sequence passes before the timed iterations (iteration 0 carries the per-ISL JIT). |
-| `PREFILL_COMPILE` | `1` | `0` = skip `compile()`'s warm-up (three forward variants: first / cache-read / ragged; per-chunk offsets are runtime args, so no per-ISL JIT exists). |
+| `PREFILL_WARMUP_ITERS` | `0` | Untimed whole-sequence passes before the timed iterations (iteration 0 carries host-side first-call costs). |
+| `PREFILL_COMPILE` | `1` | `0` = skip `compile()`'s warm-up. With one chunk per forward it runs three forwards (first / cache-read / ragged chunk); with more chunks per forward it also runs every narrower forward width, because a forward runs its layers only on its non-empty chunks, so the last forward's width depends on the prompt length. Per-chunk offsets are runtime args. |
 | `PREFILL_RESULTS_JSONL` | unset | Append one JSON line per run (perf, min PCC, status). |
 
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
