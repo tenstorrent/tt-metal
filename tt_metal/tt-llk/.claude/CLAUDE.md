@@ -63,6 +63,15 @@ Trigger examples for `arch-lookup`:
 - **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
 - **Literal arguments in HAL**: prefer existing named constants or enums for hardware modes. Otherwise, label numeric and boolean arguments in function/instruction calls and template instantiations with the declared parameter name immediately after the literal: `0 /*Shamt*/`, `false /*IsSrcB*/`, `wait(1 /*cycles*/)`. Declarations/defaults, arithmetic, assertions, and descriptor tables with a documented field layout need no redundant labels.
 
+### Quasar: no TRISC-side GPR reads in hot loops
+
+Do not read a Tensix GPR (`ckernel::regfile[...]`) from TRISC code in a per-tile or other hot loop. Keep the value in a `thread_local` in TRISC local memory instead, as PR #66587 does for `TILE_SHAPE_IDX`.
+- A TRISC read of a GPR is a request into the Tensix instruction engine, not a memory load. It costs about 6 cycles, against about 3 for local memory.
+- A GPR read issued while a MOP or REPLAY is still expanding waits until it finishes, because both count as GPR writers. LLK math is MOP-driven, so this stall lands on every tile.
+- Use local memory, not L1. A repeated L1 read is fast only while it hits the TRISC's small data cache; an L1 read that misses is slower than a GPR read.
+- A local copy is valid only when the TRISC is the sole writer of the value. If Tensix instructions write the GPR, the copy goes stale.
+- Do not disable GPR sync to avoid the stall; it keeps the read ordered after older GPR writes.
+
 ### Documentation
 
 We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@param`, `@tparam`, `@ref`, `@note`), with an imperative `@note` (plus `@ref`) encoding the init/execute/uninit contract and pairing the per-thread (T0/T1/T2) halves of an op. Do not use `@pre`/`@post` (they imply guarantees, but our contract is an imperative the caller must satisfy). Avoid bloat tags (`@details`, `@author`, `@date`, `@version`, `@todo`, `@remark`, and `@return` on void functions). Applies to LLK lib (`_llk_*`), LLK API (`llk_*`), and the Compute API (`tt_metal/hw/inc/api/compute/`) — the Compute API keeps its published prose+table format (it feeds the public Sphinx docs), not `@param` tags.
