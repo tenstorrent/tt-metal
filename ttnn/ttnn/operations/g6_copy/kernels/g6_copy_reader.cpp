@@ -17,7 +17,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_copy_stage_zones.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "g6_copy_page_walk.hpp"
 
@@ -48,11 +48,11 @@ void kernel_main() {
             // The nominal block_pages is reserved and pushed even on a short last block, so the ring
             // (capacity cb_depth_blocks * block_pages) never wraps inside a block.
             {
-                DeviceZoneScopedN("G6C-RD-RESERVE");
+                G6C_STAGE_ZONE("G6C-RD-RESERVE");
                 cb_reserve_back(cb_page_staging, block_pages);
             }
             {
-                DeviceZoneScopedN("G6C-RD-ISSUE");
+                G6C_STAGE_ZONE("G6C-RD-ISSUE");
                 g6_copy::walk_block<true>(
                     src,
                     block_first,
@@ -63,11 +63,11 @@ void kernel_main() {
                     get_write_ptr(cb_page_staging));
             }
             {
-                DeviceZoneScopedN("G6C-RD-BARRIER");
+                G6C_STAGE_ZONE("G6C-RD-BARRIER");
                 noc_async_read_barrier();
             }
             {
-                DeviceZoneScopedN("G6C-RD-PUSH");
+                G6C_STAGE_ZONE("G6C-RD-PUSH");
                 cb_push_back(cb_page_staging, block_pages);
             }
             block_first += block_len;
@@ -87,13 +87,13 @@ void kernel_main() {
     for (uint32_t k = 0; k < num_blocks; ++k) {
         const uint32_t trid = (k % read_trids) + 1;
         if (k >= read_trids) {
-            DeviceZoneScopedN("G6C-RD-RETIRE");
+            G6C_STAGE_ZONE("G6C-RD-RETIRE");
             dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid);  // block k - read_trids
             cb_push_back(cb_page_staging, block_pages);
         }
         const uint32_t in_flight = k < read_trids - 1 ? k : read_trids - 1;
         {
-            DeviceZoneScopedN("G6C-RD-RESERVE");
+            G6C_STAGE_ZONE("G6C-RD-RESERVE");
             cb_reserve_back(cb_page_staging, (in_flight + 1) * block_pages);
         }
         uint32_t slot = get_write_ptr(cb_page_staging) - ring_base + in_flight * block_bytes;
@@ -102,7 +102,7 @@ void kernel_main() {
         }
         const uint32_t block_len = pages_left < block_pages ? pages_left : block_pages;
         {
-            DeviceZoneScopedN("G6C-RD-ISSUE");
+            G6C_STAGE_ZONE("G6C-RD-ISSUE");
             dataflow_kernel_lib::set_read_trid(noc, trid);
             g6_copy::walk_block<true>(
                 src, block_first, block_len, walk_rotation, bank_major, tensor_pages, ring_base + slot);
@@ -113,7 +113,7 @@ void kernel_main() {
     // Drain the outstanding blocks oldest first, in issue order.
     const uint32_t outstanding = num_blocks < read_trids ? num_blocks : read_trids;
     for (uint32_t k = num_blocks - outstanding; k < num_blocks; ++k) {
-        DeviceZoneScopedN("G6C-RD-RETIRE");
+        G6C_STAGE_ZONE("G6C-RD-RETIRE");
         dataflow_kernel_lib::async_read_barrier_with_trid(noc, (k % read_trids) + 1);
         cb_push_back(cb_page_staging, block_pages);
     }

@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_copy_stage_zones.hpp"
 #include "g6_copy_page_walk.hpp"
 
 void kernel_main() {
@@ -32,21 +32,21 @@ void kernel_main() {
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t block_len = pages_left < block_pages ? pages_left : block_pages;
         {
-            DeviceZoneScopedN("G6C-WR-WAIT");
+            G6C_STAGE_ZONE("G6C-WR-WAIT");
             cb_wait_front(cb_page_staging, block_pages);
         }
         {
-            DeviceZoneScopedN("G6C-WR-ISSUE");
+            G6C_STAGE_ZONE("G6C-WR-ISSUE");
             g6_copy::walk_block<false>(
                 dst, block_first, block_len, walk_rotation, bank_major, tensor_pages, get_read_ptr(cb_page_staging));
         }
         // The slot may be refilled by the reader once popped, so its bytes must have left L1 first.
         {
-            DeviceZoneScopedN("G6C-WR-FLUSH");
+            G6C_STAGE_ZONE("G6C-WR-FLUSH");
             noc_async_writes_flushed();
         }
         {
-            DeviceZoneScopedN("G6C-WR-POP");
+            G6C_STAGE_ZONE("G6C-WR-POP");
             cb_pop_front(cb_page_staging, block_pages);
         }
         block_first += block_len;
@@ -55,7 +55,7 @@ void kernel_main() {
 
     // The next program starts right after this one; no write may still be in flight.
     {
-        DeviceZoneScopedN("G6C-WR-DRAIN");
+        G6C_STAGE_ZONE("G6C-WR-DRAIN");
         noc_async_write_barrier();
     }
 }

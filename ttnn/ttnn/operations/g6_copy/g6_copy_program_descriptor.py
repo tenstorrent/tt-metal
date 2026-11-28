@@ -8,6 +8,7 @@ The module-level knobs are read at call time (tests override them with monkeypat
 of the descriptor cache key.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +48,16 @@ BANK_AFFINITY = False
 BANK_STAGGER = True
 
 CB_PAGE_STAGING = 0
+
+# Per-stage device zones (kernels/g6_copy_stage_zones.hpp). Off by default: an executed zone costs
+# ~51 cycles on the reader -> writer critical path, which was the whole loss to stock ttnn.copy on the
+# 1-page cells. G6_COPY_STAGE_ZONES=1 compiles them in for a per-stage breakdown (read at call time).
+STAGE_ZONES_ENV = "G6_COPY_STAGE_ZONES"
+
+
+def _stage_zones():
+    return os.environ.get(STAGE_ZONES_ENV, "0") == "1"
+
 
 READER_KERNEL = "g6_copy_reader.cpp"
 WRITER_KERNEL = "g6_copy_writer.cpp"
@@ -211,6 +222,7 @@ def _kernel(source, tensor, plan, config):
         compile_time_args=[CB_PAGE_STAGING, *accessor_args.get_compile_time_args()],
         runtime_args=runtime_args,
         common_runtime_args=common_runtime_args,
+        defines=[("G6C_STAGE_ZONES", "1")] if _stage_zones() else [],
         config=config,
     )
 
@@ -257,6 +269,7 @@ def get_program_descriptor(input_tensor, output_tensor):
         READ_TRIDS,
         BANK_AFFINITY,
         BANK_STAGGER,
+        _stage_zones(),
     )
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
