@@ -6,8 +6,10 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/shard_data_transfer.hpp>
 #include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <tt-metalium/execution/mesh_command_queue.hpp>
 
@@ -34,5 +36,25 @@ void enqueue_write_tensor(
     const std::byte* src,
     MeshTensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
+
+namespace experimental {
+
+// Experimental: subject to change without notice.
+
+// MeshCommandQueue::enqueue_read_shards / enqueue_write_shards on the buffer of ``device_tensor``, which callers
+// outside tt_metal cannot reach. Unlike the single-device APIs above, these take any shards of any mesh.
+void enqueue_read_shards(
+    distributed::MeshCommandQueue& queue,
+    const MeshTensor& device_tensor,
+    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    bool blocking = true);
+
+void enqueue_write_shards(
+    distributed::MeshCommandQueue& queue,
+    MeshTensor& device_tensor,
+    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    bool blocking = true);
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal

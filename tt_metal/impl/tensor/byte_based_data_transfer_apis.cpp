@@ -35,4 +35,24 @@ void enqueue_write_tensor(
     queue.enqueue_write_shards(device_tensor.impl().raw_mesh_buffer(), shard_data_transfers, false);
 }
 
+namespace experimental {
+
+void enqueue_read_shards(
+    distributed::MeshCommandQueue& queue,
+    const MeshTensor& device_tensor,
+    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    bool blocking) {
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.impl().raw_mesh_buffer(), blocking);
+}
+
+void enqueue_write_shards(
+    distributed::MeshCommandQueue& queue,
+    MeshTensor& device_tensor,
+    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    bool blocking) {
+    queue.enqueue_write_shards(device_tensor.impl().raw_mesh_buffer(), shard_data_transfers, blocking);
+}
+
+}  // namespace experimental
+
 }  // namespace tt::tt_metal

@@ -148,7 +148,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    // ``src`` holds the region's bytes only, as in fast dispatch: it starts at the region's first byte.
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src), region_value.size);
     // Timed per shard, after wait_for_cores_idle(), so the time is the transfer alone.
     ScopedHostTransfer transfer_stats(
         host_transfer_stats_,

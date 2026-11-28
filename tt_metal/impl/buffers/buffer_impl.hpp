@@ -67,6 +67,9 @@ public:
         size_t unique_id);
 
     std::shared_ptr<Buffer> view(Buffer& self, const BufferRegion& region);
+    // Throws unless view() accepts ``region``: whole pages, inside the buffer, and the whole buffer when per-core
+    // allocated.
+    void validate_view_region(const BufferRegion& region) const;
 
     bool is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }
     HalMemType memory_type() const;
