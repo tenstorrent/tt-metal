@@ -4,16 +4,20 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include <utility>
 
 #include "ckernel_instr_params.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_assert.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_operand.h"
 #include "sfpu_impl.h"
+
+// SrcS op type, the SrcS twin of ckernel_sfpu_dest.h: SfpuSrcsOp<MATH, LAYOUT> runs any math policy on SrcS slices.
+// An op with a LoadMacro version specializes SfpuSrcsOp next to its math.
 
 namespace ckernel::sfpu {
 
@@ -37,18 +41,18 @@ struct SrcsLayout {
         rows > 0 && rows % static_cast<int>(ckernel::math::SFP_ROWS) == 0, "SrcS slice must contain whole SFPU passes");
 
     static constexpr int ops = rows / static_cast<int>(ckernel::math::SFP_ROWS);
-    static constexpr int in0 = 0;
-    static constexpr int in1 = ops;
-    static constexpr int out = 2 * ops;
+    static constexpr int slices = static_cast<int>(trisc::srcs_dims::slice_count(is_32bit));  // of one 32x32 tile
+    static constexpr int inputs = 2;  // input slices ahead of the output slice
+    static constexpr int out = inputs * ops;
+
+    /** @brief Slot of input @p index: inputs fill the slices in order. */
+    static constexpr int input(const int index) { return index * ops; }
 
     // SrcS register format (unpack destination = pack source) implied by the layout.
     static constexpr DataFormat format = LAYOUT == sfpi::DataLayout::F32    ? DataFormat::Float32
                                          : LAYOUT == sfpi::DataLayout::I32  ? DataFormat::Int32
                                          : LAYOUT == sfpi::DataLayout::F16a ? DataFormat::Float16
                                                                             : DataFormat::Float16_b;
-
-    // SFPI vector type the layout loads into.
-    using value_type = std::conditional_t<LAYOUT == sfpi::DataLayout::I32, sfpi::vInt, sfpi::vFloat>;
 
     // SFPLOAD/SFPSTORE format code, for the SFPLOADMACRO path.
     static constexpr std::uint32_t sfpmem = LAYOUT == sfpi::DataLayout::F32    ? p_sfpu::sfpmem::FP32
@@ -58,59 +62,56 @@ struct SrcsLayout {
 };
 
 /**
- * @brief CRTP base for unary SrcS ops; Op supplies calculate().
+ * @brief CRTP base of a SrcS op: the SFPU-thread pipeline that unpacks L1_INPUTS inputs from L1 into SrcS, runs the
+ *        op and packs the result to L1. Op supplies Layout, calculate() and optionally init_op() and
+ *        hw_clears_valids.
  *
- * @note init() and run() are defined in llk_sfpu_srcs_api.h; include it to use them.
+ * @tparam Op: The op type deriving from this base.
+ * @tparam L1_INPUTS: Number of inputs unpacked from L1, values = <1/2>
+ * @note The functions are defined in llk_sfpu_srcs_api.h; include it to use them. Call init() once, then unpack()
+ *       and pack() to set the L1 buffers and run() for the tiles in them.
  */
+template <typename Op, int L1_INPUTS>
+struct SfpuSrcsOpBase {
+    static_assert(sizeof(Op) == 0, "SrcS has no pipeline for an SFPU op with this many L1 inputs");
+};
+
+/** @brief What every SrcS pipeline shares. */
 template <typename Op>
-struct SfpuSrcsUnaryOp {
+struct SfpuSrcsOpCommon {
     // True when the op's own instructions release the SrcS banks (SFPLOADMACRO).
     static constexpr bool hw_clears_valids = false;
 
     static void init_op() {}
 
-    // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
-    template <std::uint8_t INSTRN_COUNT = 1>
+    // Set the L1 buffer packer 1 packs the result to.
+    static void pack(const std::uint32_t l1_addr_16B, const DataFormat l1_format);
+};
+
+template <typename Op>
+struct SfpuSrcsOpBase<Op, 1> : SfpuSrcsOpCommon<Op> {
+    // Set up unpacker 2, packer 1, the SFPU and the op. Once.
+    static void init();
+
+    // init(), unpack() and pack() in one call.
     static void init(
         const std::uint32_t l1_in_addr_16B,
         const DataFormat l1_in_format,
         const std::uint32_t l1_out_addr_16B,
         const DataFormat l1_out_format);
 
-    template <std::uint8_t INSTRN_COUNT = 1>
-    static void run(const std::uint32_t num_tiles);
+    // Set the L1 buffer unpacker 2 unpacks the input from.
+    static void unpack(const std::uint32_t l1_addr_16B, const DataFormat l1_format);
+
+    // Unpack, run the op and pack num_tiles consecutive tiles of the buffers unpack() and pack() set.
+    static void run(const std::uint32_t num_tiles = 1);
 };
 
-/** @brief Unary SrcS op. Sfpi serves every MATH; LoadMacro versions are specialized next to the op. */
-template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
-struct SrcsUnary {
-    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
-};
-
-template <typename MATH, sfpi::DataLayout LAYOUT>
-struct SrcsUnary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH, LAYOUT, SfpuImpl::Sfpi>> {
-    using Layout = SrcsLayout<LAYOUT>;
-
-    sfpi_inline static void calculate() {
-        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, typename Layout::value_type>>;
-        calculate_unary_operands<MATH, Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
-    }
-};
-
-/**
- * @brief CRTP base for binary SrcS ops; both inputs share formats.
- *
- * @note init() and run() are defined in llk_sfpu_srcs_api.h; include it to use them.
- */
+// Both inputs share the L1 format.
 template <typename Op>
-struct SfpuSrcsBinaryOp {
-    // True when the op's own instructions release the SrcS banks (SFPLOADMACRO).
-    static constexpr bool hw_clears_valids = false;
+struct SfpuSrcsOpBase<Op, 2> : SfpuSrcsOpCommon<Op> {
+    static void init();
 
-    static void init_op() {}
-
-    // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
-    template <std::uint8_t INSTRN_COUNT = 1>
     static void init(
         const std::uint32_t l1_in0_addr_16B,
         const std::uint32_t l1_in1_addr_16B,
@@ -118,91 +119,95 @@ struct SfpuSrcsBinaryOp {
         const std::uint32_t l1_out_addr_16B,
         const DataFormat l1_out_format);
 
-    template <std::uint8_t INSTRN_COUNT = 1>
-    static void run(const std::uint32_t num_tiles);
+    static void unpack(
+        const std::uint32_t l1_in0_addr_16B, const std::uint32_t l1_in1_addr_16B, const DataFormat l1_format);
+
+    static void run(const std::uint32_t num_tiles = 1);
 };
 
-/** @brief Binary SrcS op; only Sfpi exists. */
-template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
-struct SrcsBinary {
+/**
+ * @brief SrcS op type: out = MATH(inputs...) over one slice, for any math policy. An op specializes this type next
+ *        to its math for a LoadMacro version and declares it with @ref srcs_has_loadmacro.
+ *
+ * @tparam MATH: Math policy; MATH::value_type is the vector type its inputs load into.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the slices.
+ * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
+ * @note Call init() once before the first tile.
+ */
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+struct SfpuSrcsOp {
     static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
 };
 
 template <typename MATH, sfpi::DataLayout LAYOUT>
-struct SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi>> {
+struct SfpuSrcsOp<MATH, LAYOUT, SfpuImpl::Sfpi>
+    : SfpuSrcsOpBase<SfpuSrcsOp<MATH, LAYOUT, SfpuImpl::Sfpi>, math_arity<MATH>> {
     using Layout = SrcsLayout<LAYOUT>;
+    static_assert(
+        std::is_same_v<typename MATH::value_type, layout_value_t<LAYOUT>>,
+        "this SFPU op does not take tiles of this SrcS layout");
+    static_assert(math_arity<MATH> <= Layout::inputs, "SrcS has input slices for two operands");
 
-    sfpi_inline static void calculate() {
-        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, typename Layout::value_type>>;
-        calculate_binary_operands<MATH, Layout::ops>(Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::out});
+    sfpi_inline static void calculate() { calculate(std::make_index_sequence<math_arity<MATH>>{}); }
+
+private:
+    template <std::size_t... INPUT>
+    sfpi_inline static void calculate(std::index_sequence<INPUT...>) {
+        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
+        calculate_operands<MATH, Layout::ops>(
+            math_setup<MATH>(), Operand{Layout::out}, Operand{Layout::input(static_cast<int>(INPUT))}...);
     }
 };
 
-namespace detail {
-
-// MATH of a SrcS op shape.
-template <typename Op>
-struct srcs_op_math;
-template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
-struct srcs_op_math<SrcsUnary<MATH, LAYOUT, IMPL>> {
-    using type = MATH;
-};
-template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
-struct srcs_op_math<SrcsBinary<MATH, LAYOUT, IMPL>> {
-    using type = MATH;
-};
-
-// Vector type OP<LAYOUT>'s math computes on (MATH::value_type).
-template <template <sfpi::DataLayout> class OP, sfpi::DataLayout LAYOUT>
-using srcs_op_value_t = typename srcs_op_math<OP<LAYOUT>>::type::value_type;
-
-}  // namespace detail
+/** @brief True for a MATH that has a LoadMacro SfpuSrcsOp specialization; set next to that specialization. */
+template <typename MATH>
+inline constexpr bool srcs_has_loadmacro = false;
 
 /**
- * @brief True when OP<LAYOUT>'s math computes on the vector type LAYOUT loads into.
+ * @brief The SrcS op type of an op tag on a layout. I32 slices are sign-magnitude (@ref IntEncoding).
  *
- * Only names OP<LAYOUT>; its calculate() is never instantiated, so a float op may be queried for I32.
+ * @tparam OP: Op tag (ckernel::op).
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the slices, see @ref sfpu_layout.
+ * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
  */
-template <template <sfpi::DataLayout> class OP, sfpi::DataLayout LAYOUT>
-constexpr bool srcs_op_supports =
-    std::is_same_v<detail::srcs_op_value_t<OP, LAYOUT>, typename SrcsLayout<LAYOUT>::value_type>;
+template <typename OP, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using srcs_op_t =
+    SfpuSrcsOp<math_for_t<OP, LAYOUT>, LAYOUT, resolve_sfpu_impl<IMPL, srcs_has_loadmacro<math_for_t<OP, LAYOUT>>>()>;
 
 /**
- * @brief Call fn(OP<LAYOUT>{}) for the LAYOUT matching the runtime SrcS format, once outside the tile loop.
+ * @brief SrcS op type whose first input is a Dest tile: out = MATH(dest, in), in from L1, out to L1.
  *
- * Only the layouts OP supports are compiled in (@ref srcs_op_supports). The SrcS register format is the
- * unpack destination and the pack source; both are passed so a mismatch is caught here.
- *
- * @note Test-harness helper: formats are runtime values there. Kernels with compile-time formats use OP<LAYOUT>
- * directly.
+ * @tparam MATH: Two-input float math policy.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the SrcS slices.
+ * @tparam DEST_LAYOUT: SFPLOAD format of the Dest tile.
+ * @note The SFPU thread must hold the Dest loan (_llk_tile_regs_borrow_) around run().
  */
-template <template <sfpi::DataLayout> class OP, typename Fn>
-sfpi_inline void dispatch_sfpu_srcs_op(
-    const DataFormat unpack_S_dst_format, const DataFormat pack_S_src_format, Fn&& fn) {
-    LLK_ASSERT(
-        unpack_S_dst_format == pack_S_src_format,
-        "SrcS ops require matching unpack destination and pack source formats");
-    bool handled = false;
-    const auto try_layout = [&](auto op) {
-        using Op = decltype(op);
-        if (unpack_S_dst_format == Op::Layout::format) {
-            fn(op);
-            handled = true;
-        }
-    };
-    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::F16a>) {
-        try_layout(OP<sfpi::DataLayout::F16a>{});
+template <typename MATH, sfpi::DataLayout LAYOUT, sfpi::DataLayout DEST_LAYOUT>
+struct SfpuSrcsDestOp : SfpuSrcsOpBase<SfpuSrcsDestOp<MATH, LAYOUT, DEST_LAYOUT>, 1 /*L1_INPUTS*/> {
+    using Layout = SrcsLayout<LAYOUT>;
+    static_assert(math_arity<MATH> == 2, "this SrcS op takes one Dest tile and one input from L1");
+    static_assert(
+        std::is_same_v<typename MATH::value_type, sfpi::vFloat> &&
+            std::is_same_v<layout_value_t<LAYOUT>, sfpi::vFloat> &&
+            std::is_same_v<layout_value_t<DEST_LAYOUT>, sfpi::vFloat>,
+        "a Dest input is supported for float ops: Int32 is encoded differently in Dest and SrcS");
+
+    // One slice; dest_step is the SFPI step of its first row in the lent Dest section.
+    sfpi_inline static void calculate(const int dest_step) {
+        using Srcs = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+        using Dest = SfpuOperand<SfpuReg::Dest, SfpiFormat<DEST_LAYOUT, sfpi::vFloat>>;
+        calculate_operands<MATH, Layout::ops>(
+            math_setup<MATH>(), Srcs{Layout::out}, Dest{dest_step}, Srcs{Layout::input(0)});
     }
-    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::F16b>) {
-        try_layout(OP<sfpi::DataLayout::F16b>{});
-    }
-    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::F32>) {
-        try_layout(OP<sfpi::DataLayout::F32>{});
-    }
-    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::I32>) {
-        try_layout(OP<sfpi::DataLayout::I32>{});
-    }
-    LLK_ASSERT(handled, "SrcS format not supported by this op");
-}
+
+    // Run the op on Dest tile dst_index and one tile of the buffers unpack() and pack() set. DST_SYNC and DST_ACCUM
+    // (true for a 32-bit Dest) bound the Dest index.
+    template <DstSync DST_SYNC, bool DST_ACCUM>
+    static void run(const DstIndex dst_index);
+};
+
+/** @brief The @ref SfpuSrcsDestOp of an op tag. */
+template <typename OP, sfpi::DataLayout LAYOUT, sfpi::DataLayout DEST_LAYOUT>
+using srcs_dest_op_t = SfpuSrcsDestOp<math_for_t<OP, LAYOUT>, LAYOUT, DEST_LAYOUT>;
 
 }  // namespace ckernel::sfpu

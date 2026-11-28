@@ -2667,8 +2667,7 @@ bool is_close_packed_sfpu_output(
     if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || is_exact_float_binary_op(op_name) ||
         (is_quant_binary_sfpu_op(op_name) && op_name != "dequant") || op_name == "rsub_binary_rne" ||
         op_name == "binary_max" || op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" ||
-        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose" ||
-        op_name.starts_with("fill_rows_")) {
+        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose" || op_name.starts_with("fill_rows_")) {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -3284,8 +3283,9 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     const bool is_relu_family =
         test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     TT_FATAL(
-        !is_fp32 || is_relu_family || test_config.sfpu_op == "datacopy" || test_config.sfpu_op == "exp_exact_c",
-        "Float32 SFPU path supports relu / relu_min / relu_max / datacopy / exp_exact_c only in v1");
+        !is_fp32 || is_relu_family || test_config.sfpu_op == "datacopy" || test_config.sfpu_op == "exp_exact_c" ||
+            test_config.sfpu_op == "exponential",
+        "Float32 SFPU path supports relu / relu_min / relu_max / datacopy / exp_exact_c / exponential only in v1");
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const int seed = sfpu_test_seed;
@@ -5727,6 +5727,48 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
                     num_tiles,
                     dst_full_sync_en ? "SyncFull" : "SyncHalf");
                 run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
+        }
+    }
+}
+
+// SfpuOp tile() on Dest (api/compute/experimental/sfpu.h), tile format taken from the DFB: the exp pipeline of
+// QuasarSfpuUnpackToDest16b with sfpu_exp_dest_quasar.cpp, on a 16-bit and a 32-bit Dest.
+void run_quasar_sfpu_op_type_exp_dest(
+    distributed::MeshDevice& dev, size_t num_tiles, bool en_32bit_dest, bool dst_full_sync_en) {
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    const tt::DataFormat fmt = en_32bit_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    unit_tests::compute::sfpu::SfpuConfig cfg{
+        .num_tiles = num_tiles,
+        .tile_byte_size = (en_32bit_dest ? 4u : 2u) * 32 * 32,
+        .l1_input_data_format = fmt,
+        .l1_output_data_format = fmt,
+        .cores = core_range_set,
+        .sfpu_op = "exponential",
+        .approx_mode = false,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest = true,
+        .en_32bit_dest = en_32bit_dest,
+        .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/sfpu_exp_dest_quasar.cpp",
+    };
+    log_info(
+        tt::LogTest,
+        "Quasar SFPU op type exp on Dest: {} num_tiles={} {}",
+        en_32bit_dest ? "Float32" : "Float16_b",
+        num_tiles,
+        dst_full_sync_en ? "SyncFull" : "SyncHalf");
+    EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuOpTypeExpDest) {
+    for (const bool en_32bit_dest : {false, true}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            for (const uint32_t num_tiles : {1u, 4u}) {
+                SCOPED_TRACE(
+                    std::string(en_32bit_dest ? "Float32" : "Float16_b") + " num_tiles=" + std::to_string(num_tiles) +
+                    (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+                run_quasar_sfpu_op_type_exp_dest(this->device(), num_tiles, en_32bit_dest, dst_full_sync_en);
             }
         }
     }

@@ -19,20 +19,6 @@
 namespace ckernel {
 namespace sfpu {
 
-/** @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set. */
-template <
-    bool EN_32BIT_DEST,
-    DstRoundingMode dst_rounding_mode,
-    sfpi::DataLayout LAYOUT,
-    int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
-using AddDest = DestBinary<
-    AddFloatMath,
-    LAYOUT,
-    DestBf16RneFormat<!EN_32BIT_DEST && dst_rounding_mode == DstRoundingMode::NearestEven, LAYOUT>,
-    ITERATIONS,
-    TILE_SHAPE>;
-
 // True when calculate_sfpu_binary_two_row can serve the call: a single-instruction op with no
 // software rounding after it, over an even row count. An odd ITERATIONS takes the one-row body
 // instead; every caller passes 8 rows per face.
@@ -127,7 +113,7 @@ inline void calculate_sfpu_binary(
     constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
     if constexpr (BINOP == BinaryOp::ADD && !round_to_bf16_rne) {
         // Through the op type, with the implied (Default) format; it walks two rows per iteration itself.
-        AddDest<is_fp32_dest_acc_en, dst_rounding_mode, sfpi::DataLayout::Default, ITERATIONS, TILE_SHAPE>::calculate(
+        SfpuDestOp<AddFloatMath<>, sfpi::DataLayout::Default, ITERATIONS, TILE_SHAPE>::calculate(
             dst_index_in0, dst_index_in1, dst_index_out);
         return;
     }

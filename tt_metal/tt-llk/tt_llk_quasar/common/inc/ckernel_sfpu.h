@@ -82,14 +82,24 @@ inline void _llk_math_sfpu_inc_dst_face_addr_()
     _inc_dst_addr_<16>();
 }
 
+// The op whose init ran last on this thread, as an address that names it; null after any other SFPU init. A caller
+// sets it after its own init and can assert later that it still holds its address.
+#ifdef ENV_LLK_INFRA
+inline const void* sfpu_init_owner = nullptr;
+#else
+inline thread_local const void* sfpu_init_owner = nullptr;
+#endif
+
 /**
  * @brief Initialization for SFPU operations
+ * @note Clears @ref sfpu_init_owner: an op that recorded its init there must be initialized again after this.
  */
 inline void _llk_math_sfpu_init_()
 {
     _init_sfpu_config_reg_();
     _sfpu_configure_addrmod_();
     _reset_counters_<p_setrwc::SET_ABD_F>();
+    sfpu_init_owner = nullptr;
 }
 
 } // namespace ckernel

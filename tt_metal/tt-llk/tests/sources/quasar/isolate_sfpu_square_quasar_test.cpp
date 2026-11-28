@@ -38,6 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
+#include "sfpu_srcs_test_helpers.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -54,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     // The SrcS layout is known only at runtime; one dispatch picks the op type for init and run.
-    dispatch_sfpu_srcs_op<SquareSrcs>(
+    dispatch_sfpu_srcs_op<op::Square>(
         static_cast<DataFormat>(formats.unpack_S_dst),
         static_cast<DataFormat>(formats.pack_S_src),
         [&](auto op)

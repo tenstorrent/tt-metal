@@ -576,9 +576,8 @@ def test_eltwise_binary_sfpu_float_quasar(
     )
 
 
-# add_binary_tile reaches the kernel through calculate_sfpu_binary, which takes the HW-implied Dest format.
-# The float sweep above runs ADD through the AddDest op type with an explicit layout, so this keeps that
-# entry covered.
+# add_binary_tile reaches the kernel through calculate_sfpu_binary (HW-implied Dest format). The float sweep
+# above runs ADD through the Dest op type with an explicit layout, so this keeps that entry covered.
 _ADD_COMPUTE_API_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     InputOutputFormat(DataFormat.Float32, DataFormat.Float32),

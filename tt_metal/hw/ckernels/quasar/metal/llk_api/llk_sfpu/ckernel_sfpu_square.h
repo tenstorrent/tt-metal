@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <type_traits>
+
 #include "ckernel_addrmod.h"
 #include "ckernel_sfpu_dest.h"
 #include "ckernel_sfpu_srcs.h"
@@ -19,6 +21,12 @@ namespace sfpu {
 struct SquareMath {
     using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return x * x; }
+};
+
+/** @brief Math of op::Square on Dest and SrcS. */
+template <sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING>
+struct math_for<op::Square, LAYOUT, INT_ENCODING> {
+    using type = SquareMath;
 };
 
 /**
@@ -50,22 +58,22 @@ inline void calculate_square() {
     using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_operands<SquareMath, 1 /*ITERATIONS*/>(Input{}, Output{});
+        calculate_operands<SquareMath, 1 /*ITERATIONS*/>(math_setup<SquareMath>(), Output{}, Input{});
     }
 }
 
-/** @brief Dest square op type: keeps the ADDR_MOD_6 store loop of @ref calculate_square. */
-template <sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
-struct SquareDest : SfpuDestUnaryOp<SquareDest<LAYOUT, ITERATIONS>> {
+/** @brief Dest square op type: the tuned loop, keeps the ADDR_MOD_6 store of @ref calculate_square. */
+template <sfpi::DataLayout LAYOUT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
+struct SfpuDestOp<SquareMath, LAYOUT, ITERATIONS, TILE_SHAPE>
+    : SfpuDestOpBase<SfpuDestOp<SquareMath, LAYOUT, ITERATIONS, TILE_SHAPE>, 1 /*ARITY*/> {
+    static_assert(
+        std::is_same_v<sfpi::vFloat, layout_value_t<LAYOUT>>, "this SFPU op does not take tiles of this Dest layout");
+
+    static constexpr trisc::DstTileShape tile_shape = TILE_SHAPE;
+
+    static void init_op() { init_square(); }
     static void calculate() { calculate_square<ITERATIONS, LAYOUT>(); }
 };
-
-/** @brief SrcS square op type; Sfpi only. */
-template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
-using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
-
-// dispatch_sfpu_srcs_op relies on naming a float op for I32 without instantiating it; keep that true.
-static_assert(!srcs_op_supports<SquareSrcs, sfpi::DataLayout::I32>, "float SrcS ops must stay nameable for I32");
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 
+#include "llk_defs.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_ops.h"
 #include "sfpu_reg.h"
 
 namespace ckernel::sfpu {
@@ -35,7 +38,110 @@ template <typename MATH>
 inline constexpr bool is_single_instruction_math<MATH, std::void_t<decltype(MATH::single_instruction)>> =
     MATH::single_instruction;
 
+template <typename FUNCTION>
+struct function_arity;
+template <typename RESULT, typename... ARGS>
+struct function_arity<RESULT (*)(ARGS...)> : std::integral_constant<int, sizeof...(ARGS)> {};
+
+// MATH::setup(): the values a math policy keeps for a whole row loop. False when the policy has none.
+template <typename MATH, typename = void>
+inline constexpr bool has_setup = false;
+template <typename MATH>
+inline constexpr bool has_setup<MATH, std::void_t<decltype(&MATH::setup)>> = true;
+
+struct NoSetup {};
+
+// MATH::apply on one row; a policy with setup() takes its value as the first argument.
+template <typename MATH, typename Setup, typename... Values>
+sfpi_inline auto math_apply([[maybe_unused]] const Setup& setup, Values... values) {
+    if constexpr (has_setup<MATH>) {
+        return MATH::apply(setup, values...);
+    } else {
+        return MATH::apply(values...);
+    }
+}
+
 }  // namespace detail
+
+/** @brief SFPI vector type a register @p LAYOUT loads into and stores from. */
+template <sfpi::DataLayout LAYOUT>
+using layout_value_t = std::conditional_t<LAYOUT == sfpi::DataLayout::I32, sfpi::vInt, sfpi::vFloat>;
+
+/**
+ * @brief Encoding of I32 tiles. SignMagnitude: SrcS, and Dest tiles an FPU op computed. TwosComplement: native
+ *        Int32 tiles copied or unpacked to Dest.
+ */
+enum class IntEncoding : std::uint8_t {
+    SignMagnitude,
+    TwosComplement,
+};
+
+/**
+ * @brief SFPLOAD/SFPSTORE layout of a register holding tiles of a format; any other format is a compile error.
+ *
+ * @tparam FMT: Format the register holds, values = <Float16/Float16_b/Float32/Int32>
+ */
+template <DataFormat FMT>
+constexpr sfpi::DataLayout sfpu_layout() {
+    if constexpr (FMT == DataFormat::Int32) {
+        return sfpi::DataLayout::I32;
+    } else if constexpr (FMT == DataFormat::Float32) {
+        return sfpi::DataLayout::F32;
+    } else if constexpr (FMT == DataFormat::Float16) {
+        return sfpi::DataLayout::F16a;
+    } else {
+        static_assert(FMT == DataFormat::Float16_b, "SFPU layouts exist for Float16, Float16_b, Float32 and Int32");
+        return sfpi::DataLayout::F16b;
+    }
+}
+
+/**
+ * @brief SFPLOAD/SFPSTORE layout of SrcS for tiles unpacked from L1 in a format. MX formats exist only in L1 and
+ *        unpack to Float16_b; a format with no SrcS layout is a compile error.
+ *
+ * @tparam L1_FMT: Format of the tiles in L1, values = <Float16/Float16_b/Float32/Int32/MX formats>
+ */
+template <DataFormat L1_FMT>
+constexpr sfpi::DataLayout srcs_layout() {
+    return sfpu_layout<is_mx_format(L1_FMT) ? DataFormat::Float16_b : L1_FMT>();
+}
+
+/**
+ * @brief The math policy of an op tag on a register layout, as math_for<OP, LAYOUT>::type. Specialized once per
+ *        op, next to its math (ckernel_sfpu_<op>.h), for Dest and SrcS alike.
+ *
+ * @tparam OP: Op tag (ckernel::op).
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the tiles.
+ * @tparam INT_ENCODING: How I32 tiles encode negative values, see @ref IntEncoding; float layouts ignore it.
+ */
+template <typename OP, sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING = IntEncoding::SignMagnitude>
+struct math_for;
+template <typename OP, sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING = IntEncoding::SignMagnitude>
+using math_for_t = typename math_for<OP, LAYOUT, INT_ENCODING>::type;
+
+/** @brief True when the math of @p OP on @p LAYOUT computes on the vector type LAYOUT loads into. */
+template <typename OP, sfpi::DataLayout LAYOUT>
+inline constexpr bool op_takes_layout =
+    std::is_same_v<typename math_for_t<OP, LAYOUT>::value_type, layout_value_t<LAYOUT>>;
+
+/** @brief Number of inputs of a math policy: the arguments MATH::apply takes, without the setup value. */
+template <typename MATH>
+inline constexpr int math_arity =
+    detail::function_arity<decltype(&MATH::apply)>::value - (detail::has_setup<MATH> ? 1 : 0);
+
+/**
+ * @brief The value a math policy keeps for a row loop: MATH::setup() when the policy has one, else an empty value.
+ *
+ * @note Take it once before the rows; apply() gets it as its first argument.
+ */
+template <typename MATH>
+sfpi_inline auto math_setup() {
+    if constexpr (detail::has_setup<MATH>) {
+        return MATH::setup();
+    } else {
+        return detail::NoSetup{};
+    }
+}
 
 /**
  * @brief Load/store policy between a register LAYOUT and a VALUE vector type.
@@ -46,8 +152,6 @@ template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::S
 struct SfpiFormat {
     using value_type = VALUE;
     static constexpr sfpi::DataLayout layout = LAYOUT;
-    // store() is one SFPSTORE that leaves the register address alone (see calculate_binary_operands_two_rows).
-    static constexpr bool plain_store = STORE_ADDR_MODE == sfpi::SFPSTORE_ADDR_MODE_NOINC;
 
     template <SfpuReg REG>
     sfpi_inline static value_type load(int index) {
@@ -88,45 +192,34 @@ private:
 };
 
 /**
- * @brief output[d] = MATH::apply(input[d]) for d < ITERATIONS, on Dest or SrcS operands.
+ * @brief output[d] = MATH::apply(inputs[d]...) for d < ITERATIONS, for any number of inputs. Each operand names its
+ *        own register file, Dest or SrcS.
  *
- * @tparam MATH: Math policy with a static apply().
+ * @tparam MATH: Math policy with a static apply() taking one argument per input.
+ * @tparam ITERATIONS: Number of SFPI steps to walk.
+ * @param setup: The value of @ref math_setup for MATH, taken by the caller before its rows.
+ * @param output: Operand the results are stored to.
+ * @param inputs: One operand per MATH::apply argument, in argument order.
  */
-template <typename MATH, int ITERATIONS, typename Input, typename Output>
-sfpi_inline void calculate_unary_operands(const Input& input, const Output& output) {
-    static_assert(ITERATIONS > 0, "A unary SFPU op requires at least one SFPI access");
-    static_assert(
-        std::is_same_v<decltype(MATH::apply(std::declval<typename Input::value_type>())), typename Output::value_type>,
-        "MATH::apply must map the input operand's value type to the output operand's value type");
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        output.store(d, MATH::apply(input.load(d)));
-    }
-}
-
-/**
- * @brief output[d] = MATH::apply(input0[d], input1[d]) for d < ITERATIONS, on Dest or SrcS operands.
- *
- * @tparam MATH: Math policy with a static apply().
- */
-template <typename MATH, int ITERATIONS, typename Input0, typename Input1, typename Output>
-sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& input1, const Output& output) {
-    static_assert(ITERATIONS > 0, "A binary SFPU op requires at least one SFPI access");
+template <typename MATH, int ITERATIONS, typename Setup, typename Output, typename... Inputs>
+sfpi_inline void calculate_operands(const Setup& setup, const Output& output, const Inputs&... inputs) {
+    static_assert(ITERATIONS > 0, "An SFPU op requires at least one SFPI access");
+    static_assert(std::is_same_v<Setup, decltype(math_setup<MATH>())>, "setup must be the value of math_setup<MATH>()");
+    static_assert(sizeof...(Inputs) == math_arity<MATH>, "MATH::apply takes one argument per input operand");
     static_assert(
         std::is_same_v<
-            decltype(MATH::apply(
-                std::declval<typename Input0::value_type>(), std::declval<typename Input1::value_type>())),
+            decltype(detail::math_apply<MATH>(setup, std::declval<typename Inputs::value_type>()...)),
             typename Output::value_type>,
         "MATH::apply must map the input operands' value types to the output operand's value type");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        output.store(d, MATH::apply(input0.load(d), input1.load(d)));
+        output.store(d, detail::math_apply<MATH>(setup, inputs.load(d)...));
     }
 }
 
 /**
  * @brief Two rows per call, issued as load x4, op x2, store x2, so the second row's op fills the op -> store stall.
- *        Bit-identical to two @ref calculate_binary_operands calls; MATH must be one instruction, the store plain.
+ *        Bit-identical to two @ref calculate_operands calls; MATH must be one instruction, the store plain.
  */
 template <typename MATH, typename Input0, typename Input1, typename Output>
 sfpi_inline void calculate_binary_operands_two_rows(
