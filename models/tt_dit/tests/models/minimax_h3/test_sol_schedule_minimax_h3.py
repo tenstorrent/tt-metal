@@ -21,6 +21,7 @@ from ....models.transformers.minimax_h3.sol_prepass import (
     route_factors,
 )
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
+from ....pipelines.minimax_h3.packing import video_latent_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import SolSchedule, sol_schedule
@@ -54,6 +55,7 @@ def test_sinks_switch_drops_the_dense_prefix():
 
 
 _EROS = SolSchedule(tau=1.13, dense_steps=3, dense_layers=0, sinks=True)  # the 10Eros-Max card and a third dense step
+_EROS_DEFAULT = replace(_EROS, max_frames=158)  # with no switch set: clips up to 6 s
 _HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # the HyperFlow arm of the Sol sheet
 
 
@@ -89,9 +91,10 @@ def test_model_preset_sets_the_schedule_behind_the_switch(env, preset, expected)
 @pytest.mark.parametrize(
     ("env", "preset", "expected"),
     [
-        ({}, "10eros-max", _EROS),
-        ({"H3_SOL_DENSE_STEPS": "2"}, "10eros-max", replace(_EROS, dense_steps=2)),
+        ({}, "10eros-max", _EROS_DEFAULT),
+        ({"H3_SOL_DENSE_STEPS": "2"}, "10eros-max", replace(_EROS_DEFAULT, dense_steps=2)),
         ({"H3_SOL_ATTN": "0"}, "10eros-max", None),
+        ({"H3_SOL_ATTN": "1"}, "10eros-max", _EROS),  # the switch itself: every clip length
         # Naming the preset is not the switch: only the pipeline's own files turn it on.
         ({"H3_SOL_PRESET": "10eros-max"}, None, None),
     ],
@@ -103,7 +106,7 @@ def test_a_default_on_preset_needs_no_switch(env, preset, expected):
 @pytest.mark.parametrize(
     ("file", "task", "env", "expected"),
     [
-        ("/models/v1/v1t.safetensors", "t2va", {}, _EROS),
+        ("/models/v1/v1t.safetensors", "t2va", {}, _EROS_DEFAULT),
         ("/models/v1/v1t.safetensors", "t2va", {"H3_SOL_ATTN": "0"}, None),
         ("/models/v1/v1t.safetensors", "ref2va", {}, None),
         ("/models/v1/v1t.safetensors", "ref2va", {"H3_SOL_ATTN": "1"}, SolSchedule()),
@@ -267,6 +270,24 @@ def test_a_request_keeps_the_schedules_dense_steps(monkeypatch):
     assert not any(pipeline._is_sol_dense_step(step) for step in range(4))  # Sol-Attn not set up: the off switch
     pipeline._sol_schedule = pipeline._requested_sol_schedule()
     assert [pipeline._is_sol_dense_step(step) for step in range(4)] == [True, True, False, False]
+
+
+@pytest.mark.parametrize(
+    ("env", "warming", "num_frames", "dense"),
+    [
+        ({}, False, 158, [True] * 3 + [False] * 5),
+        ({}, False, 175, [True] * 8),
+        ({}, False, 243, [True] * 8),
+        ({"H3_SOL_ATTN": "1"}, False, 243, [True] * 3 + [False] * 5),
+        ({}, True, 243, [True] + [False] * 7),  # a rung's warm-up clip still captures the sparse trace
+    ],
+)
+def test_the_default_runs_a_clip_over_its_length_dense(monkeypatch, env, warming, num_frames, dense):
+    pipeline = _pipeline(monkeypatch, env)
+    pipeline.transformer_file, pipeline._warming = Path("/models/v1/v1t.safetensors"), warming
+    pipeline._sol_schedule = pipeline._requested_sol_schedule()
+    latent_frames = video_latent_num_frames(num_frames)
+    assert [pipeline._is_sol_dense_step(step, num_latent_frames=latent_frames) for step in range(8)] == dense
 
 
 _RULE = {"band": 1, "force_first_block": True, "dense_prefix_queries": True}

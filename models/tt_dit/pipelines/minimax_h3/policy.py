@@ -70,12 +70,14 @@ MINIMAX_H3_MAX_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[-1])
 class SolSchedule:
     """Where one generation's ring attention runs Sol-Attn: the first `dense_steps` denoise steps and the first
     `dense_layers` blocks stay dense, the rest route with threshold `tau`. `sinks` keeps the prefix in front of the
-    target video (text, condition and audio rows) exact for every query; without it only the routing rule decides."""
+    target video (text, condition and audio rows) exact for every query; without it only the routing rule decides.
+    A clip of more than `max_frames` frames runs every step dense."""
 
     tau: float = 1.0
     dense_steps: int = 2
     dense_layers: int = 2
     sinks: bool = True
+    max_frames: int | None = None
 
     def is_dense_step(self, step: int) -> bool:
         return step < self.dense_steps
@@ -84,27 +86,29 @@ class SolSchedule:
 #: Sol-Attn settings per model. A model with no entry runs `SolSchedule()` behind `H3_SOL_ATTN=1`.
 SOL_PRESETS = {
     # The 10Eros-Max card ("13% SLA sparsity on all blocks, start at 0.2": 2 of the 8 forwards dense) with a third
-    # dense forward. With two, sound events left the served export up to 7 LU under dense; with three, within 1 LU.
+    # dense forward. With two, sound events left the served 6 s export up to 7 LU under dense; with three, within 1 LU.
     "10eros-max": SolSchedule(tau=1.13, dense_steps=3, dense_layers=0),
     # The recipe NVIDIA ships for HyperFlow, as its side-by-side sheet ran it: no sinks.
     "hyperflow": SolSchedule(sinks=False),
 }
 
-#: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset.
-SOL_DEFAULT_ON = frozenset({"10eros-max"})
+#: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset, each with the longest clip (frames) it then runs sparse.
+#: 10Eros-Max: at 6 s the served audio is level with dense; at 10 s it stays about 2 LU under, with fewer sound events.
+SOL_DEFAULT_ON = {"10eros-max": 158}
 
 
 def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
-    `H3_SOL_ATTN=1` turns it on and any other value is the off switch; unset, it is on only for a pipeline whose
-    `preset` is in `SOL_DEFAULT_ON`. The schedule starts from the model's `SOL_PRESETS` entry: `preset` is the one
+    `H3_SOL_ATTN=1` turns it on for every clip length and any other value is the off switch; unset, it is on only for
+    a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule starts from the model's `SOL_PRESETS` entry: `preset` is the one
     the pipeline reads from its files, and `H3_SOL_PRESET` names it for a model the files do not tell apart
     (a 10Eros-Max build under another file name). `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and
     `H3_SOL_SINKS` (`0` drops the dense prefix) each override their field. One dense step costs 4-step models
     their picture and sound against dense.
     """
-    if env.get("H3_SOL_ATTN", "1" if preset in SOL_DEFAULT_ON else "0") != "1":
+    by_default = "H3_SOL_ATTN" not in env and preset in SOL_DEFAULT_ON
+    if not by_default and env.get("H3_SOL_ATTN") != "1":
         return None
     name = env.get("H3_SOL_PRESET") or preset
     if name is not None and name not in SOL_PRESETS:
@@ -115,6 +119,7 @@ def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedu
         dense_steps=int(env.get("H3_SOL_DENSE_STEPS", base.dense_steps)),
         dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", base.dense_layers)),
         sinks=env["H3_SOL_SINKS"] != "0" if "H3_SOL_SINKS" in env else base.sinks,
+        max_frames=SOL_DEFAULT_ON[preset] if by_default else None,
     )
     if schedule.dense_steps < 0 or schedule.dense_layers < 0:
         raise ValueError(f"H3_SOL_DENSE_STEPS and H3_SOL_DENSE_LAYERS must be 0 or more, got {schedule}")

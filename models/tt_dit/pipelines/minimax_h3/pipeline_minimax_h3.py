@@ -2744,6 +2744,7 @@ class MiniMaxH3Pipeline:
                 audio_scheduler,
                 condition_spec=condition_spec,
                 on_event=on_event,
+                num_latent_frames=num_latent_frames,
             )
 
         def decode_audio() -> torch.Tensor:
@@ -3498,14 +3499,20 @@ class MiniMaxH3Pipeline:
         """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
         return None if self.dynamic_length else sol_schedule(os.environ, self._sol_preset())
 
-    def _is_sol_dense_step(self, step: int, first_stage: bool = False) -> bool:
+    def _is_sol_dense_step(self, step: int, first_stage: bool = False, num_latent_frames: int = 0) -> bool:
         """Whether step `step` of a denoise stage runs dense under the Sol-Attn schedule in force: all of a low-res
-        first stage does. Warm-up keeps only its first step dense, whatever the schedule's count, so that its
-        second one is a sparse step."""
+        first stage does, and all of a clip over the schedule's `max_frames`. Warm-up keeps only its first step
+        dense, whatever the schedule's count and its clip's length, so that its second one is a sparse step."""
         schedule = self._sol_schedule
         if schedule is None:
             return False
-        return first_stage or (schedule.is_dense_step(step) and not (self._warming and step > 0))
+        if first_stage:
+            return True
+        if self._warming:
+            return step == 0 and schedule.is_dense_step(step)
+        # The Sol-Attn request and both traces stay as for a short clip: a length change recaptures nothing.
+        long = schedule.max_frames is not None and num_latent_frames > video_latent_num_frames(schedule.max_frames)
+        return long or schedule.is_dense_step(step)
 
     def _sol_preset(self) -> str | None:
         """The `policy.SOL_PRESETS` entry this pipeline's files name, if any."""
@@ -3649,6 +3656,7 @@ class MiniMaxH3Pipeline:
         condition_spec: Sequence[tuple[str, int]] | None = None,
         on_event: PipelineEventCallback = null_callback,
         first_stage: bool = False,
+        num_latent_frames: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Denoise in place. `video_rows` is `[condition rows | target rows]`, cond first, as the
         reference's `latents` is; `num_condition_video_rows` is 0 for `t2va`. `audio_rows` is the same
@@ -3957,7 +3965,7 @@ class MiniMaxH3Pipeline:
                         for dst, (weight, bias) in pdd_steps[i].items():
                             linear = getattr(transformer, dst)
                             linear.weight.data, linear.bias.data = weight, bias
-                    transformer.set_sol_dense_step(self._is_sol_dense_step(i, first_stage))
+                    transformer.set_sol_dense_step(self._is_sol_dense_step(i, first_stage, num_latent_frames))
                     try:
                         video_velocity, audio_velocity = transformer(
                             video_1BVC=self._tt_video.value,
