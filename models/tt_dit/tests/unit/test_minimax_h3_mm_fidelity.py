@@ -17,6 +17,8 @@ from models.tt_dit.models.transformers.minimax_h3 import transformer_block_minim
 from models.tt_dit.models.transformers.minimax_h3.agmm_config import AgmmMode
 
 SDPA_FLAG = "MINIMAX_H3_SDPA_MM_FIDELITY"
+FF_UP_FLAG = "MINIMAX_H3_FF_UP_MM_FIDELITY"
+QKV_FLAG = "MINIMAX_H3_QKV_MM_FIDELITY"
 AGMM_MODE_FLAG = "MINIMAX_H3_AGMM_MODE"
 
 LOFI, HIFI2 = ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2
@@ -41,14 +43,16 @@ def _stub(monkeypatch, module, *names, grid=(11, 10)):
     )
 
 
-def _block(monkeypatch, *, adaln_curve: bool = False, grid=(11, 10), sizes=TINY, ffn_dim: int = 16):
+def _block(monkeypatch, *, adaln_curve: bool = False, grid=(11, 10), sizes=TINY, ffn_dim: int = 16, **kwargs):
     """A block for a pruned (`adaln_curve`) or a full checkpoint, and the kwargs it gave its attention and its
     feed-forward."""
     attn, ff = {}, {}
     mesh = _stub(monkeypatch, tb, "DistributedRMSNorm", "ColParallelLinear", grid=grid)
     monkeypatch.setattr(tb, "MiniMaxH3Attention", lambda **kwargs: attn.update(kwargs))
     monkeypatch.setattr(tb, "ParallelFeedForward", lambda *args, **kwargs: ff.update(kwargs))
-    block = tb.MiniMaxH3TransformerBlock(**sizes, ffn_dim=ffn_dim, time_embed_dim=8, adaln_curve=adaln_curve, **mesh)
+    block = tb.MiniMaxH3TransformerBlock(
+        **sizes, ffn_dim=ffn_dim, time_embed_dim=8, adaln_curve=adaln_curve, **mesh, **kwargs
+    )
     return block, attn, ff
 
 
@@ -107,3 +111,38 @@ def test_bucketed_attention_pins(monkeypatch):
     monkeypatch.setenv(AGMM_MODE_FLAG, "balanced")
     refiner = _attention(monkeypatch, grid=BLACKHOLE, sizes=DIT, is_sequence_parallel=False)
     assert refiner._qkv_pins is None and refiner._out_pins is None
+
+
+@pytest.mark.parametrize(
+    ("adaln_curve", "value", "expected"),
+    [(False, None, HIFI2), (False, "lofi", LOFI), (True, None, LOFI), (True, "hifi2", HIFI2)],
+)
+def test_ff_up_and_qkv_flags(monkeypatch, adaln_curve, value, expected):
+    """On Blackhole a pruned (10Eros) checkpoint defaults the FF up and to_qkv matmuls to LoFi and a full one to
+    HiFi2. The flags beat the default and move only these two matmuls, on a BALANCED pin too. The block reads both:
+    an attention without a caller's fidelity (the token refiner's) keeps HiFi2."""
+    for flag in (FF_UP_FLAG, QKV_FLAG):
+        monkeypatch.delenv(flag, raising=False) if value is None else monkeypatch.setenv(flag, value)
+    monkeypatch.setenv(AGMM_MODE_FLAG, "balanced")
+    block, attn, ff = _block(monkeypatch, adaln_curve=adaln_curve, grid=BLACKHOLE, sizes=DIT, ffn_dim=DIT_FFN_DIM)
+    assert ff["ff1_compute_kernel_config"].math_fidelity == attn["qkv_matmul_fidelity"] == expected
+    assert ff["ff2_compute_kernel_config"].math_fidelity == block.mm_compute_kernel_config.math_fidelity == HIFI2
+    assert _attention(monkeypatch, grid=BLACKHOLE, sizes=DIT).qkv_compute_kernel_config.math_fidelity == HIFI2
+    attention = _attention(monkeypatch, grid=BLACKHOLE, sizes=DIT, qkv_matmul_fidelity=expected)
+    kwargs = attention._agmm_kwargs(
+        attention._qkv_pins,
+        5376,
+        5376,
+        SimpleNamespace(padded_shape=[1, 1, 9600, 5376]),
+        attention.qkv_compute_kernel_config,
+    )
+    assert kwargs["compute_kernel_config"].math_fidelity == expected
+    assert attention.mm_compute_kernel_config.math_fidelity == HIFI2
+
+
+def test_ff_up_and_qkv_default_off_blackhole(monkeypatch):
+    """Off Blackhole a pruned checkpoint keeps both at HiFi2: LoFi was checked on Blackhole only."""
+    for flag in (FF_UP_FLAG, QKV_FLAG):
+        monkeypatch.delenv(flag, raising=False)
+    _, attn, ff = _block(monkeypatch, adaln_curve=True)
+    assert ff["ff1_compute_kernel_config"].math_fidelity == attn["qkv_matmul_fidelity"] == HIFI2

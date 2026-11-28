@@ -17,9 +17,10 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, compute_grid_key
 from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, math_fidelity_from_env
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins, resolve_agmm_mode
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
@@ -95,6 +96,10 @@ class MiniMaxH3TransformerBlock(Module):
 
         grid = mesh_device.compute_with_storage_grid_size()
         agmm_mode = resolve_agmm_mode(agmm_mode, full_grid=grid, pruned=adaln_curve)
+        # A pruned (10Eros) checkpoint on Blackhole runs the FF up and to_qkv matmuls at LoFi unless their flags say
+        # otherwise: theirs is the only output checked at LoFi on these two. Every other checkpoint keeps HiFi2.
+        lofi_default = adaln_curve and compute_grid_key(grid) == BLACKHOLE_COMPUTE_GRID
+        ff_up_qkv_fidelity = ttnn.MathFidelity.LoFi if lofi_default else ttnn.MathFidelity.HiFi2
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
@@ -148,6 +153,8 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
             agmm_mode=agmm_mode,
+            # MINIMAX_H3_QKV_MM_FIDELITY sets the to_qkv matmul's fidelity alone, in the DiT blocks only.
+            qkv_matmul_fidelity=math_fidelity_from_env("MINIMAX_H3_QKV_MM_FIDELITY", ff_up_qkv_fidelity),
             # Pruned (10Eros) checkpoints run the ring QK^T / softmax @ V matmuls at LoFi unless
             # MINIMAX_H3_SDPA_MM_FIDELITY says otherwise: theirs is the only output checked at LoFi (slightly
             # softer fine detail for ~16% less denoise time per step). The other checkpoints keep HiFi2.
@@ -169,6 +176,14 @@ class MiniMaxH3TransformerBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The FF up matmul's own config, so MINIMAX_H3_FF_UP_MM_FIDELITY can set its fidelity alone.
+        self.ff1_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=math_fidelity_from_env("MINIMAX_H3_FF_UP_MM_FIDELITY", ff_up_qkv_fidelity),
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
@@ -180,14 +195,15 @@ class MiniMaxH3TransformerBlock(Module):
                 *self._ff1_kn,
                 full_grid=grid,
                 num_links=ccl_manager.num_links,
-                compute_kernel_config=self.mm_compute_kernel_config,
+                compute_kernel_config=self.ff1_compute_kernel_config,
                 mode=agmm_mode,
                 dynamic_length=dynamic_length,
             )
         if dynamic_length and self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
             self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
-        # ff1 runs its pins' compute config (the same in every length class), ff2 the block's.
-        ff1_compute_kernel_config = self.mm_compute_kernel_config
+        # ff1 runs its pins' compute config (its own, with their Dst accumulation; the same in every length class),
+        # ff2 the block's.
+        ff1_compute_kernel_config = self.ff1_compute_kernel_config
         if self._ff1_pins is not None:
             ff1_compute_kernel_config = next(iter(self._ff1_pins.values())).compute_kernel_config
         # The reference's SwiGLU is `up, gate = proj(x).chunk(2); up * silu(gate)`, which is the

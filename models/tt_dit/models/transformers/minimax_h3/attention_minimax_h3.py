@@ -126,10 +126,12 @@ class MiniMaxH3Attention(Module):
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
         sdpa_matmul_fidelity: ttnn.MathFidelity | None = None,
+        qkv_matmul_fidelity: ttnn.MathFidelity | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
-        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`). `qkv_matmul_fidelity` is the to_qkv
+        matmul's (None: HiFi2)."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -221,9 +223,6 @@ class MiniMaxH3Attention(Module):
         # op's HiFi2). Only the ring joint SDPA path honours it: the exp ring path does not pass it.
         self.sdpa_matmul_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_MM_FIDELITY", sdpa_matmul_fidelity)
 
-        # Pins per length class, resolved once: no table scan and no orientation flip per call. The bucketed path
-        # has them only where the mode pins it too (`agmm_pins`), and never for a replicated sequence (the token
-        # refiner): those pins are swept at the DiT blocks' row counts.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -231,6 +230,17 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The to_qkv matmul's own config, so the caller can lower its fidelity alone.
+        self.qkv_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2 if qkv_matmul_fidelity is None else qkv_matmul_fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        # Pins per length class, resolved once: no table scan and no orientation flip per call. The bucketed path
+        # has them only where the mode pins it too (`agmm_pins`), and never for a replicated sequence (the token
+        # refiner): those pins are swept at the DiT blocks' row counts.
         self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
         if self.use_fused_agmm and (dynamic_length or is_sequence_parallel):
             pin_kwargs = dict(
@@ -240,7 +250,11 @@ class MiniMaxH3Attention(Module):
                 mode=agmm_mode,
                 dynamic_length=dynamic_length,
             )
-            self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
+            self._qkv_pins = agmm_pins(
+                hidden_size,
+                3 * self.inner_dim // tp_factor,
+                **pin_kwargs | {"compute_kernel_config": self.qkv_compute_kernel_config},
+            )
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
         if dynamic_length and self.use_ring:
             grid = compute_grid_key(full_grid)
@@ -661,7 +675,13 @@ class MiniMaxH3Attention(Module):
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
             persistent_buffer_rows=self.ag_row_capacity,
-            **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
+            **self._agmm_kwargs(
+                self._qkv_pins,
+                self.hidden_size,
+                3 * self.inner_dim // tp_factor,
+                spatial_1BND,
+                self.qkv_compute_kernel_config,
+            ),
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -794,13 +814,14 @@ class MiniMaxH3Attention(Module):
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
 
-    def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor) -> dict:
+    def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor, compute_kernel_config=None) -> dict:
         """The fused all-gather matmul's blocking and compute kwargs at `x`'s per-device rows (class pin or swept
         table); only the compute config on the unfused path, whose matmul overruns L1 with the swept blockings at
-        long sequence lengths."""
+        long sequence lengths. `compute_kernel_config` is the layer's own where it has one."""
+        compute_kernel_config = compute_kernel_config or self.mm_compute_kernel_config
         if not self.use_fused_agmm:
-            return {"compute_kernel_config": self.mm_compute_kernel_config}
-        return agmm_kwargs(pins, k, n, x.padded_shape[-2], self.mm_compute_kernel_config)
+            return {"compute_kernel_config": compute_kernel_config}
+        return agmm_kwargs(pins, k, n, x.padded_shape[-2], compute_kernel_config)
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""

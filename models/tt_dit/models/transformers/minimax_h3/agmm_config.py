@@ -135,8 +135,9 @@ AGMM_PINS: dict[tuple[int, int], dict[AgmmMode, dict[tuple[int, int], AgmmLayerP
             (5376, 7168): AgmmLayerPin({"short": (6, 3, 16), "long": (4, 3, 16)}, transpose_core_grid=False),
             (7168, 1344): AgmmLayerPin({"short": (6, 8, 6), "long": (6, 8, 6)}, transpose_core_grid=True),
         },
-        # The bucketed path's, swept there on 4x8 (9216 rows per device): against its length-keyed table the M_block
-        # of 8 gives most of the gain; fp32 dest accumulation off leaves Dst 8 tiles, so the subblocks double.
+        # The bucketed path's, swept there on 4x8 at 9216 and 6112 rows per device (other bucketed sizes and meshes
+        # take them unswept): against its length-keyed table the M_block of 8 gives most of the gain; fp32 dest
+        # accumulation off leaves Dst 8 tiles, so the subblocks double.
         AgmmMode.BALANCED: {
             (5376, 5376): AgmmLayerPin(
                 {"short": (8, 7, 12), "long": (8, 7, 12)},

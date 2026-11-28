@@ -243,7 +243,7 @@ class MiniMaxH3Transformer3DModel(Module):
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
         are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
-        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.hidden_size = hidden_size
