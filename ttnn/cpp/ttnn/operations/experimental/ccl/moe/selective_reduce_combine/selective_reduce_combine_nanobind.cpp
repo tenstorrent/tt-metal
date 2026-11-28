@@ -40,7 +40,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
 
                 Generally expect num_data_parallel_dim=num_token_parallel_dim=4
                 This can be though of as a logical grid by a physical grid is not required as long as the ordering is
-                consistent with the cores provided by `worker_core_range_set`
+                consistent with the cores provided by `worker_cores`
 
                                         Tokens split (num_data_parallel_dim)
                                                _________
@@ -96,8 +96,8 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             num_links (int): Number of fabric links to utilize
             token_parallel_core_dim (int): token shard dimension (described above)
             data_parallel_core_dim (int): hidden dim shard dimension (described above)
-            worker_core_range_set (ttnn.CoreRangeSet): Available cores for running op, should be consistent with dense_input_tensor sharding
-            mux_core_range_set (ttnn.CoreRangeSet): Available cores for mux workers. Should have no overlap with `worker_core_range_set`
+            worker_cores (ttnn.CoreRangeSet): Available cores for running op, should be consistent with dense_input_tensor sharding
+            mux_core_range_set (ttnn.CoreRangeSet): Available cores for mux workers. Should have no overlap with `worker_cores`
 
         Keyword Args:
             memory_config (ttnn.memory_config): optional output mem config

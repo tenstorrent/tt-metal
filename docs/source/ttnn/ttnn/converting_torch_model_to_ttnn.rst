@@ -230,13 +230,13 @@ And the optimized model can be something like this:
         num_cores_x = 12
         output = ttnn.linear(
             hidden_states,
-            ff1_weight,
-            bias=ff1_bias,
+            parameters.weight,
+            bias=parameters.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG, # Put the output into local core memory
-            core_grid=(batch_size, num_cores_x), # Specify manual core grid to get the best possible performance
+            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x), # Specify manual core grid to get the best possible performance
             activation="gelu", # Fuse Gelu
         )
-        return True
+        return output
 
 More examples
 *************
