@@ -41,7 +41,7 @@ void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
             "Output tensor spec must match computed output spec");
     }
     const auto& input_shape = input_tensor.logical_shape();
-    const auto& output_shape = output_spec.padded_shape();
+    const auto& output_shape = output_spec.logical_shape();
     const auto& output_padded_shape = output_spec.padded_shape();
 
     TT_FATAL(
