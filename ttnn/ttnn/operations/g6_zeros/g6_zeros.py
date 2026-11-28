@@ -33,11 +33,11 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0) — bfloat16 / bfloat8_b are knob-turns (page size only)
+# 2. SUPPORTED — bfloat16 / bfloat8_b are knob-turns: the dtype only enters via the page size (aps)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
 }
 

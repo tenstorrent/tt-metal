@@ -34,7 +34,7 @@
 - **Golden baseline**: 13 / 19 cells pass. The other 6 are `xfail_expected`: every bfloat16 and bfloat8_b cell (p4 ×3, p1 ×3). 0 supported_fail, 0 xpass_drift, 0 xfail_wrong_mode.
 - **Device kernel time** (Blackhole, default plan): p1 1,092,860 ns, p2 47,114 ns, p3 24,271 ns, p4 1,807 ns.
 
-### [ ] Refinement 1 — Numerical formats: bfloat16 and bfloat8_b
+### [x] Refinement 1 — Numerical formats: bfloat16 and bfloat8_b
 
 **Goal**: add `ttnn.bfloat16` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`. This moves the six `xfail_expected` golden cells to passing: p4 `(1,4,256,128)` bf16 and p1 `(32831,1,32,256)` bf8b, each as the plain cell, the model-profile loose case and the dirty-destination loose case. The acceptance and precision-baseline xfails for these dtypes must also pass. Do not expose a `compute_kernel_config`: the op has no compute kernel, and the spec says no compute configuration exists.
 

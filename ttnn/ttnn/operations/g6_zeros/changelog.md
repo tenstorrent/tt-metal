@@ -15,3 +15,12 @@
   - The descriptor-cache key is now the plan input `(dtype, N, aps, grid, B)` and no longer uses `id(device)`.
   - The stale perf harness was rewritten as a `cores_per_bank` sweep.
 - **Tests added**: test_g6_zeros.py (acceptance, planner), test_g6_zeros_precision_baseline.py, test_g6_zeros_perf.py (knob sweep harness).
+
+## Refinement 1 — Numerical formats: bfloat16 and bfloat8_b
+- Date: 2026-11-28
+- What was done: `SUPPORTED["dtype"]` widened to `[float32, bfloat16, bfloat8_b]`. No kernel or descriptor change was needed. The writer kernel is dtype-agnostic: the dtype reaches it only through `aps` (CT arg) and the `burst_pages` that `make_plan` derives from it (bf16 2048 B / 8 pages, bf8b 1088 B / 15 pages). There is no compute kernel, so no `compute_kernel_config` is exposed, as the spec requires. No EXCLUSIONS were added; every INPUTS shape is tile-aligned.
+  - Reused: the whole R1 writer path, the plan, and the descriptor cache, which is already keyed on dtype. Added: the two SUPPORTED entries.
+- Accuracy achieved: exact. PCC=1.0, relative RMS=0, max ULP 0, no -0.0 on p1 (32831,1,32,256) bf8b, p4 (1,4,256,128) bf16, p2/p3 fp32, from test_g6_zeros_precision_baseline.py.
+- Golden test progress: 19/19 expected. The 6 previously-xfail bf16/bf8b cells were run as a golden slice and all 6 pass (plain + loose ×2 each). The 13 fp32 cells use the same untouched path.
+- Issues encountered: None.
+- Tests added: none. The existing acceptance and precision-baseline cases for bf16/bf8b now run instead of xfailing (21/21 pass).

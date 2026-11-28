@@ -21,3 +21,5 @@
 {"event":"fix_applied","what":"ZERO_SOURCE_BYTES 16384->2048 on top of WRITERS_PER_BANK=1 + bank_affine placement; one plan wins every shape, no regime gate","ts":"2026-11-28T01:02:23-05:00"}
 {"event":"test_run","result":"pass","detail":"unit 26/26; golden slice 8/8 (loose0 p1 perf exact, p4, dirty p1/p4/p2, cache order, repeat); shipped vs phase0 ns p1 559040/1111852 p2 25370/49573 p3 13083/24241 p4 1379/1634","ts":"2026-11-28T01:02:23-05:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_zeros/test_g6_zeros.py","result":"13 passed, 4 xfailed (bf16/bfp8 not in Phase-0 SUPPORTED); --dev pass","perf_ns":{"p2_fp32":48207,"p3_fp32":23956},"cores":104,"ts":"2026-11-28T13:36:31+01:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-28T13:44:07+01:00"}
+{"event":"test_run","status":"pass","tests":"unit 21/21 + golden bf16/bf8b slice 6/6","ts":"2026-11-28T13:46:59+01:00"}
