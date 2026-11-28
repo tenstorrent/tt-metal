@@ -557,17 +557,17 @@ def from_torch(
         reader_patterns_cache = {}
 
     if model_name is None and not ttnn.CONFIG.enable_model_cache:
-        logger.warning(
+        logger.debug(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_CONFIG_OVERRIDES='{\"enable_model_cache\": true}'"
         )
 
     elif model_name is None and ttnn.CONFIG.enable_model_cache:
-        logger.warning(
+        logger.debug(
             "ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters]"
         )
 
     elif model_name is not None and not ttnn.CONFIG.enable_model_cache:
-        logger.warning(
+        logger.debug(
             "ttnn: model cache can be enabled by setting env variable TTNN_CONFIG_OVERRIDES='{\"enable_model_cache\": true}'"
         )
 
