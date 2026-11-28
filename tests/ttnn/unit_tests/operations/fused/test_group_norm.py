@@ -1580,6 +1580,59 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
     )
 
 
+@pytest.mark.parametrize("grid_y, grid_x", [(1, 1), (8, 8)], ids=["1_core", "8x8_cores"])
+@pytest.mark.parametrize("rows_per_core", [32, 64, 96], ids=lambda r: f"rows_per_core={r}")
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
+def test_group_norm_negative_mask_short_shard(device, grid_y, grid_x, rows_per_core, fp32_dest_acc_en):
+    """
+    Height-sharded group_norm with a caller-supplied negative mask, where each core holds only 1-3
+    tile rows. The negative-mask path rewrites the tilized input in place for every group, so a
+    tile read back before its pack lands shows up here as output = reference + input.
+    """
+    if device.core_grid.y < grid_y or device.core_grid.x < grid_x:
+        pytest.skip(f"device grid is smaller than {grid_x}x{grid_y}")
+    torch.manual_seed(0)
+    N, C, G = 1, 128, 8
+    num_cores = grid_y * grid_x
+    HW = rows_per_core * num_cores
+
+    torch_input = torch.rand((N, C, 1, HW), dtype=torch.bfloat16)
+    torch_output = torch.nn.functional.group_norm(torch_input.float(), G).permute(0, 2, 3, 1).reshape(N, 1, HW, C)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // num_cores, C), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(N, 1, HW, C),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+    input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, G, 1, ttnn.bfloat8_b), device)
+    negative_mask = ttnn.to_device(ttnn.create_group_norm_input_negative_mask(C, G, 1, ttnn.bfloat8_b), device)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest_acc_en
+    )
+
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=G,
+        input_mask=input_mask,
+        negative_mask=negative_mask,
+        memory_config=sharded_mem_config,
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        inplace=False,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(ttnn.from_device(tt_output)).float()
+
+    # PCC alone misses the race: output = reference + input still correlates above 0.999.
+    assert_numeric_metrics(
+        torch_output, tt_output, pcc_threshold=0.999, rtol=0.05, atol=0.05, frobenius_threshold=0.025
+    )
+
+
 # Stays in sanity at full size (#62486): it is the only test that builds the writer's
 # NEGATIVE_MASK_SYNTHESIZE branch. The op synthesizes the negative mask only when L1 is too tight for
 # the normal layout, and the ballast below is sized for this 128x128 input, so the shape cannot shrink.
