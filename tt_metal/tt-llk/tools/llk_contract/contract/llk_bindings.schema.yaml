@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Schema for llk_bindings.yaml (JSON Schema, written as YAML).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: LLK contract bindings
+type: object
+propertyNames:                         # <operation>.<entry point>
+  pattern: "^[a-z0-9_]+\\.(hw_configure|reconfigure|init|execute|uninit)$"
+additionalProperties:
+  type: object
+  required: [llk]
+  additionalProperties: false
+  properties:
+    llk:
+      type: object
+      propertyNames: {enum: [unpack, math, pack]}
+      additionalProperties: {type: string, pattern: "^_llk_\\w+_$"}
+    compute_api:
+      type: array
+      items: {type: string, pattern: "^[A-Za-z0-9_/]+::\\w+$"}
+    template:
+      type: object
+      propertyNames: {enum: [unpack, math, pack]}
+      additionalProperties:
+        type: object
+        additionalProperties: {type: string}

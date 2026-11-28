@@ -1,0 +1,440 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# LLK contract, Blackhole (draft for review)
+#
+# What each LLK entry point (configure, init, execute, uninit) relies on and leaves behind, written so
+# that tools can check it against the code and against each other. Each entry point is described on
+# its own; nothing here is a rule on call order. The contract is about correctness, not performance.
+# Where each entry point is in the code (LLK functions, compute API callers) is in llk_bindings.yaml.
+#
+# The state is the hardware (and LLK software) state the entry points share, per functional unit
+# (unpack, math, pack), named by what it does.
+#
+# Reading an entry point:
+#   requires     state the call relies on when it starts: field -> value
+#   ensures      state it leaves when it returns: field -> value
+#   may_change   fields it may leave with any value (an address, a counter it resets before use)
+#   everything else is left as it was (the frame rule)
+#
+# Fields: unit.Field, or unit.Field[index]. The index is an operand (in0, in1, out) for a field that
+# exists once per unpacker (the operation says which unpacker carries the operand), or an instance
+# name (s0..s7 for ADDR_MOD slots).
+#
+# Values are text: expressions over operand attributes, operation parameters (op.*), kernel settings
+# (kernel.*), constants and named functions.
+#   inN.format.l1        format of the input in L1
+#   inN.format.unpacked  format the unpacker writes into its source register
+#   out.format.dest      format the packer reads from DEST
+#   out.format.l1        format the packer writes to L1
+#   inN.tile.*, out.tile.*   face_r_dim, num_faces, partial_face
+#   "X if C"             X when C holds; otherwise the field is not changed
+#   "X if C else Y"      X when C holds, otherwise Y
+# Before comparing values, the tools name each operand by the unpacker that carries it, so configure's
+# in0 (on srcA) and matmul's in1 (on srcA) denote the same register.
+
+contract:
+  name: LLK programming-model contract
+  version: draft
+  arch: blackhole
+  source: tt-metal main, commit 82049e5 (27 November 2026)
+
+# ---------------------------------------------------------------------------------------------------
+# State, per functional unit, named by function. `regs` names the cfg_defines.h fields (per unpacker
+# where the field exists twice); `detect` finds code that sets a field that is not a register.
+# ---------------------------------------------------------------------------------------------------
+state:
+  unpack:
+    Out_data_format:   {regs: {srcA: THCON_SEC0_REG2_Out_data_format, srcB: THCON_SEC1_REG2_Out_data_format}, meaning: "format the unpacker writes into its source register"}
+    Input_format:      {regs: {srcA: THCON_SEC0_REG0_TileDescriptor, srcB: THCON_SEC1_REG0_TileDescriptor}, meaning: "format of the data in L1 (tile descriptor)"}
+    Face_x_dim:        {regs: {srcA: THCON_SEC0_REG0_TileDescriptor, srcB: THCON_SEC1_REG0_TileDescriptor}, meaning: "x dim in the tile descriptor; 0 on srcA, where Tile_x_dim is used instead"}
+    Num_faces:         {regs: {srcA: THCON_SEC0_REG0_TileDescriptor, srcB: THCON_SEC1_REG0_TileDescriptor}, meaning: "z dim in the tile descriptor: faces per tile"}
+    Tile_x_dim:        {regs: {srcA: THCON_SEC0_REG5_Tile_x_dim_cntx0}, meaning: "datums the srcA unpacker reads per face"}
+    Zstride:           {regs: {srcA: UNP0_ADDR_CTRL_ZW_REG_1_Zstride, srcB: UNP1_ADDR_CTRL_ZW_REG_1_Zstride}, meaning: "source-register Z stride, from the unpacked format"}
+    Ystride:           {regs: {srcA: UNP0_ADDR_CTRL_XY_REG_1_Ystride}, meaning: "source-register Y stride, from the unpacked format; read by partial-face matmul"}
+    Fp8_exponent:      {regs: {srcA: THCON_SEC0_REG1_Unp_LF8_4b_exp, srcB: THCON_SEC1_REG1_Unp_LF8_4b_exp}, meaning: "input is fp8 e4m3; shares a word with the packer's bit"}
+    Dest_counter:      {regs: UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr, meaning: "srcA unpacker adds its address counter to the destination address"}
+    Tileize_mode:      {regs: THCON_SEC0_REG2_Tileize_mode, meaning: "row-major input is rearranged into tiles"}
+    Haloize_mode:      {regs: THCON_SEC0_REG2_Haloize_mode, meaning: "transpose on unpack; every unpack init sets it"}
+    SrcA_addr_override: {regs: [SRCA_SET_SetOvrdWithAddr, SRCA_SET_Base], meaning: "srcA rows addressed by the unpacker's output address (one 16-bit word: SetOvrdWithAddr=1, Base=0)"}
+    Unpack_to_dest:    {regs: [THCON_SEC0_REG2_Unpack_if_sel_cntx0, THCON_SEC0_REG2_Unpack_if_sel_cntx1], meaning: "srcA unpacker writes to DEST instead of srcA, per config context"}
+    Dest_address:      {regs: [THCON_SEC0_REG5_Dest_cntx0_address, THCON_SEC0_REG5_Dest_cntx1_address], meaning: "srcA write base, per config context"}
+    Base_address:      {regs: {srcA: [THCON_SEC0_REG3_Base_address, THCON_SEC0_REG3_Base_cntx1_address], srcB: [THCON_SEC1_REG3_Base_address, THCON_SEC1_REG3_Base_cntx1_address]}, meaning: "L1 address of the tile being unpacked; written before use"}
+    Config_context:    {regs: UNPACK_MISC_CFG_CfgContextOffset_0, meaning: "which of the two config contexts the unpackers use"}
+    Config_context_sw: {software: true, detect: "\\bswitch_config_context\\b|\\breset_config_context\\b|\\bunp_cfg_context\\s*=(?!=)", meaning: "unp_cfg_context: the LLK's copy of Config_context"}
+    Tilize_increment:  {regs: SCRATCH_SEC0_val, meaning: "base-address increment between top and bottom faces, for 8-bit tilize; set by init, read by execute"}
+    MOP:               {detect: "\\.program\\s*\\(", meaning: "unpacker macro-op program"}
+    Replay:            {detect: "\\bload_replay_buf\\b|\\blltt::record\\b", meaning: "unpacker replay buffer"}
+    X_end:             {detect: "SETADCXX\\s*\\(\\s*p_setadc::UNP", meaning: "unpacker x-end counter limit"}
+
+  math:
+    Fp32_dest:         {regs: ALU_ACC_CTRL_Fp32_enabled, meaning: "DEST holds fp32"}
+    SFPU_Fp32:         {regs: ALU_ACC_CTRL_SFPU_Fp32_enabled, meaning: "SFPU reads and writes DEST as fp32"}
+    Int8_math:         {regs: ALU_ACC_CTRL_INT8_math_enabled, meaning: "integer math"}
+    Src_unsigned:      {thread: unpack, regs: {srcA: ALU_FORMAT_SPEC_REG0_SrcAUnsigned, srcB: ALU_FORMAT_SPEC_REG0_SrcBUnsigned}, meaning: "source operand is unsigned (UInt8); written by the unpack thread"}
+    Stochastic_rounding: {thread: unpack, regs: [ALU_ROUNDING_MODE_Fpu_srnd_en, ALU_ROUNDING_MODE_Gasket_srnd_en, ALU_ROUNDING_MODE_Packer_srnd_en], meaning: "stochastic rounding in FPU, gasket and packer; written by the unpack thread"}
+    Zero_flag:         {regs: ALU_ACC_CTRL_Zero_Flag_disabled_src, meaning: "whether moves and FPU ops keep source datums with a zero low byte"}
+    Zero_flag_sw:      {software: true, detect: "\\bsrc_zero_flag_(?:hw|srca_fmt|srcb_fmt)\\s*=(?!=)", meaning: "src_zero_flag_hw and the format caches: the LLK's copy of Zero_flag and the formats it was computed from"}
+    Src_format_override: {regs: [ALU_FORMAT_SPEC_REG_SrcA_val, ALU_FORMAT_SPEC_REG_SrcA_override, ALU_FORMAT_SPEC_REG_SrcB_val, ALU_FORMAT_SPEC_REG_SrcB_override], meaning: "explicit source format override; off, so the format is inferred"}
+    SrcA_format:       {regs: ALU_FORMAT_SPEC_REG0_SrcA, meaning: "explicit srcA ALU format; Blackhole infers it, so only some executes write it, and leave it"}
+    SrcA_keep_valid:   {regs: CLR_DVALID_SrcA_Disable, meaning: "FPU keeps srcA valid after use; one word with CLR_DVALID_SrcB_Disable"}
+    Zeroacc_mode:      {regs: DEST_ACCESS_CFG_zeroacc_absolute_tile_mode, meaning: "ZEROACC addresses tiles absolutely (legacy mode)"}
+    Dest_remap:        {regs: [DEST_ACCESS_CFG_remap_addrs, DEST_ACCESS_CFG_swizzle_32b], meaning: "hardware remaps DEST addresses; read by pack"}
+    Dest_offset:       {regs: DEST_TARGET_REG_CFG_MATH_Offset, meaning: "DEST offset the FPU writes to; every execute sets it first"}
+    MOP:               {detect: "\\.program\\s*\\(", meaning: "FPU macro-op program"}
+    Replay:            {detect: "\\bload_replay_buf\\b|\\blltt::record\\b", meaning: "math replay buffer (slots 16-31 FPU, 0-15 SFPU)"}
+    Addr_mod:          {instances: [s0, s1, s2, s3, s4, s5, s6, s7], detect: "\\.set\\s*\\(\\s*ADDR_MOD_{n}\\b|_reg_addr\\s*\\[\\s*ADDR_MOD_{n}\\s*\\]", meaning: "FPU/SFPU address modifier, per slot"}
+
+  pack:
+    In_data_format:    {regs: THCON_SEC0_REG1_In_data_format, meaning: "format the packer takes in (Float16 for fp8 output)"}
+    Out_data_format:   {regs: THCON_SEC0_REG1_Out_data_format, meaning: "format the packer writes to L1"}
+    Exp_section_size:  {regs: THCON_SEC0_REG1_Exp_section_size, meaning: "exponent section size, from format and faces"}
+    Fp8_exponent:      {regs: THCON_SEC0_REG1_Pac_LF8_4b_exp, meaning: "output is fp8 e4m3; shares a word with the unpacker's bit"}
+    Exp_threshold:     {regs: THCON_SEC0_REG1_Exp_threshold, meaning: "flush exponents too small for the output format"}
+    Dest_format:       {regs: ALU_FORMAT_SPEC_REG2_Dstacc, meaning: "format the packer reads from DEST"}
+    Dest_format_override: {regs: [ALU_FORMAT_SPEC_REG_Dstacc_val, ALU_FORMAT_SPEC_REG_Dstacc_override], meaning: "explicit DEST format override; off"}
+    Dest_read:         {regs: [PCK_DEST_RD_CTRL_Read_32b_data, PCK_DEST_RD_CTRL_Read_int8, PCK_DEST_RD_CTRL_Read_unsigned, PCK_DEST_RD_CTRL_Round_10b_mant], meaning: "how the packer reads DEST: 32-bit, int8, unsigned, rounding to 10-bit mantissa"}
+    Ystride:           {regs: PCK0_ADDR_CTRL_XY_REG_0_Ystride, meaning: "DEST-side Y stride, from the DEST format (the X stride is not used)"}
+    Zstride:           {regs: PCK0_ADDR_CTRL_ZW_REG_0_Zstride, meaning: "DEST-side Z and W stride, from the DEST format and pack mode"}
+    Out_strides:       {regs: [PCK0_ADDR_CTRL_XY_REG_1_Xstride, PCK0_ADDR_CTRL_ZW_REG_1_Zstride], meaning: "L1-side strides; 0 in every pack mode"}
+    Packs_per_face:    {regs: PACK_COUNTERS_SEC0_pack_per_xy_plane, meaning: "auto last-pack generation; off"}
+    Reads_per_face:    {regs: PACK_COUNTERS_SEC0_pack_reads_per_xy_plane, meaning: "reads per face for the edge-mask position counter; reduce mask config overrides it"}
+    Edge_masks:        {regs: [PCK_EDGE_OFFSET_SEC0_mask, TILE_ROW_SET_MAPPING_0_row_set_mapping_0, PCK_EDGE_TILE_FACE_SET_SELECT_select], meaning: "edge masks and row/face set mapping; pass-through unless reduce mask config sets them"}
+    L1_acc:            {regs: [THCON_SEC0_REG1_Pack_L1_Acc, PACK_GLOBAL_CFG_CTL_pack_disable_fast_tile_end_drain], meaning: "packer accumulates into L1"}
+    Relu:              {regs: [STACC_RELU_ApplyRelu, STACC_RELU_ReluThreshold], meaning: "ReLU on pack; shares a word with the math zero flag"}
+    MOP:               {detect: "\\.program\\s*\\(", meaning: "packer macro-op program"}
+    Replay:            {detect: "\\bload_replay_buf\\b|\\blltt::record\\b", meaning: "packer replay buffer (the Tilize-mode MOP replays it)"}
+    L1_address:        {regs: THCON_SEC0_REG1_L1_Dest_addr, meaning: "L1 address the packer writes the tile to; every pack execute sets it first"}
+    Addr_mod:          {instances: [s0, s1, s2, s3, s4, s5, s6, s7], detect: "\\.set\\s*\\(\\s*ADDR_MOD_{n}\\b", meaning: "pack-thread address modifier, per slot; 6 and 7 are also used by SFPU ops run from this thread"}
+    X_end:             {detect: "SETADCXX\\s*\\(\\s*p_setadc::PAC", meaning: "packer x-end counter limit"}
+
+# ---------------------------------------------------------------------------------------------------
+# Invariants: relations that hold at every entry-point boundary. An entry point that changes one
+# field of an invariant changes the others with it (validate checks this).
+# ---------------------------------------------------------------------------------------------------
+invariants:
+  - id: INV-CTX
+    fields: [unpack.Config_context, unpack.Config_context_sw]
+    holds: "Config_context == (0x0101 if Config_context_sw else 0x0000)"
+    source: cunpack_common.h:170-189
+  - id: INV-ZF
+    fields: [math.Zero_flag, math.Zero_flag_sw]
+    holds: "src_zero_flag_hw in {Zero_flag, 0xff}; the format caches equal the formats last configured"
+    source: cmath_common.h:53-64
+  - id: INV-FP32
+    fields: [math.Fp32_dest, math.SFPU_Fp32]
+    holds: "Fp32_dest == SFPU_Fp32"
+    source: llk_math_common.h:48-49
+
+# ---------------------------------------------------------------------------------------------------
+# Kernel start: what holds before the first entry point. TO CONFIRM by the architects.
+# ---------------------------------------------------------------------------------------------------
+kernel_start:
+  assumes:
+    math.SrcA_keep_valid: 0           # no configure writes it; some inits write 0
+    math.Dest_remap: 0                # no configure writes it; the pack-untilize compute API sets it
+  notes:
+    - "Config bank 0 throughout: only llk_lib/experimental/llk_hw_cleanup.h switches CFG_STATE_ID."
+
+# ---------------------------------------------------------------------------------------------------
+# Entry points, grouped by operation. Configure is an operation of its own.
+# ---------------------------------------------------------------------------------------------------
+operations:
+
+  configure:
+    description: >-
+      Sets each unit up for the kernel's operands. compute_kernel_hw_startup<SrcOrder> puts in0 on srcA
+      and in1 on srcB (Regular), or the reverse (Reverse, for matmul); written here for Regular.
+    operands:
+      in0: {unpacker: srcA}
+      in1: {unpacker: srcB}
+      out: {}
+    hw_configure:
+      requires: {}
+      ensures:
+        unpack.Out_data_format[in0]: in0.format.unpacked
+        unpack.Out_data_format[in1]: in1.format.unpacked
+        unpack.Input_format[in0]:    in0.format.l1
+        unpack.Input_format[in1]:    in1.format.l1
+        unpack.Face_x_dim[in0]:      0                                  # CANONICAL_UNPA_TILE_X_DIM
+        unpack.Face_x_dim[in1]:      in1.tile.face_r_dim * 16           # cunpack_common.h:874
+        unpack.Num_faces[in0]:       in0.tile.num_faces
+        unpack.Num_faces[in1]:       in1.tile.num_faces
+        unpack.Tile_x_dim[in0]:      in0.tile.face_r_dim * 16
+        unpack.Zstride[in0]:         canonical_z_stride(in0.format.unpacked)
+        unpack.Zstride[in1]:         canonical_z_stride(in1.format.unpacked)
+        unpack.Ystride[in0]:         canonical_y_stride(in0.format.unpacked)
+        unpack.Fp8_exponent[in0]:    is_fp8_e4m3(in0.format.l1)
+        unpack.Fp8_exponent[in1]:    is_fp8_e4m3(in1.format.l1)
+        unpack.Dest_counter:         1
+        unpack.Tileize_mode:         0
+        unpack.Haloize_mode:         0
+        unpack.SrcA_addr_override:   1
+        unpack.Unpack_to_dest:       0
+        unpack.Dest_address:         64                                 # 352 when face_r_dim is 0 (cunpack_common.h:912)
+        unpack.Config_context:       0
+        unpack.Config_context_sw:    0
+        math.Fp32_dest:              kernel.fp32_dest_acc
+        math.SFPU_Fp32:              kernel.fp32_dest_acc
+        math.Int8_math:              is_int8_or_int32(in0.format.unpacked) or is_int8_or_int32(in1.format.unpacked)
+        math.Src_unsigned[in0]:      in0.format.l1 == UInt8
+        math.Src_unsigned[in1]:      in1.format.l1 == UInt8
+        math.Stochastic_rounding:    "(kernel.fpu_srnd, kernel.pack_srnd, kernel.pack_srnd)"
+        math.Zero_flag:              default_zero_flag(in0.format.unpacked, in1.format.unpacked)
+        math.Zero_flag_sw:           default_zero_flag(in0.format.unpacked, in1.format.unpacked)
+        math.Src_format_override:    0
+        math.Zeroacc_mode:           0
+        pack.In_data_format:         "Float16 if out.format.l1 == Fp8_e4m3 else out.format.dest"
+        pack.Out_data_format:        out.format.l1
+        pack.Exp_section_size:       "0 if out.format.l1 in (Lf8, Int8) else (1 if out.tile.partial_face else out.tile.num_faces)"
+        pack.Fp8_exponent:           is_fp8_e4m3(out.format.l1)
+        pack.Exp_threshold:          exp_threshold(out.format.l1, kernel.fp32_dest_acc)
+        pack.Dest_format:            "Float16 if out.format.l1 == Fp8_e4m3 else out.format.dest"
+        pack.Dest_format_override:   0
+        pack.Dest_read:              dest_read(out.format.dest, out.format.l1, kernel.fp32_dest_acc)
+        pack.Ystride:                16 * datum_size(out.format.dest)
+        pack.Zstride:                packer_z_stride(out.format.dest, default)
+        pack.Out_strides:            0
+        pack.Packs_per_face:         0
+        pack.Reads_per_face:         1
+        pack.Edge_masks:             pass_through
+        pack.L1_acc:                 0
+        pack.Relu:                   kernel.relu
+        math.Addr_mod[s6]:           dest_advance(2)                    # llk_math_common.h:29-41
+        math.Addr_mod[s7]:           dest_advance(0)
+        pack.Addr_mod[s6]:           dest_advance(2)                    # llk_pack.h:468-490
+        pack.Addr_mod[s7]:           dest_advance(0)
+      may_change: ["unpack.Base_address[in0]", "unpack.Base_address[in1]"]
+      why:
+        math.Addr_mod[s6]: "invariant the SFPU ops assume (dest += 2, like dst_reg++); any op that reprograms it restores it before returning (llk_math_common.h:29-41)"
+        math.Addr_mod[s7]: "invariant the SFPU ops assume (zero advance, like a NOP); any op that reprograms it restores it before returning"
+        pack.Addr_mod[s6]: "the same invariant on the pack thread, from which SFPU ops also run (llk_pack.h:468-490)"
+
+  tilize:
+    description: >-
+      Rearranges a row-major input into tiles. The unpacker rearranges (tileize mode), math copies srcA to
+      DEST (datacopy A2D), the packer writes tiles. On Blackhole the packer runs in Tilize mode to undo a
+      row swizzle, except for 8-bit inputs (Int8, UInt8, Fp8_e4m3, Lf8), which do not need it.
+      Thread handoff (math_wait_for_dest_available, dest_section_done, packer_wait_for_math_done) is
+      called by tilize_block but is not part of this contract.
+    operands:
+      in0: {unpacker: srcA, layout: row_major}
+      out: {layout: tiled}
+    supports:                                   # TO CONFIRM by the architects
+      formats: {in0: [bf16, fp32, bfp8_b, int32], out: [bf16, fp32, bfp8_b, int32]}
+      tile_shapes: [32x32, 16x32]
+      narrow_tile: [false, true]
+
+    init:
+      requires: {}
+      ensures:
+        # unpack: tileize mode, srcA tile descriptor for a whole row-major tile, the tilize MOP
+        unpack.Tileize_mode:         1
+        unpack.Haloize_mode:         0
+        unpack.Out_data_format[in0]: in0.format.unpacked
+        unpack.Zstride[in0]:         canonical_z_stride(in0.format.unpacked)
+        unpack.Face_x_dim[in0]:      "0 if is_8bit(in0.format.l1) else tile_datums(in0.tile)"     # llk_unpack_tilize.h:160
+        unpack.Num_faces[in0]:       "in0.tile.num_faces if is_8bit(in0.format.l1) else 1"          # :99, then :161
+        unpack.Tile_x_dim[in0]:      "16 if is_8bit(in0.format.l1) else tile_datums(in0.tile)"     # :139 FACE_DIM_1x16, :159
+        unpack.Tilize_increment:     "bot_face_offset(in0, op.ct_dim) if is_8bit(in0.format.l1) and in0.tile.num_faces == 4"
+        unpack.MOP:                  "tilize(in0, op.ct_dim, op.narrow_tile) if not is_8bit(in0.format.l1)"
+        unpack.X_end:                tilize_x_end(in0)
+        # math: datacopy A2D program
+        math.MOP:                    datacopy
+        math.Addr_mod[s0]:           datacopy
+        math.Addr_mod[s2]:           datacopy
+        math.Addr_mod[s3]:           datacopy
+        math.SrcA_keep_valid:        0
+        # pack: Tilize mode, Default for 8-bit inputs (llk_pack_tile_api.h:77, llk_pack.h:553)
+        pack.MOP:                    "pack(out, default) if is_8bit(in0.format.l1) else pack(out, tilize)"
+        pack.Replay:                 "tilize_unswizzle(out) if not is_8bit(in0.format.l1) and out.tile.face_r_dim > 1"
+        pack.Addr_mod[s0]:           "default if is_8bit(in0.format.l1) else tilize"
+        pack.Addr_mod[s1]:           "default if is_8bit(in0.format.l1) else tilize"
+        pack.Addr_mod[s2]:           "default if is_8bit(in0.format.l1) else tilize"
+        pack.Ystride:                16 * datum_size(out.format.dest)
+        pack.Zstride:                "packer_z_stride(out.format.dest, default) if is_8bit(in0.format.l1) else packer_z_stride(out.format.dest, tilize)"
+        pack.Out_strides:            0
+        pack.X_end:                  15
+      why:
+        unpack.Zstride[in0]: "the init must be given the format the input is configured with; otherwise the Z stride is wrong after uninit"
+        unpack.Tilize_increment: "the 8-bit execute adds it to the base address between top and bottom faces with CFGSHIFTMASK, and never writes it (llk_unpack_tilize.h:268-276)"
+        pack.MOP: "Blackhole packs tilized data in Tilize mode to undo a row swizzle; 8-bit inputs are not affected, so they keep Default (llk_pack.h:551-553)"
+        pack.Zstride: "in Tilize mode the Z stride jumps two faces for a full-width tile (cpack_common.h:331)"
+
+    execute:
+      requires:
+        # unpack: what the init set, and configure's input format
+        unpack.Tileize_mode:         1
+        unpack.Haloize_mode:         0
+        unpack.Out_data_format[in0]: in0.format.unpacked
+        unpack.Input_format[in0]:    in0.format.l1
+        unpack.Zstride[in0]:         canonical_z_stride(in0.format.unpacked)
+        unpack.Face_x_dim[in0]:      "0 if is_8bit(in0.format.l1) else tile_datums(in0.tile)"
+        unpack.Num_faces[in0]:       "in0.tile.num_faces if is_8bit(in0.format.l1) else 1"
+        unpack.Tile_x_dim[in0]:      "16 if is_8bit(in0.format.l1) else tile_datums(in0.tile)"
+        unpack.Tilize_increment:     "bot_face_offset(in0, op.ct_dim) if is_8bit(in0.format.l1) and in0.tile.num_faces == 4"
+        unpack.SrcA_addr_override:   1                        # llk_unpack_tilize.h:219-226
+        unpack.Unpack_to_dest:       0
+        unpack.Dest_address:         64
+        unpack.MOP:                  "tilize(in0, op.ct_dim, op.narrow_tile) if not is_8bit(in0.format.l1)"
+        unpack.X_end:                tilize_x_end(in0)
+        # math: the datacopy program, and configure's DEST mode
+        math.MOP:                    datacopy
+        math.Addr_mod[s0]:           datacopy
+        math.Addr_mod[s2]:           datacopy
+        math.Addr_mod[s3]:           datacopy
+        math.SrcA_keep_valid:        0
+        math.Fp32_dest:              kernel.fp32_dest_acc
+        math.Src_format_override:    0
+        math.Zero_flag:              default_zero_flag(in0.format.unpacked, srcB.format.unpacked)
+        # pack: the program the init set, and configure's output format
+        pack.MOP:                    "pack(out, default) if is_8bit(in0.format.l1) else pack(out, tilize)"
+        pack.Replay:                 "tilize_unswizzle(out) if not is_8bit(in0.format.l1) and out.tile.face_r_dim > 1"
+        pack.Addr_mod[s0]:           "default if is_8bit(in0.format.l1) else tilize"
+        pack.Addr_mod[s1]:           "default if is_8bit(in0.format.l1) else tilize"
+        pack.Addr_mod[s2]:           "default if is_8bit(in0.format.l1) else tilize"
+        pack.Ystride:                16 * datum_size(out.format.dest)
+        pack.Zstride:                "packer_z_stride(out.format.dest, default) if is_8bit(in0.format.l1) else packer_z_stride(out.format.dest, tilize)"
+        pack.Out_strides:            0
+        pack.X_end:                  15
+        pack.In_data_format:         "Float16 if out.format.l1 == Fp8_e4m3 else out.format.dest"
+        pack.Out_data_format:        out.format.l1
+        pack.Exp_section_size:       "0 if out.format.l1 in (Lf8, Int8) else (1 if out.tile.partial_face else out.tile.num_faces)"
+        pack.Dest_format:            "Float16 if out.format.l1 == Fp8_e4m3 else out.format.dest"
+        pack.Dest_read:              dest_read(out.format.dest, out.format.l1, kernel.fp32_dest_acc)
+        pack.Reads_per_face:         1
+        pack.Edge_masks:             pass_through
+        pack.L1_acc:                 0
+      ensures:                                                # unpack-to-dest changes these and writes the literals back
+        unpack.SrcA_addr_override:   1
+        unpack.Unpack_to_dest:       0
+        unpack.Dest_address:         64
+        unpack.Zstride[in0]:         canonical_z_stride(in0.format.unpacked)   # written back from the L1 format; equal for unpack-to-dest formats
+      may_change: ["unpack.Base_address[in0]", unpack.Config_context, unpack.Config_context_sw, math.Dest_offset, pack.L1_address]
+      why:
+        unpack.Tileize_mode: "the unpacker rearranges row-major input into faces only in tileize mode"
+        unpack.SrcA_addr_override: "the 8-bit path lets the output address drive the srcA row; the code calls this its contract and the resting state (llk_unpack_tilize.h:219-226)"
+        unpack.Dest_address: "unpack-to-DEST changes it and writes the literal 64 back (cunpack_common.h:985,1009)"
+        math.Zero_flag: "TO CONFIRM: datacopy relies on the flag but neither its init nor its execute sets it (copy_init in the compute API does); it holds configure's default unless an earlier op changed it"
+
+    uninit:
+      requires: {}
+      ensures:
+        # unpack: tileize off, srcA tile descriptor back to configure's
+        unpack.Tileize_mode:         0
+        unpack.Haloize_mode:         0
+        unpack.Out_data_format[in0]: in0.format.unpacked
+        unpack.Face_x_dim[in0]:      0                        # llk_unpack_tilize.h:381
+        unpack.Num_faces[in0]:       in0.tile.num_faces       # llk_unpack_tilize.h:380
+        unpack.Tile_x_dim[in0]:      in0.tile.face_r_dim * 16
+        # pack: back to Default mode (tilize.h:241-243, Blackhole only)
+        pack.MOP:                    pack(out, default)
+        pack.Addr_mod[s0]:           default
+        pack.Addr_mod[s1]:           default
+        pack.Addr_mod[s2]:           default
+        pack.Ystride:                16 * datum_size(out.format.dest)
+        pack.Zstride:                packer_z_stride(out.format.dest, default)
+        pack.Out_strides:            0
+        pack.X_end:                  15
+      why:
+        pack.MOP: "tilize_init armed the packer in Tilize mode; the uninit re-inits it in Default mode for the next op"
+
+  reconfig_srca:
+    description: >-
+      Switches unpacker A and the math thread to another input format without a full configure. Used by
+      tilize_init_short_with_dt before the tilize init. Written for p_dim_stride_target::IGNORE (tile shape
+      unchanged).
+    operands:
+      in0: {unpacker: srcA}
+    reconfigure:
+      requires: {}
+      ensures:
+        unpack.Input_format[in0]:    in0.format.l1
+        unpack.Out_data_format[in0]: in0.format.unpacked
+        unpack.Fp8_exponent[in0]:    is_fp8_e4m3(in0.format.l1)
+        unpack.Zstride[in0]:         canonical_z_stride(in0.format.unpacked)
+        unpack.Ystride[in0]:         canonical_y_stride(in0.format.unpacked)
+        math.Src_unsigned[in0]:      in0.format.l1 == UInt8
+        math.Int8_math:              is_int8_or_int32(in0.format.unpacked)
+        math.Zero_flag:              default_zero_flag(in0.format.unpacked, srcB.format.unpacked)
+        math.Zero_flag_sw:           default_zero_flag(in0.format.unpacked, srcB.format.unpacked)
+      why:
+        math.Int8_math: "TO CONFIRM: set from srcA only, while configure uses srcA or srcB (llk_math_common.h:45 vs :206)"
+        unpack.Ystride[in0]: "re-committed on every format change, since partial-face matmul reads it without setting it (llk_unpack_common.h:245-252)"
+
+  matmul:
+    description: out += in0 x in1 over tiles. Needs compute_kernel_hw_startup<SrcOrder::Reverse>.
+    operands:
+      in0: {unpacker: srcB}                     # llk_unpack_AB_matmul.h:40, matmul.h:95-97
+      in1: {unpacker: srcA}
+      out: {}
+    supports:                                   # TO CONFIRM by the architects
+      formats: {in0: [bf16, bfp8_b, fp32], in1: [bf16, bfp8_b, fp32], out: [bf16, fp32]}
+      tile_shapes: [32x32]
+      params: {transpose: [false, true], fidelity: [LoFi, HiFi2, HiFi3, HiFi4], throttle: [0, 1, 2, 3, 4, 5], row_mop: [false, true]}
+    init:
+      requires: {}
+      ensures:
+        unpack.Haloize_mode:         op.transpose
+        unpack.MOP:                  matmul(op)
+        unpack.Replay:               matmul(op)
+        unpack.X_end:                matmul(op)
+        math.Zero_flag:              default_zero_flag(in1.format.unpacked, in0.format.unpacked)   # from the cached formats (srcA, srcB)
+        math.Zero_flag_sw:           default_zero_flag(in1.format.unpacked, in0.format.unpacked)
+        math.MOP:                    matmul(op)
+        math.Replay:                 matmul(op)
+        math.Addr_mod[s0]:           matmul(op)
+        math.Addr_mod[s1]:           matmul(op)
+        math.Addr_mod[s2]:           matmul(op)
+        math.Addr_mod[s3]:           matmul(op)
+        math.Addr_mod[s4]:           matmul(op)
+        math.Addr_mod[s5]:           matmul(op)
+      why:
+        unpack.Haloize_mode: "transpose is done by the unpacker; the init sets it from the operation's parameter and nothing puts it back"
+      may_change: ["unpack.Base_address[in0]", "unpack.Base_address[in1]"]
+    execute:
+      requires:
+        unpack.Tileize_mode:         0
+        unpack.Haloize_mode:         op.transpose
+        unpack.Out_data_format[in0]: in0.format.unpacked
+        unpack.Out_data_format[in1]: in1.format.unpacked
+        unpack.Input_format[in0]:    in0.format.l1
+        unpack.Input_format[in1]:    in1.format.l1
+        unpack.Face_x_dim[in0]:      in0.tile.face_r_dim * 16
+        unpack.Face_x_dim[in1]:      0
+        unpack.Num_faces[in0]:       in0.tile.num_faces
+        unpack.Num_faces[in1]:       in1.tile.num_faces
+        unpack.Tile_x_dim[in1]:      in1.tile.face_r_dim * 16
+        unpack.Ystride[in1]:         canonical_y_stride(in1.format.unpacked)
+        unpack.SrcA_addr_override:   1
+        unpack.Unpack_to_dest:       0
+        unpack.Dest_address:         64
+        unpack.MOP:                  matmul(op)
+        unpack.Replay:               matmul(op)
+        unpack.X_end:                matmul(op)
+        math.Fp32_dest:              kernel.fp32_dest_acc
+        math.Int8_math:              is_int8_or_int32(in1.format.unpacked) or is_int8_or_int32(in0.format.unpacked)
+        math.Zero_flag:              default_zero_flag(in1.format.unpacked, in0.format.unpacked)   # asserted, llk_math_matmul.h:940
+        math.Src_format_override:    0
+        math.SrcA_keep_valid:        0
+        math.MOP:                    matmul(op)
+        math.Replay:                 matmul(op)
+        math.Addr_mod[s0]:           matmul(op)
+        math.Addr_mod[s1]:           matmul(op)
+        math.Addr_mod[s2]:           matmul(op)
+        math.Addr_mod[s3]:           matmul(op)
+        math.Addr_mod[s4]:           matmul(op)
+        math.Addr_mod[s5]:           matmul(op)
+      ensures:
+        math.Addr_mod[s6]:           dest_advance(2)            # programmed at entry for throttle / row MOP, restored at exit
+      why:
+        math.Zero_flag: "the execute asserts the flag equals the default for the cached formats and never sets it (llk_math_matmul.h:936-943)"
+        unpack.Face_x_dim[in0]: "in0 is on srcB, whose descriptor carries the face width; srcA's x dim is 0 and Tile_x_dim is used instead"
+        math.SrcA_keep_valid: "the FPU must clear srcA valid after use; no configure sets this, so it comes from kernel start or an init"
+        math.Addr_mod[s6]: "with the row MOP or the throttled MOP the execute programs slot 6 at entry and restores the dest += 2 invariant before returning (llk_math_matmul.h:927, 995, 1046)"
+      may_change: ["unpack.Base_address[in0]", "unpack.Base_address[in1]", unpack.Config_context, unpack.Config_context_sw, math.Dest_offset]
+    uninit:
+      requires: {}
+      ensures: {}                               # both are empty: "all states are transient or default"
+    open:
+      - "On Blackhole, mm_uninit calls no LLK (it is Quasar-only), so the LLK uninits above are not reached from the compute API."

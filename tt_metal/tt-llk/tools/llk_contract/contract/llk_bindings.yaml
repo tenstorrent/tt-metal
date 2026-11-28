@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Where each entry point of llk_contract.yaml is in the code. The contract says what an entry point
+# requires and ensures; this file binds it to the code that implements it and the code that calls it:
+#   llk          the LLK function that implements the entry point, per thread
+#   compute_api  the compute API functions (1.0 and 2.0) that call it
+#   template     template arguments those callers pass, per thread; the code checks skip the
+#                `if constexpr` branches these arguments rule out
+# check-code, check-api and trace read it; validate checks that every key names an entry point of the
+# contract. Renaming an LLK function or a compute API function changes this file, not the contract.
+
+configure.hw_configure:
+  llk: {unpack: _llk_unpack_hw_configure_, math: _llk_math_hw_configure_, pack: _llk_pack_hw_configure_}
+  compute_api: [compute_kernel_hw_startup::compute_kernel_hw_startup]
+
+tilize.init:
+  llk: {unpack: _llk_unpack_tilize_init_, math: _llk_math_eltwise_unary_datacopy_init_, pack: _llk_pack_init_}
+  compute_api: [tilize::tilize_init, tilize::tilize_init_short_with_dt, experimental/2_0/tilize::tilize_init]
+
+tilize.execute:
+  llk: {unpack: _llk_unpack_tilize_, math: _llk_math_eltwise_unary_datacopy_, pack: _llk_pack_}
+  compute_api: [tilize::tilize_block, experimental/2_0/tilize::tilize_block]
+  template:                                   # tilize.h:176-182
+    math: {type: DataCopyType::A2D, src_b_bcast_type: BroadcastType::NONE}
+    pack: {pack_mode: PackMode::Default}
+
+tilize.uninit:
+  llk: {unpack: _llk_unpack_tilize_uninit_, pack: _llk_pack_init_}
+  compute_api: [tilize::tilize_uninit, experimental/2_0/tilize::tilize_uninit]
+  template:                                   # tilize.h:243
+    pack: {pack_mode: PackMode::Default}
+
+reconfig_srca.reconfigure:
+  llk: {unpack: _llk_unpack_reconfig_data_format_srca_impl_, math: _llk_math_reconfig_data_format_srca_}
+  compute_api: [tilize::tilize_init_short_with_dt]
+  template:                                   # tilize.h:135
+    unpack: {dim_stride_target: p_dim_stride_target::IGNORE}
+
+matmul.init:
+  llk: {unpack: _llk_unpack_AB_matmul_init_, math: _llk_math_matmul_init_}
+  compute_api: [matmul::matmul_init, experimental/2_0/matmul::matmul_init]
+
+matmul.execute:
+  llk: {unpack: _llk_unpack_AB_matmul_, math: _llk_math_matmul_}
+  compute_api: [matmul::matmul_tiles, experimental/2_0/matmul::matmul_tiles]
+
+matmul.uninit:                                # no compute API call on Blackhole: mm_uninit is Quasar-only
+  llk: {unpack: _llk_unpack_AB_matmul_uninit_, math: _llk_math_matmul_uninit_}
