@@ -18,7 +18,13 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    block_shards,
+    contiguous_1d_shards,
+    full_range_input,
+    int8_with_min_value,
+)
 
 
 def random_torch_tensor(dtype, shape):
@@ -1101,3 +1107,93 @@ def test_permute_rm_into_height_shards_with_unaligned_rows(device):
 
     assert output.memory_config() == config
     assert_equal(x.permute(1, 0, 2, 3), ttnn.to_torch(output))
+
+
+# ROW_MAJOR block shards one row high on two or more shard columns: transpose stages them through interleaved memory
+# (#67023).
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_transpose_wh_rm_into_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    out_rows = rows * shard_h
+    # The ROW_MAJOR WH transpose turns a BFLOAT16 NaN into inf and -0.0 into +0.0 even between interleaved tensors.
+    x = full_range_input([1, 1, 16 * shard_cols, out_rows], dtype, nan=False)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.transpose(t, -2, -1, memory_config=block_shards((shard_h, 16), rows, shard_cols))
+
+    assert_exact(x.transpose(-2, -1), ttnn.to_torch(output), signed_zeros=False)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_transpose_wh_rm_into_folded_nd_shard_rows(device, dtype):
+    # [1, 1, 1, 16] ND shards of 64-wide rows fold the same way as a one-row BLOCK shard.
+    config = contiguous_1d_shards([1, 1, 1, 16], num_cores=4)
+    # The ROW_MAJOR WH transpose turns a BFLOAT16 NaN into inf and -0.0 into +0.0 even between interleaved tensors.
+    x = full_range_input([1, 1, 64, 16], dtype, nan=False)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.transpose(t, -2, -1, memory_config=config)
+
+    assert output.memory_config() == config, "transpose changed the requested output configuration"
+    assert_exact(x.transpose(-2, -1), ttnn.to_torch(output), signed_zeros=False)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
+    x = full_range_input([1, 1, 16, 64], dtype, nan=False)
+    t = ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=contiguous_1d_shards([1, 1, 1, 16], num_cores=4),
+    )
+
+    output = ttnn.permute(t, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_exact(x.permute(0, 1, 3, 2), ttnn.to_torch(output), signed_zeros=False)
+
+
+# INT8 -128 regression (#67429): the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
+# Tile routing (interleaved): the last-two swap (0,1,3,2) goes to ttnn::transpose, which reaches
+# TransposeWHProgramFactory; the other tile cases reach prim::permute.
+#   (0,3,1,2) moves one tile dim, so it selects MultiCoreTileRowInvariant with its transpose_wh compute kernel.
+#   (3,2,1,0) moves both, so it selects MultiCoreTiledGeneric (transpose_xw_tiled compute kernel).
+#   A rank 5 last-two swap is not decomposed to transpose, so it reaches MultiCoreTileInvariant with swap_hw
+#   (transpose_wh).
+# Row-major routing (interleaved): (0,1,3,2) and the 2D swap go through ttnn::transpose -> prim::permute ->
+# MultiCoreBlockedGeneric on Wormhole and Blackhole. Blackhole stages 8-bit row-major input through UINT32 only when
+# it is sharded (#61827), so these interleaved cases run the factory itself on both architectures. The 50x70 cases
+# leave partial 32x32 blocks in both dims.
+@pytest.mark.parametrize(
+    "layout, shape, dims",
+    [
+        (ttnn.TILE_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
+        (ttnn.TILE_LAYOUT, [1, 2, 2, 64, 64], (0, 1, 2, 4, 3)),
+        (ttnn.TILE_LAYOUT, [2, 32, 64, 64], (0, 3, 1, 2)),
+        (ttnn.TILE_LAYOUT, [32, 32, 32, 32], (3, 2, 1, 0)),
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
+        (ttnn.ROW_MAJOR_LAYOUT, [64, 64], (1, 0)),
+        (ttnn.ROW_MAJOR_LAYOUT, [2, 3, 50, 70], (0, 1, 3, 2)),
+        (ttnn.ROW_MAJOR_LAYOUT, [50, 70], (1, 0)),
+    ],
+    ids=[
+        "tile_wh",
+        "tile_invariant_rank5",
+        "tile_row_invariant",
+        "tile_generic",
+        "row_major_4d",
+        "row_major_2d",
+        "row_major_4d_partial_blocks",
+        "row_major_2d_partial_blocks",
+    ],
+)
+def test_permute_int8_min_value(device, layout, shape, dims):
+    x = int8_with_min_value(shape)
+    t = ttnn.from_torch(x, dtype=ttnn.int8, layout=layout, device=device)
+
+    got = ttnn.to_torch(ttnn.from_device(ttnn.permute(t, dims)).to(ttnn.ROW_MAJOR_LAYOUT))
+
+    assert torch.equal(got, x.permute(*dims))

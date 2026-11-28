@@ -219,6 +219,7 @@ TEST_F(AddUnaryScalarRangeFixture, RejectsScalarsOutsideInputDtypeRange) {
 class AddUnaryScalarCacheFixture : public TTNNFixtureWithSuiteDevice<AddUnaryScalarCacheFixture> {};
 
 // On non-integer dtypes every scalar alternative compiles to the same float kernel, so it must share one program.
+// The scalar is a runtime arg, so a different value shares it too and still takes effect.
 TEST_F(AddUnaryScalarCacheFixture, FloatTensorSharesProgramAcrossScalarTypes) {
     auto& device = *device_;
     const auto input_tensor = ttnn::full(ttnn::Shape({32, 64}), 3.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -235,14 +236,14 @@ TEST_F(AddUnaryScalarCacheFixture, FloatTensorSharesProgramAcrossScalarTypes) {
     ttnn::sub_sfpu(128.0f, input_tensor);
     const auto entries_with_rsub = device.num_program_cache_entries();
     ttnn::sub_sfpu(128, input_tensor);
+    const auto output = ttnn::add_sfpu(input_tensor, 5).cpu().to_vector<bfloat16>();
 
     EXPECT_EQ(device.num_program_cache_entries(), entries_with_rsub);
     EXPECT_EQ(entries_with_rsub, entries_with_sub + 1);
     EXPECT_EQ(entries_with_sub, entries + 1);
-
-    // The scalar is a compile-time define, so a different value must add an entry.
-    ttnn::add_sfpu(input_tensor, 129);
-    EXPECT_EQ(device.num_program_cache_entries(), entries_with_rsub + 1);
+    for (const auto value : output) {
+        ASSERT_EQ(static_cast<float>(value), 8.0f);
+    }
 }
 
 }  // namespace ttnn::operations::unary::test

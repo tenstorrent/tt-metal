@@ -24,10 +24,14 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
            mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
+// The kernels address the input through a TensorAccessor, so it may be interleaved in L1 as well as DRAM.
 void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.is_allocated(), "{} must have a buffer", name);
-    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
+    TT_FATAL(
+        tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "{} must be interleaved (DRAM or L1)",
+        name);
 }
 
 ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {

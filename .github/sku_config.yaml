@@ -208,6 +208,13 @@ skus:
     runs_on:
       - exabox-multihost-ci-sc16
 
+  # QB2 via TTOP (Exabox k8s, multihost-ci chart size "qb2"); not the bare-metal
+  # BH-Quietbox-2 runners, which are bh_quietbox_2.
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
+  bh_qb2:
+    runs_on:
+      - exabox-multihost-ci-qb2
+
   cpu_medium:
     runs_on:
       - tt-ubuntu-2204-medium-stable
@@ -243,6 +250,12 @@ skus:
   cpu_medium_prio:
     runs_on:
       - tt-ubuntu-2204-medium-prio-stable
+
+  # Keeps the sim_ prefix and ttsim_lib so setup-ttsim still installs the simulator.
+  sim_quasar_xl_prio:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-prio-stable
+    ttsim_lib: libttsim_qsr.so
 
   # Synthetic CPU SKUs for ttsim simulator jobs. The impl invokes
   # .github/actions/setup-ttsim gated on `startsWith(sku, 'sim_')`; that action reads
@@ -308,3 +321,4 @@ skus:
     runs_on:
       - tt-ubuntu-2204-xlarge-stable
     ttsim_lib: libttsim_qsr.so
+    merge_queue_sku: sim_quasar_xl_prio

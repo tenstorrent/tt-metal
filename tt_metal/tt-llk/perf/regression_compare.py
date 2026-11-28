@@ -58,6 +58,9 @@ def _is_metric(col):
 
 MODULE_COL = "test_module"
 
+# Raw cycles scale with these; helpers/perf/core.py reads a missing one as 1.
+COUNT_COLUMNS = frozenset({"loop_factor", "tile_cnt"})
+
 
 _HISTORY = None
 
@@ -243,17 +246,33 @@ def _one_sided_constants(mine, theirs):
     return drop
 
 
+def _fill_count(frames, module, col):
+    for frame in frames:
+        rows = frame[MODULE_COL] == module
+        if not rows.any():
+            continue
+        if col not in frame.columns:
+            frame[col] = float("nan")
+        frame.loc[rows, col] = frame.loc[rows, col].fillna(1)
+
+
 def _drop_one_sided_constants(cur_frames, base_frames):
     """A column one side added with a single value keeps the other points comparable.
 
     Without this a new parameter rewrites the identity of every row of its test,
     so nothing matches and a whole module reads as new and missing at once.
+
+    A count column (``loop_factor``, ``tile_cnt``) is not dropped: it scales the
+    raw cycles. The side without it gets 1, the value helpers/perf/core.py assumes,
+    so ``loop_factor=32`` against a test that never looped stays unmatched.
     """
     for mine, theirs in ((cur_frames, base_frames), (base_frames, cur_frames)):
         for module, cols in _one_sided_constants(mine, theirs).items():
+            for col in cols & COUNT_COLUMNS:
+                _fill_count(theirs, module, col)
             for frame in mine:
                 rows = frame[MODULE_COL] == module
-                for col in cols & set(frame.columns):
+                for col in (cols - COUNT_COLUMNS) & set(frame.columns):
                     frame[col] = frame[col].astype(object).mask(rows)
 
 

@@ -436,6 +436,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                  {"ntiles_per_row", ntiles_per_block}});
         }
     } else {
+        // Shard indices count from the shard grid's origin, which need not be (0, 0).
+        const CoreCoord grid_origin = all_cores.bounding_box().start_coord;
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             CoreCoord core = all_core_coords[i];
 
@@ -457,6 +459,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                     }
                 }
             } else {
+                // Shard position relative to the grid origin; runtime args below still use the absolute core.
+                const CoreCoord core = {all_core_coords[i].x - grid_origin.x, all_core_coords[i].y - grid_origin.y};
                 if (row_major) {
                     block_start_row_offset = core.x * block_row_size;
                     block_start_row_id_offset = core.y * num_rows_block;

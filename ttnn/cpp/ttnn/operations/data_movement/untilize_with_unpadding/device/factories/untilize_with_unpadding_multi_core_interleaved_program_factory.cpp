@@ -74,7 +74,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
-    if (a.dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B || tt::tt_metal::is_mx(a.dtype())) {
         padded_row_size_bytes = input_shape[-1] * output.element_size();
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
     } else {

@@ -137,6 +137,37 @@ def docstring_blackhole_dtype_layout_params(op):
         return _unreadable_params(op, "Blackhole dtypes", error, arity=2)
 
 
+def docstring_dtype_conversion_params(op, source, target):
+    """One ``pytest.param(source_dtype, target_dtype)`` per dtype change the docstring lists, in clauses of the form
+    "a ``<DTYPE>`` or ``<DTYPE>`` <source> can give a ``<DTYPE>`` or ``<DTYPE>`` <target>". ``can give`` may also read
+    ``can be copied into`` or ``into``, or be left out. ``source`` and ``target`` are the words the docstring uses for
+    the two tensors, such as ``"input"`` and ``"output"``. A pair of the same dtype is left out.
+
+    Every name must be a ``ttnn.DataType``, and at least one clause must be found; anything else fails the test.
+    """
+    try:
+        names = r"``\w+``(?:(?:, | or )``\w+``)*"
+        verb = r"(?:can give |can be copied into |into )?"
+        clause = rf"\b[Aa]n? ({names}) {re.escape(source)} {verb}an? ({names}) {re.escape(target)}(?!\w)"
+        found = re.findall(clause, " ".join(op.__doc__.split()))
+        assert found, f"no 'a ``<DTYPE>`` {source} can give a ``<DTYPE>`` {target}' clause"
+        pairs = {}
+        for sources, targets in found:
+            source_names, target_names = re.findall(r"``(\w+)``", sources), re.findall(r"``(\w+)``", targets)
+            unknown = [
+                n for n in source_names + target_names if not isinstance(getattr(ttnn.DataType, n, None), ttnn.DataType)
+            ]
+            assert not unknown, f"not a ttnn.DataType: {unknown}"
+            for source_name in source_names:
+                for target_name in target_names:
+                    if source_name != target_name:
+                        pairs[(source_name, target_name)] = None
+        assert pairs, "the dtype-change clauses name no change of dtype"
+        return [pytest.param(getattr(ttnn.DataType, s), getattr(ttnn.DataType, t), id=f"{s}-to-{t}") for s, t in pairs]
+    except Exception as error:
+        return _unreadable_params(op, "dtype changes", error, arity=2)
+
+
 def docstring_interleaved_buffer_type_params(op, label=None):
     """One ``pytest.param(buffer_type)`` per buffer type on the docstring's interleaved Memory Support item.
 
