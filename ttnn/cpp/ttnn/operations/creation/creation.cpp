@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -24,6 +25,20 @@ namespace {
 // Below the gate the call stays a host write, which cannot run during trace capture. A bfloat8_b zero fill skips the
 // gate: its host path packs bfloat8_b on the CPU, which measured slower than the device fill at every size tried.
 constexpr std::size_t k_min_device_fill_bytes = 128 * 1024;
+
+// Converts a fill value to an integer dtype, raising instead of wrapping when the value is out of that dtype's range
+// (or NaN), as torch.full does. Without the check ttnn.full(shape, 65535, dtype=ttnn.uint8) returned 255.
+template <typename IntT, typename T>
+IntT checked_integer_fill_value(const T fill_value, const DataType dtype) {
+    const double value = static_cast<double>(fill_value);
+    TT_FATAL(
+        value >= static_cast<double>(std::numeric_limits<IntT>::lowest()) &&
+            value <= static_cast<double>(std::numeric_limits<IntT>::max()),
+        "full: fill value {} cannot be converted to {} without overflow",
+        fill_value,
+        dtype);
+    return static_cast<IntT>(fill_value);
+}
 
 }  // namespace
 
@@ -239,11 +254,21 @@ Tensor full_impl(
     };
 
     switch (dtype_value) {
-        case DataType::UINT8: return concrete_full.template operator()<uint8_t>(fill_value);
-        case DataType::UINT16: return concrete_full.template operator()<uint16_t>(fill_value);
-        case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
-        case DataType::INT8: return concrete_full.template operator()<int8_t>(fill_value);
-        case DataType::INT32: return concrete_full.template operator()<int32_t>(fill_value);
+        case DataType::UINT8:
+            return concrete_full.template operator()<uint8_t>(
+                checked_integer_fill_value<uint8_t>(fill_value, dtype_value));
+        case DataType::UINT16:
+            return concrete_full.template operator()<uint16_t>(
+                checked_integer_fill_value<uint16_t>(fill_value, dtype_value));
+        case DataType::UINT32:
+            return concrete_full.template operator()<uint32_t>(
+                checked_integer_fill_value<uint32_t>(fill_value, dtype_value));
+        case DataType::INT8:
+            return concrete_full.template operator()<int8_t>(
+                checked_integer_fill_value<int8_t>(fill_value, dtype_value));
+        case DataType::INT32:
+            return concrete_full.template operator()<int32_t>(
+                checked_integer_fill_value<int32_t>(fill_value, dtype_value));
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
         case DataType::BFLOAT4_B:
