@@ -59,7 +59,8 @@ def test_plan_report_production(device):
     for in_shape, out_shape in cases:
         plan = describe_plan(_to_device(torch.zeros(in_shape, dtype=torch.bfloat16), device), out_shape)
         movers = [r for r in plan["roles"] if r["atom_count"] > 0]
-        assert sum(r["atom_count"] for r in plan["roles"]) == plan["atoms_total"]
+        # A core may split its atoms' face-column halves over its movers (Perf 1): count half-atoms.
+        assert sum(r["atom_count"] * (r["half_hi"] - r["half_lo"]) for r in plan["roles"]) == 2 * plan["atoms_total"]
         print(
             in_shape,
             "->",

@@ -728,7 +728,8 @@ def describe_plan(input_tensor: ttnn.Tensor, shape) -> dict:
     for mover in range(MOVERS_PER_CORE):
         _, processor = MOVERS[mover]
         noc = MOVER_NOCS[mover]
-        for xy, begin, count, *_ in plan.roles[mover]:
+        for xy, begin, count, *halves in plan.roles[mover]:
+            half_lo, half_hi = halves or (0, 2)
             roles.append(
                 {
                     "core": xy,
@@ -737,6 +738,8 @@ def describe_plan(input_tensor: ttnn.Tensor, shape) -> dict:
                     "noc": noc.name,
                     "atom_begin": begin,
                     "atom_count": count,
+                    "half_lo": half_lo,  # face-column halves of each atom this mover handles
+                    "half_hi": half_hi,
                 }
             )
     return {
