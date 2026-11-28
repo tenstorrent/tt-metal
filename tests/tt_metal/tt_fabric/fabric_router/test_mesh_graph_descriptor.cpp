@@ -3149,4 +3149,55 @@ TEST(MeshGraphDescriptorTests, ExpressLinks4x32Dim1) {
     EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
 }
 
+TEST(MeshGraphDescriptorTests, Fabric1DRingPreserves1DRingWrapOnNonGalaxy) {
+    // 1x4 RING MGD on a non-Galaxy host: FABRIC_1D_RING keeps the closing 0 <-> 3 edge,
+    // whereas FABRIC_1D restricts the topology to a line without wrap-around.
+    const auto desc_1x4 = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape(1, 4),
+        FabricType::TORUS_X,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::ARCH::BLACKHOLE,
+        /*num_connections=*/2);
+
+    const std::map<MeshId, FabricConfig> ring_cfg = {{MeshId{0}, FabricConfig::FABRIC_1D_RING}};
+    const std::map<MeshId, FabricConfig> line_cfg = {{MeshId{0}, FabricConfig::FABRIC_1D}};
+
+    MeshGraph ring_graph(desc_1x4, ring_cfg, /*is_ubb_galaxy=*/false);
+    const auto& ring_m0 = ring_graph.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(ring_m0.size(), 4u);
+    EXPECT_TRUE(ring_m0[0].contains(3)) << "1x4 FABRIC_1D_RING should preserve wrap edge 0 -> 3";
+    EXPECT_TRUE(ring_m0[3].contains(0)) << "1x4 FABRIC_1D_RING should preserve wrap edge 3 -> 0";
+
+    MeshGraph line_graph(desc_1x4, line_cfg, /*is_ubb_galaxy=*/false);
+    const auto& line_m0 = line_graph.get_intra_mesh_connectivity().at(0);
+    EXPECT_FALSE(line_m0[0].contains(3)) << "1x4 FABRIC_1D must restrict topology to a line";
+    EXPECT_FALSE(line_m0[3].contains(0)) << "1x4 FABRIC_1D must restrict topology to a line";
+
+    // Column-oriented 4x1 RING MGD on a non-Galaxy host preserves its wrap edge as well.
+    const auto desc_4x1 = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape(4, 1),
+        FabricType::TORUS_Y,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::ARCH::BLACKHOLE,
+        /*num_connections=*/2);
+    MeshGraph col_ring_graph(desc_4x1, ring_cfg, /*is_ubb_galaxy=*/false);
+    const auto& col_m0 = col_ring_graph.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(col_m0.size(), 4u);
+    EXPECT_TRUE(col_m0[0].contains(3)) << "4x1 FABRIC_1D_RING should preserve wrap edge 0 -> 3";
+    EXPECT_TRUE(col_m0[3].contains(0)) << "4x1 FABRIC_1D_RING should preserve wrap edge 3 -> 0";
+
+    // 2D meshes on non-Galaxy hosts must still downgrade FABRIC_1D_RING to MESH (issue #32146).
+    const auto desc_2x4 = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape(2, 4),
+        FabricType::TORUS_XY,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::ARCH::WORMHOLE_B0,
+        /*num_connections=*/2);
+    MeshGraph mesh_2x4_graph(desc_2x4, ring_cfg, /*is_ubb_galaxy=*/false);
+    const auto& m2x4 = mesh_2x4_graph.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(m2x4.size(), 8u);
+    EXPECT_FALSE(m2x4[0].contains(3)) << "2x4 non-Galaxy FABRIC_1D_RING must downgrade to MESH";
+    EXPECT_FALSE(m2x4[4].contains(7)) << "2x4 non-Galaxy FABRIC_1D_RING must downgrade to MESH";
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
