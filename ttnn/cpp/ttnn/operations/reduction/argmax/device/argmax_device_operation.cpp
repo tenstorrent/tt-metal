@@ -192,6 +192,8 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     if (uses_multicore_path(args, tensor_args)) {
         if (args.sub_core_grids.has_value()) {
             TT_FATAL(
+                args.sub_core_grids->num_cores() > 0, "Multicore argmax sub_core_grids must contain at least one core");
+            TT_FATAL(
                 args.sub_core_grids->ranges().size() <= 2,
                 "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
                 args.sub_core_grids->ranges().size());
