@@ -31,6 +31,8 @@ def run_retest(
     dry_run: bool,
     logs_dir: Path,
     snapshot_out: Path | None,
+    gate: str | None = None,
+    hook: str | None = None,
 ) -> Phase | None:
     """Returns the post-reset snapshot phase, or None. Named snapshot_after_* so
     normalize_health_report() judges the run on it."""
@@ -49,22 +51,17 @@ def run_retest(
 
     tt_smi = resolve_tt_smi(tt_smi_path)
     # Own dir: keeps the pre-test reset_1_* log.
-    reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest")
+    reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest", gate=gate, hook=hook)
     # reset_* checks don't count toward the verdict; restate under a name that does.
     broke = [c.name for c in phase.checks if c.status == FAIL]
-    phase.add(
-        Check(
-            name="retest_reset_ok",
-            status=FAIL if broke else PASS,
-            details=(
-                f"reset before the retest left the unit degraded: {', '.join(broke)}"
-                if broke
-                else f"unit back after tt-smi {reset_flag}"
-            ),
-            ip="other",
-        )
-    )
+    refused = next((c.details for c in phase.checks if c.status == SKIP), None)
+    status, details = PASS, f"unit back after tt-smi {reset_flag}"
     if broke:
+        status, details = FAIL, f"reset before the retest left the unit degraded: {', '.join(broke)}"
+    elif refused:  # the gate refused the reset: no second boot to retest on
+        status, details = SKIP, f"did not run: {refused}"
+    phase.add(Check(name="retest_reset_ok", status=status, details=details, ip="other"))
+    if status != PASS:
         return None
 
     snap_phase = None

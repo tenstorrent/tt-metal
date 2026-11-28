@@ -100,7 +100,8 @@ def reset_loop(
     """Run each reset of the plan, then rescan the chips' root ports and recount
     the chips by BDF. Before each reset the *gate* command runs (a refusal skips
     it and the rest); chips still missing get a second reset, then the *hook*'s
-    "after" event and one more recount.
+    "after" event and one more recount. A reset that lost chips stays FAIL and
+    ends the loop, even when the retry or the hook brings them back.
 
     If `snapshot_out` and `post_reset_phases` are provided, a fresh snapshot is
     taken + validated after each reset iteration, and appended to
@@ -184,7 +185,6 @@ def reset_loop(
 
     for i, flag in enumerate(plan):
         check_name = f"reset_{i+1}_{flag.lstrip('-')}"
-        first = len(phase.checks)
         missing = _glx(check_name, flag)
         if missing is None:
             break
@@ -205,19 +205,12 @@ def reset_loop(
                 phase.add(
                     Check(name=f"recount_{check_name}", status=FAIL if missing else PASS, details=said, parts=missing)
                 )
-        if retried and not missing:  # brought back by the retry or the hook: what failed before it is a warning
-            for c in phase.checks[first:]:
-                if c.status == FAIL:
-                    c.status, c.details = WARN, f"{c.details} (back after a retry)"
         # Post-reset snapshot: validate the unit's state after this iteration.
         # Skipped on dry-run / offline.
         _post_reset_snapshot(f"r{i+1}_{flag.lstrip('-')}")
         # Bail if a reset broke enumeration — no point chasing the rest
-        if missing:
-            log(
-                f"Reset {i+1} broke enumeration ({EXPECTED_CHIP_COUNT - len(missing)}/{EXPECTED_CHIP_COUNT});"
-                " stopping reset loop"
-            )
+        if retried:
+            log(f"Reset {i+1} broke enumeration; stopping reset loop")
             break
 
 
@@ -310,18 +303,13 @@ def run_post_test_reset(
     # snapshot — but nothing runs after this one, so a reset that broke
     # enumeration here would leave no trace on the verdict. Restate the
     # outcome under a name that counts.
-    # The last check is the unit's state: a FAIL before it was brought back by a second reset or the hook.
-    broke = [c.name for c in phase.checks if c.status in (FAIL, WARN)]
+    broke = [c.name for c in phase.checks if c.status == FAIL]
     last = phase.checks[-1] if phase.checks else None
     status, details = PASS, f"unit healthy after {' '.join(plan)}"
-    if last is not None and (
-        last.status == FAIL or (last.status == SKIP and any(c.status == FAIL for c in phase.checks))
-    ):
+    if broke:
         status, details = FAIL, f"post-test reset left the unit degraded: {', '.join(broke)}"
     elif last is not None and last.status == SKIP:
         status, details = SKIP, f"did not run: {last.details}"
-    elif broke:
-        status, details = WARN, f"chips back only after a retry ({', '.join(broke)} failed)"
     phase.add(
         Check(
             name="post_test_reset_ok",

@@ -42,7 +42,7 @@ class TestRetest(unittest.TestCase):
     def _run(self, first: Phase, reset_status: str = PASS, dry_run: bool = False, snapshot_error: bool = False):
         phase = Phase(name="retest")
 
-        def fake_reset(tt_smi, plan, ph, dry, logs_dir=None):
+        def fake_reset(tt_smi, plan, ph, dry, logs_dir=None, **kw):
             ph.add(Check(name=f"reset_1_{plan[0].lstrip('-')}", status=reset_status))
 
         def fake_snapshot(tt_smi, out):
@@ -110,6 +110,42 @@ class TestRetest(unittest.TestCase):
         self.assertEqual(ok.status, FAIL)
         report = {"phases": {"retest": {"checks": [{"name": c.name, "status": c.status} for c in phase.checks]}}}
         self.assertTrue(has_actionable_failure(report))
+
+    def test_a_refusing_reset_gate_skips_the_retest_reset(self):
+        from diag import resets
+
+        phase, calls = Phase(name="retest"), []
+        with mock.patch.object(retest, "resolve_tt_smi", return_value="tt-smi"), mock.patch.object(
+            resets, "run", side_effect=lambda cmd, *a, **kw: calls.append(cmd)
+        ), mock.patch.object(retest, "run_tests") as tests, redirect_stdout(io.StringIO()):
+            snap = retest.run_retest(
+                None,
+                Path("."),
+                ("gddr_act_c3",),
+                "-glx_reset",
+                first_run(gddr_act_c3=PASS),
+                phase,
+                False,
+                self.logs,
+                None,
+                gate="sh -c 'echo busy; exit 3'",
+                hook=None,
+            )
+        self.assertEqual(calls, [])  # tt-smi never ran
+        self.assertIsNone(snap)
+        tests.assert_not_called()
+        self.assertEqual(
+            [(c.name, c.status) for c in phase.checks], [("reset_1_glx_reset", SKIP), ("retest_reset_ok", SKIP)]
+        )
+        self.assertIn("reset gate: busy", phase.checks[-1].details)
+
+    def test_the_runner_passes_the_reset_gate_and_hook_to_the_retest(self):
+        src = (SUITE_DIR / "diag_runner.py").read_text()
+        call = src[
+            src.index("run_retest(") : src.index(")", src.index("snap_out_for_resets", src.index("run_retest(")))
+        ]
+        self.assertIn("gate=reset_gate", call)
+        self.assertIn("hook=hook", call)
 
     def test_failed_snapshot_keeps_the_pre_test_snapshot_as_verdict(self):
         phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=PASS), snapshot_error=True)

@@ -9,6 +9,7 @@ the root ports read before it and a recount of the chips by BDF."""
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 from diag import resets  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, Phase  # noqa: E402
 
 
 def root_port(bdf: str) -> str:
@@ -126,29 +127,48 @@ class TestResetLoop(unittest.TestCase):
         phase = self._loop(("-glx_reset",), gate="true")
         self.assertEqual([c.status for c in phase.checks], [PASS])
 
-    def test_chips_back_on_the_second_round(self):
+    def _lose_then_return(self):
+        """A reset hook for fake_run: the first reset drops tray 3, the next brings it back."""
         lost = []
-
-        def once():
-            if not lost:
-                lost.append(1)
-                drop_tray(self.root, "c")
-
         stash = Path(tempfile.mkdtemp(dir=self.root.parent))
         self.addCleanup(shutil.rmtree, stash)
         shutil.copytree(self.root, stash / "copy", symlinks=True)
 
         def on_reset():
-            if lost:  # the second reset brings the tray back
+            if lost:
                 shutil.rmtree(self.root)
                 shutil.copytree(stash / "copy", self.root, symlinks=True)
-            once()
+            else:
+                lost.append(1)
+                drop_tray(self.root, "c")
 
-        phase = self._loop(("-glx_reset",), on_reset=on_reset)
+        return on_reset
+
+    def test_a_post_test_reset_that_loses_chips_fails_even_when_a_retry_brings_them_back(self):
+        on_reset = self._lose_then_return()
+
+        def fake_run(cmd, dry_run=False, **kw):
+            self.calls.append(cmd)
+            on_reset()
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        phase = Phase(name="post_test_reset")
+        loop = functools.partial(resets.reset_loop, sys_root=self.root)
+        with mock.patch.object(resets, "run", fake_run), mock.patch.object(
+            resets, "reset_loop", loop
+        ), mock.patch.object(resets, "resolve_tt_smi", lambda p: "tt-smi"), contextlib.redirect_stdout(io.StringIO()):
+            resets.run_post_test_reset(None, ("-glx_reset", "-glx_reset"), phase, dry_run=False)
+        self.assertEqual((phase.checks[-1].name, phase.checks[-1].status), ("post_test_reset_ok", FAIL))
+        self.assertEqual(len(self.calls), 2)  # the loop stopped: no second reset of the plan
+
+    def test_chips_back_on_the_second_round(self):
+        phase = self._loop(("-glx_reset", "-glx_reset"), on_reset=self._lose_then_return())
+        # The reset that lost the tray stays a FAIL, the retry's recovery is its own check, and the loop stops.
         self.assertEqual(
             [(c.name, c.status) for c in phase.checks],
-            [("reset_1_glx_reset", WARN), ("reset_1_glx_reset_round2", PASS)],
+            [("reset_1_glx_reset", FAIL), ("reset_1_glx_reset_round2", PASS)],
         )
+        self.assertEqual(len(self.calls), 2)
 
     def test_the_hook_runs_after_a_tray_stays_down_then_a_recount(self):
         hook = self.root.parent / f"{self.root.name}-hook.sh"
@@ -170,7 +190,7 @@ class TestResetLoop(unittest.TestCase):
     def test_a_failed_reset_with_every_chip_present_stays_a_fail(self):
         self.assertEqual([c.status for c in self._loop(("-glx_reset",), rc=1).checks], [FAIL])
 
-    def test_a_tray_the_hook_brings_back_is_rescanned_and_warns(self):
+    def test_a_tray_the_hook_brings_back_is_rescanned_and_still_fails(self):
         stash = Path(tempfile.mkdtemp(dir=self.root.parent))
         self.addCleanup(shutil.rmtree, stash)
         shutil.copytree(self.root, stash / "copy", symlinks=True)
@@ -178,7 +198,7 @@ class TestResetLoop(unittest.TestCase):
         hook.write_text(f'#!/bin/sh\nrm -rf "{self.root}" && cp -a "{stash}/copy" "{self.root}"\n')
         hook.chmod(0o755)
         phase = self._loop(("-glx_reset",), on_reset=lambda: drop_tray(self.root, "c"), hook=str(hook))
-        self.assertEqual([c.status for c in phase.checks], [WARN, WARN, PASS])
+        self.assertEqual([c.status for c in phase.checks], [FAIL, FAIL, PASS])
         port = self.root / "bus" / "pci" / "devices" / "0000:c0:01.1" / "rescan"
         self.assertEqual(port.read_text(), "1")  # rescanned after the hook, not only after the resets
 
@@ -230,8 +250,9 @@ class TestPostTestResetOk(unittest.TestCase):
         skip = Check(name="reset_1_glx_reset", status=SKIP, details="reset cannot run: reset gate: busy")
         self.assertEqual(self._ok([ok]).status, PASS)
         self.assertEqual(self._ok([fail]).status, FAIL)
-        self.assertEqual(self._ok([fail, ok]).status, WARN)
+        self.assertEqual(self._ok([fail, ok]).status, FAIL)
         self.assertEqual(self._ok([fail, skip]).status, FAIL)
+        self.assertEqual(self._ok([ok, skip]).status, SKIP)
         self.assertEqual(
             (self._ok([skip]).status, self._ok([skip]).details),
             (SKIP, "did not run: reset cannot run: reset gate: busy"),

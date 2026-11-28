@@ -425,6 +425,8 @@ def run_diag(
                     dry_run,
                     logs_dir,
                     snap_out_for_resets,
+                    gate=reset_gate,
+                    hook=hook,
                 )
                 if snap_phase is not None:
                     report["phases"][snap_phase.name] = asdict(snap_phase)
