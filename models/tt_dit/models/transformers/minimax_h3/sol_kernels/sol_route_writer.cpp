@@ -12,7 +12,7 @@
 //     into words in one of RING_PAGES row buffers and written directly.
 //   (head, shard) units: compute already delivers the 32 rows as row-major uint32 in one page (phase I').
 //
-// Compile-time args: 0..10 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of the mask.
+// Compile-time args: 0..9 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of the mask.
 // Common runtime args: 0 mask address.
 
 #include <cstdint>
@@ -49,14 +49,14 @@ inline void tile_row_to_words(uint32_t tiles_addr, uint32_t row, uint32_t num_ti
 void kernel_main() {
     constexpr uint32_t NUM_SHARDS = get_compile_time_arg_val(1);
     constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(2);
-    constexpr uint32_t GRID_X = get_compile_time_arg_val(7);
-    constexpr uint32_t GRID_Y = get_compile_time_arg_val(8);
-    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(9);
-    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(10);  // 1: (head, shard); 0: (head, Q-block tile)
+    constexpr uint32_t GRID_X = get_compile_time_arg_val(6);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(7);
+    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(8);
+    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(9);  // 1: (head, shard); 0: (head, Q-block tile)
 
     constexpr uint32_t SHARD_BLOCKS_PADDED = SHARD_BLOCK_TILES * 32;
     constexpr uint32_t BLOCK_ROW_BYTES = SHARD_BLOCKS_PADDED * 4;  // one shard's words of a mask row
-    constexpr auto mask_args = TensorAccessorArgs<11>();
+    constexpr auto mask_args = TensorAccessorArgs<10>();
 
     // This core's units, [core_index * NUM_UNITS / NUM_CORES, (core_index + 1) * NUM_UNITS / NUM_CORES).
     constexpr uint32_t NUM_CORES = GRID_X * GRID_Y;

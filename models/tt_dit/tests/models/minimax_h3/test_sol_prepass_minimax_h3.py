@@ -30,6 +30,7 @@ from ....models.transformers.minimax_h3.sol_prepass import (
     VAR_EPS,
     SolGeometry,
     SolPrepass,
+    SolRouteConstants,
     _f32_bits,
     build_constants,
 )
@@ -108,6 +109,14 @@ def _to_host(mesh_device, sp_axis, tp_axis, t):
     )
 
 
+def _prepare(pre, geo, sink_tokens, scale):
+    """Bind `pre` to this request's route constants as the transformer does: one set per padded length, moved in
+    place."""
+    constants = pre._state["constants"] if pre._state else SolRouteConstants(pre.mesh_device, pre.sp_axis, geo)
+    constants.set(geo, sink_tokens)
+    pre.prepare(geo, scale, constants)
+
+
 def _check(
     mesh_device,
     sp_axis,
@@ -139,7 +148,7 @@ def _check(
         pre = SolPrepass(
             mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, route_unit=route_unit
         )
-    pre.prepare(geo, sink_tokens, scale)
+    _prepare(pre, geo, sink_tokens, scale)
 
     # ---- full pre-pass (both programs are built and launched before any check, so a compile problem shows first)
     out = pre(tq, tk, tv, scale=scale, report_density=True)
@@ -348,7 +357,7 @@ def test_sol_prepass_bench(mesh_device, sp_axis, tp_axis, num_links, topology, i
     tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
     reps = int(os.environ.get("SOL_FUSED_REPS", "5"))
     pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=1.0)
-    pre.prepare(geo, sink_tokens, scale)
+    _prepare(pre, geo, sink_tokens, scale)
     times = []
     for i in range(reps + 1):
         ttnn.synchronize_device(mesh_device)
@@ -542,7 +551,7 @@ def test_sol_prepass_tau_scan(mesh_device, sp_axis, tp_axis, num_links, topology
     logger.info("reference density vs tau: " + ", ".join(f"{t}:{d:.3f}" for t, d in ref_dens.items()))
     for tau in [0.0, 0.5, 1.0, 2.0, 4.0]:
         pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau)
-        pre.prepare(geo, 300, scale)
+        _prepare(pre, geo, 300, scale)
         out = pre(tq, tk, tv, scale=scale, report_density=False)
         ttnn.synchronize_device(mesh_device)
         dev = _to_host(mesh_device, sp_axis, tp_axis, out["block_mask"])[:, :H].float()[:, :, : geo.nb][..., cols]

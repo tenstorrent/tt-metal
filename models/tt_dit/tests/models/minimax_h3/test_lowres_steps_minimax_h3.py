@@ -191,7 +191,8 @@ def test_lowres_stage_never_runs_sol(monkeypatch):
     transformer = SimpleNamespace(set_sol_request=lambda request, **kwargs: requests.append(request))
 
     pipeline._sol_key = pipeline._sol_schedule = None
-    assert not pipeline._is_sol_dense_step(0, first_stage=True, num_latent_frames=1)  # Sol-Attn off: today's trace key
+    # Sol-Attn off: the flag stays False, the trace key of a pipeline that never had it
+    assert not pipeline._is_sol_dense_step(0, first_stage=True, num_latent_frames=1)
     pipeline._set_sol_attention(transformer, 20224, 19000, 500, first_stage=True)
     assert requests == [None] and pipeline._sol_key is None and not pipeline._request_state.warm
     assert all(pipeline._is_sol_dense_step(step, first_stage=True, num_latent_frames=1) for step in range(4))

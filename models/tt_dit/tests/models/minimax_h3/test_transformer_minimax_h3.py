@@ -27,6 +27,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
+from ....models.transformers.minimax_h3.sol_prepass import SolGeometry, SolRouteConstants
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -969,8 +970,13 @@ def test_minimax_h3_attention_sol(
     tt_model.load_torch_state_dict(torch_model.state_dict())
     assert "_sol" not in dict(tt_model.named_children()), "the Sol pre-pass must not join the module tree"
 
+    geo = SolGeometry(shards=sp_factor, rows=rows, logical_n=logical_n)
+    constants = SolRouteConstants(mesh_device, sp_axis, geo)  # the transformer's part: one set for all its layers
+    constants.set(geo, sink_tokens)
+
     def run(sol_tau):
-        tt_model.set_sol_request(None if sol_tau is None else (rows, logical_n, sink_tokens), tau=sol_tau or 1.0)
+        request = None if sol_tau is None else (rows, logical_n, sink_tokens)
+        tt_model.set_sol_request(request, tau=sol_tau or 1.0, constants=constants)
         out = tt_model(
             tt_spatial,
             logical_n=logical_length_tensor(mesh_device, logical_n),
@@ -978,7 +984,8 @@ def test_minimax_h3_attention_sol(
             rope_sin=tt_rope_sin,
         )
         out = ttnn.to_torch(
-            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape))
+            out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
         )
         return out[:, :, :logical_n, :].squeeze(0)
 
