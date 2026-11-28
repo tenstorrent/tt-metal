@@ -22,16 +22,78 @@ from models.demos.muse_glimmer_30b.tt.common import (
     shard_mapper,
 )
 from models.demos.muse_glimmer_30b.tt.decoder import MuseGlimmerDecoderLayer
+from models.demos.muse_glimmer_30b.tt.model_config import PREFILL_COARSE_MAX, PREFILL_MAX_PAD
 from models.demos.muse_glimmer_30b.tt.rms_norm import RMSNorm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_lm_head
 
 DECODE_B_PAD = 32  # decode batch is always padded to one tile of rows
 
 
+def prefill_len(s_real: int, max_len: int = None) -> int:
+    """Padded prefill length (bucket): 128 or a multiple of the 256-row prefill SDPA Q chunk (a partial last Q chunk
+    gives wrong sliding-window rows). Up to PREFILL_COARSE_MAX tokens: multiples of 256 up to 2048, then 4 buckets per
+    power of two (33 buckets up to 131072, pad < PREFILL_MAX_PAD), so a generator can compile every prefill program
+    before its first trace capture (prefill_buckets). Above: multiples of 256. max_len: the longest prompt; no bucket
+    exceeds it rounded up to 256."""
+    step = 256
+    if s_real <= PREFILL_COARSE_MAX:
+        step = max(256, 1 << ((s_real - 1).bit_length() - 3)) if s_real > 128 else 128
+    s = -(-s_real // step) * step
+    return s if max_len is None else min(s, max(128, -(-max_len // 256) * 256))
+
+
+def prefill_buckets(max_len: int) -> list:
+    """The buckets of prompts up to min(max_len, PREFILL_COARSE_MAX) tokens (prefill_len with this max_len), ascending."""
+    out, s = [], 1
+    while s <= min(max_len, PREFILL_COARSE_MAX):
+        out.append(prefill_len(s, max_len))
+        s = out[-1] + 1
+    return out
+
+
+def make_sampling_generator(mesh_device, args, num_links):
+    """Build the on-device SamplingGenerator for a (1, tp) mesh; None when tp <= 1."""
+    if args.tp <= 1:
+        return None
+    from models.common.sampling.generator import SamplingGenerator
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    class _SamplingArgs:
+        pass
+
+    a = _SamplingArgs()
+    a.vocab_size = args.vocab_size
+    a.padded_vocab_size = args.padded_vocab_size  # == lm_head width (vocab_local * tp)
+    a.cluster_shape = tuple(mesh_device.shape)
+    a.sampling_all_gather_axis = 1  # gather across the TP (column) axis of the (1, tp) mesh
+    a.sampling_dp = 1
+    a.num_devices = mesh_device.get_num_devices()
+    a.max_batch_size = DECODE_B_PAD
+    a.max_top_k = args.max_top_k
+    a.use_topk_logprobs = False
+    a.salt_duplicate_seeds = False
+    a.model_config = {
+        "SAMPLING_AG_CONFIG": {
+            # Greedy runs the top-k path: a local top-k per device and a small gather, not a gather of the full logits.
+            "allow_force_argmax": False,
+            "num_links": num_links,
+            "topology": ttnn.Topology.Linear,  # ring wraparound (D0->D28) is not routable on a 1x8 submesh under FABRIC_1D
+        }
+    }
+    assert a.padded_vocab_size == args.vocab_local * args.tp, "sampling padded vocab must match lm_head"
+    sampling = SamplingGenerator(args=a, mesh_device=mesh_device, tt_ccl=TT_CCL(mesh_device))
+    # Same single-untilize override as gemma4 (avoids wide-row ttnn.concat L1 overflow on the chunked path).
+    sampling.tt_sampling._untilize_chunk_count = lambda width: 1
+    return sampling
+
+
 class MuseGlimmerModel:
     def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True):
         self.args = args
         self.mesh_device = mesh_device
+        self.prefill_lens = (
+            set()
+        )  # padded prefill lengths already run: their programs (and persistent device state) exist
         self.ccl = ccl if ccl is not None else MuseCCL(mesh_device)
         if self.ccl.ring:
             # Allocate before any prefill: prefill program plans depend on free L1, so creating this buffer at the
@@ -100,40 +162,12 @@ class MuseGlimmerModel:
 
     def _init_device_sampling(self):
         """Build a SamplingGenerator (gemma4-style). tp == 1 is not supported (single-device vocab-split path)."""
-        if self.tp <= 1:
+        self.sampling = make_sampling_generator(self.mesh_device, self.args, self.ccl.num_links)
+        if self.sampling is None:
             logger.info("On-device sampling disabled for tp == 1; using host sampling")
             return
-        from models.common.sampling.generator import SamplingGenerator
-        from models.tt_transformers.tt.ccl import TT_CCL
-
-        class _SamplingArgs:
-            pass
-
-        a = _SamplingArgs()
-        a.vocab_size = self.args.vocab_size
-        a.padded_vocab_size = self.args.padded_vocab_size  # == lm_head width (vocab_local * tp)
-        a.cluster_shape = tuple(self.mesh_device.shape)
-        a.sampling_all_gather_axis = 1  # gather across the TP (column) axis of the (1, tp) mesh
-        a.sampling_dp = 1
-        a.num_devices = self.mesh_device.get_num_devices()
-        a.max_batch_size = DECODE_B_PAD
-        a.max_top_k = 32
-        a.use_topk_logprobs = False
-        a.salt_duplicate_seeds = False
-        a.model_config = {
-            "SAMPLING_AG_CONFIG": {
-                # Greedy runs the top-k path: a local top-k per device and a small gather, not a gather of the full logits.
-                "allow_force_argmax": False,
-                "num_links": self.ccl.num_links,
-                "topology": ttnn.Topology.Linear,  # ring wraparound (D0->D28) is not routable on a 1x8 submesh under FABRIC_1D
-            }
-        }
-        assert a.padded_vocab_size == self.args.vocab_local * self.tp, "sampling padded vocab must match lm_head"
-        self.sampling = SamplingGenerator(args=a, mesh_device=self.mesh_device, tt_ccl=TT_CCL(self.mesh_device))
-        # Same single-untilize override as gemma4 (avoids wide-row ttnn.concat L1 overflow on the chunked path).
-        self.sampling.tt_sampling._untilize_chunk_count = lambda width: 1
         logger.info(
-            f"On-device sampling initialized (vocab={a.vocab_size}, padded={a.padded_vocab_size}, "
+            f"On-device sampling initialized (vocab={self.args.vocab_size}, padded={self.args.padded_vocab_size}, "
             f"topology={self.ccl.topology}, links={self.ccl.num_links})"
         )
 
@@ -208,14 +242,26 @@ class MuseGlimmerModel:
         full = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
         return full[0, 0, :num_rows, : self.args.vocab_size].float()
 
-    def _prefill_hidden(self, tokens: torch.Tensor, user_id: int, page_table_tt):
+    def prefill_bucket(self, s_real: int) -> int:
+        """The padded prefill length of an s_real-token prompt (prefill_len capped by max_prefill_len)."""
+        return prefill_len(s_real, self.args.max_prefill_len)
+
+    def prefill_is_new(self, s_real: int) -> bool:
+        """True if a prefill of s_real tokens builds new programs. A new CCL program allocates persistent device state
+        (global semaphores). Allocated while a trace exists, that state can sit on memory the trace uses for its
+        intermediates, and every replay overwrites it. Callers release their traces before such a prefill. Kernel
+        binaries are such state too, so any new program after a capture is unsafe; warm_prefill (DFlash2Generator)
+        compiles every coarse bucket first."""
+        return self.prefill_bucket(s_real) not in self.prefill_lens
+
+    def _prefill_hidden(self, tokens: torch.Tensor, user_id: int, page_table_tt, on_layer=None):
         """Run embedding + all layers for one prompt -> (hidden [1,1,S,H], s_real, S)."""
         a = self.args
         tokens = tokens.reshape(-1)
         s_real = tokens.shape[0]
         assert 0 < s_real <= a.max_prefill_len, f"prompt length {s_real} > max_prefill_len {a.max_prefill_len}"
-        # Multiple of the 256-row prefill SDPA Q chunk: a partial last Q chunk gives wrong sliding-window rows.
-        s = 128 if s_real <= 128 else -(-s_real // 256) * 256
+        s = self.prefill_bucket(s_real)
+        self.prefill_lens.add(s)
         assert s <= a.max_seq_len, f"padded prefill length {s} exceeds max_seq_len {a.max_seq_len}"
         pad_id = a.pad_token_id if a.pad_token_id is not None else 0
         padded = torch.full((1, s), pad_id, dtype=torch.int64)
@@ -234,6 +280,8 @@ class MuseGlimmerModel:
         for i, layer in enumerate(self.layers):
             pt = self.sliding_page_table if a.is_sliding(i) and page_table_tt is not None else page_table_tt
             nx = layer.forward_prefill(x, rope if a.uses_rope(i) else None, self.kv_caches[i], pt, user_id)
+            if on_layer is not None:
+                on_layer(i, nx)
             ttnn.deallocate(x)
             x = nx
         return x, s_real, s
@@ -242,7 +290,8 @@ class MuseGlimmerModel:
         """Row s_real-1 of x [1,1,S,H] as row 0 of [1,1,32,H] (other rows 0). The slice start depends only on S and a
         one-hot matmul picks the row, so a new prompt length in a known bucket compiles no new program."""
         s = x.shape[-2]
-        b = min(s, 256)  # s is 128 or a multiple of 256, so row s_real-1 is in the last b rows
+        # Every bucket pads a prompt by less than PREFILL_MAX_PAD rows, so row s_real-1 is in the last b rows.
+        b = min(s, PREFILL_MAX_PAD)
         blk = x if b == s else ttnn.slice(x, (0, 0, s - b, 0), (1, 1, s, x.shape[-1]))
         sel = torch.zeros(1, 1, 32, b, dtype=torch.bfloat16)
         sel[0, 0, 0, s_real - 1 - (s - b)] = 1
@@ -266,14 +315,41 @@ class MuseGlimmerModel:
             ttnn.deallocate(blk)
         return out
 
-    def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt):
-        """Prefill one prompt -> softcapped logits [1,1,32,vocab_local] on device; the last real token is row 0."""
-        x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt)
+    def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt, on_layer=None):
+        """Prefill one prompt -> softcapped logits [1,1,32,vocab_local] on device; the last real token is row 0.
+        on_layer(i, x), if given, sees each layer's output (see _prefill_hidden)."""
+        x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt, on_layer=on_layer)
         hs = self._last_row(x, s_real)
         ttnn.deallocate(x)
         logits = self.head(hs)
         ttnn.deallocate(hs)
         return logits
+
+    def prefill_with_taps(self, tokens: torch.Tensor, user_id: int, page_table_tt, tap_layers, tap_window=2048):
+        """Prefill one prompt and keep the last rows of the listed layers' outputs.
+
+        Returns (logits_tt, taps, t0, s0, s_real): logits as prefill_forward_logits_tt; taps {layer: [1,1,S-t0,H] DRAM
+        tensor (caller frees)} holding padded rows t0..S of the bucket S; s0 = the first of the last `tap_window` prompt
+        rows (32-aligned, s0 >= t0). t0 depends only on S, so a new prompt length in a known bucket compiles no new
+        slice program."""
+        h = self.args.hidden_size
+        s_real = int(tokens.reshape(-1).shape[0])
+        s = self.prefill_bucket(s_real)
+        s0 = max(0, (s_real - tap_window) // 32 * 32)
+        t0 = max(0, (s - PREFILL_MAX_PAD - tap_window) // 32 * 32)
+        tap_set = set(tap_layers)
+        taps = {}
+
+        def on_layer(i, x):
+            if i in tap_set:
+                assert x.shape[2] == s, (x.shape, s)
+                if t0 == 0:  # a full-extent slice aliases x, which prefill frees: copy instead
+                    taps[i] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                else:
+                    taps[i] = ttnn.slice(x, [0, 0, t0, 0], [1, 1, s, h], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        logits = self.prefill_forward_logits_tt(tokens, user_id, page_table_tt, on_layer=on_layer)
+        return logits, taps, t0, s0, s_real
 
     def prefill_forward(self, tokens: torch.Tensor, user_id: int, page_table_tt, return_all_logits=False):
         a = self.args
@@ -346,13 +422,26 @@ class MuseGlimmerModel:
         for h, d in list(zip(host_inputs, device_inputs))[:n]:
             ttnn.copy_host_to_device_tensor(h, d)
 
-    def decode_forward(self, tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt):
-        """One decode step for the padded batch; returns sharded logits [1,1,32,vocab_local] (no host reads)."""
+    def decode_forward(self, tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt, verify=None, taps=None):
+        """One decode step for the padded batch; returns sharded logits [1,1,32,vocab_local] (no host reads).
+
+        verify: DFlash2 verify object (rows, kv_write_rows, kv_write_batch, sliding_page_table, kv_write_page_table,
+        kv_write_sliding_page_table): row groups of consecutive positions per user (RowLayout); K/V rows are written
+        with PagedUpdateRows (compact page tables, one row per group) and SDPA runs on the first `rows` rows.
+        taps: {layer_idx: persistent DRAM bf16 [1,1,32,H]}; the output of those layers is copied into them."""
         a = self.args
         x = self.embed(tokens_tt)
         rope = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.args.head_dim))
-        sb = min(a.max_batch_size, DECODE_B_PAD)
-        tables = {False: page_table_tt, True: self.sliding_page_table}  # keyed by is_sliding
+        if verify is None:
+            sb = min(a.max_batch_size, DECODE_B_PAD)
+            tables = {False: page_table_tt, True: self.sliding_page_table}  # keyed by is_sliding
+            kv_write_rows, sdpa_rows, write_tables, write_batch = None, None, {}, 1
+        else:
+            sb = verify.rows
+            tables = {False: page_table_tt, True: verify.sliding_page_table}
+            kv_write_rows, sdpa_rows = verify.kv_write_rows, sb
+            write_tables = {False: verify.kv_write_page_table, True: verify.kv_write_sliding_page_table}
+            write_batch = verify.kv_write_batch
         sdpa_inputs = {}
         if sb < DECODE_B_PAD:  # SDPA decode splits its cores over all user slots
             pos = ttnn.slice(current_pos_tt, [0], [sb])
@@ -360,10 +449,26 @@ class MuseGlimmerModel:
         for i, layer in enumerate(self.layers):
             s = a.is_sliding(i)
             nx = layer.forward_decode(
-                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], tables[s], sdpa_inputs.get(s)
+                x,
+                current_pos_tt,
+                rope if a.uses_rope(i) else None,
+                self.kv_caches[i],
+                tables[s],
+                sdpa_inputs.get(s),
+                kv_write_rows,
+                sdpa_rows,
+                write_tables.get(s),
+                write_batch,
             )
             ttnn.deallocate(x)
             x = nx
+            if taps is not None and i in taps:
+                if x.is_sharded():
+                    t = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+                else:
+                    t = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.copy(t, taps[i])
+                ttnn.deallocate(t)
         if sdpa_inputs:
             ttnn.deallocate(pos)
             for _, t in sdpa_inputs.values():
