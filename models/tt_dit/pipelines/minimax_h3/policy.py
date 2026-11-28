@@ -81,7 +81,7 @@ class SolSchedule:
         return step < self.dense_steps
 
 
-#: Sol-Attn settings per model behind `H3_SOL_ATTN=1`. A model with no entry runs `SolSchedule()`.
+#: Sol-Attn settings per model. A model with no entry runs `SolSchedule()` behind `H3_SOL_ATTN=1`.
 SOL_PRESETS = {
     # The 10Eros-Max card ("13% SLA sparsity on all blocks, start at 0.2": 2 of the 8 forwards dense) with a third
     # dense forward. With two, sound events left the served export up to 7 LU under dense; with three, within 1 LU.
@@ -90,17 +90,21 @@ SOL_PRESETS = {
     "hyperflow": SolSchedule(sinks=False),
 }
 
+#: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset.
+SOL_DEFAULT_ON = frozenset({"10eros-max"})
+
 
 def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
-    `H3_SOL_ATTN=1` turns it on (default off; anything else is the off switch). The schedule starts from the
-    model's `SOL_PRESETS` entry: `preset` is the one the pipeline reads from its files, and `H3_SOL_PRESET` names
-    it for a model the files do not tell apart (10Eros-Max is one more ComfyUI-layout file). `H3_SOL_TAU`,
-    `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and `H3_SOL_SINKS` (`0` drops the dense prefix) each override
-    their field. One dense step costs 4-step models their picture and sound against dense.
+    `H3_SOL_ATTN=1` turns it on and any other value is the off switch; unset, it is on only for a pipeline whose
+    `preset` is in `SOL_DEFAULT_ON`. The schedule starts from the model's `SOL_PRESETS` entry: `preset` is the one
+    the pipeline reads from its files, and `H3_SOL_PRESET` names it for a model the files do not tell apart
+    (a 10Eros-Max build under another file name). `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and
+    `H3_SOL_SINKS` (`0` drops the dense prefix) each override their field. One dense step costs 4-step models
+    their picture and sound against dense.
     """
-    if env.get("H3_SOL_ATTN", "0") != "1":
+    if env.get("H3_SOL_ATTN", "1" if preset in SOL_DEFAULT_ON else "0") != "1":
         return None
     name = env.get("H3_SOL_PRESET") or preset
     if name is not None and name not in SOL_PRESETS:

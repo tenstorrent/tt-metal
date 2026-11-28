@@ -6,6 +6,7 @@
 no device."""
 
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -85,6 +86,37 @@ def test_model_preset_sets_the_schedule_behind_the_switch(env, preset, expected)
     assert sol_schedule({"H3_SOL_ATTN": "0", **env}, preset) is None
 
 
+@pytest.mark.parametrize(
+    ("env", "preset", "expected"),
+    [
+        ({}, "10eros-max", _EROS),
+        ({"H3_SOL_DENSE_STEPS": "2"}, "10eros-max", replace(_EROS, dense_steps=2)),
+        ({"H3_SOL_ATTN": "0"}, "10eros-max", None),
+        # Naming the preset is not the switch: only the pipeline's own files turn it on.
+        ({"H3_SOL_PRESET": "10eros-max"}, None, None),
+    ],
+)
+def test_a_default_on_preset_needs_no_switch(env, preset, expected):
+    assert sol_schedule(env, preset) == expected
+
+
+@pytest.mark.parametrize(
+    ("file", "task", "env", "expected"),
+    [
+        ("/models/v1/v1t.safetensors", "t2va", {}, _EROS),
+        ("/models/v1/v1t.safetensors", "t2va", {"H3_SOL_ATTN": "0"}, None),
+        ("/models/v1/v1t.safetensors", "ref2va", {}, None),
+        ("/models/v1/v1t.safetensors", "ref2va", {"H3_SOL_ATTN": "1"}, SolSchedule()),
+        ("/models/v1/v1n.safetensors", "t2va", {}, None),  # the non-Turbo build
+        (None, "t2va", {}, None),
+    ],
+)
+def test_the_10eros_max_turbo_file_runs_sol_attn_by_default(monkeypatch, file, task, env, expected):
+    pipeline = _pipeline(monkeypatch, env)
+    pipeline.task, pipeline.transformer_file = task, file and Path(file)
+    assert pipeline._requested_sol_schedule() == expected
+
+
 def test_unknown_preset_is_refused(expect_error):
     with expect_error(ValueError, "H3_SOL_PRESET must be one of"):
         sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_PRESET": "10eros"})
@@ -139,6 +171,7 @@ def _pipeline(monkeypatch, env, cls=MiniMaxH3Pipeline):
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     pipeline = cls.__new__(cls)
+    pipeline.task, pipeline.transformer_file = "t2va", None
     pipeline.dynamic_length = False
     pipeline.bucket_denoise = True
     pipeline.sp_factor = 8

@@ -735,6 +735,9 @@ def _tqdm_spacer() -> None:
 
 _TRANSFORMER_FILE_ENV = "H3_TRANSFORMER_FILE"
 _TRANSFORMER_LAYOUT_ENV = "H3_TRANSFORMER_LAYOUT"
+#: The 10Eros-Max v1.0 Turbo build (8 forwards), by the file stem its server loads it under: `policy.SOL_DEFAULT_ON`
+#: covers it.
+EROS_MAX_TURBO_STEM = "v1t"
 
 
 def _transformer_file_from_env() -> tuple[Path | None, str]:
@@ -3506,7 +3509,9 @@ class MiniMaxH3Pipeline:
 
     def _sol_preset(self) -> str | None:
         """The `policy.SOL_PRESETS` entry this pipeline's files name, if any."""
-        return None
+        # Not for ref2va on the same file: Sol-Attn is unmeasured with reference rows.
+        eros_max = self.transformer_file is not None and self.transformer_file.stem == EROS_MAX_TURBO_STEM
+        return "10eros-max" if eros_max and self.task == "t2va" else None
 
     def _set_sol_attention(
         self,
@@ -3517,7 +3522,7 @@ class MiniMaxH3Pipeline:
         *,
         first_stage: bool = False,
     ) -> None:
-        """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN=1`, default off).
+        """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN`, see `policy.sol_schedule`).
 
         The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
         leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
