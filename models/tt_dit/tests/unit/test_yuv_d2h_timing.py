@@ -28,8 +28,10 @@ class _Host:
 
 
 class _DevTensor:
+    dtype = layout = None
+
     def __init__(self, shards):
-        self.shards = shards
+        self.shards = self.spec = shards
         self.shape = shards[0].shape
 
     def cpu(self, blocking=True):
@@ -40,9 +42,9 @@ class _DevTensor:
         return type("Topo", (), {"mesh_coords": lambda self: coords})()
 
 
-def _planes():
+def _planes(seed=0):
     """Per-shard (1, h_per, w_per, T) uint8 planes with distinct bytes, plus the assembled reference."""
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(seed)
     ref = [
         rng.integers(0, 256, size=(T, h, w), dtype=np.uint8) for h, w in ((H, W), (H // 2, W // 2), (H // 2, W // 2))
     ]
@@ -115,3 +117,40 @@ def test_planes_to_host_defers_assembly(monkeypatch, fake_device, defer):
     assert len(labels) == (1 if defer else 2)
     np.testing.assert_array_equal(out.result() if defer else out, expected)
     assert events == []  # a deferred readback waits on its own event, not the whole device
+
+
+def test_kept_host_planes_take_the_next_read(monkeypatch, fake_device):
+    """With ``host_planes`` a read lands in host tensors a finished read handed back, never in ones still in flight."""
+    allocated = []
+
+    def allocate(spec, mesh):
+        host = _Host([_Shard(np.zeros_like(shard.arr)) for shard in spec])
+        host.update_tensor_topology = lambda topology: None
+        allocated.append(host)
+        return host
+
+    def copy(plane, host, blocking=True):
+        assert not blocking
+        for src, dst in zip(plane.shards, host.shards):
+            np.copyto(dst.arr, src.arr)
+
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_host", allocate)
+    monkeypatch.setattr(ttnn, "copy_device_to_host_tensor", copy)
+    monkeypatch.setattr(ttnn, "record_event", lambda dev, cq, device_range=None: "event")
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None)
+    monkeypatch.setattr(_DevTensor, "cpu", None)  # no new host tensors per read
+    mesh = type("Mesh", (), {"shape": (TP, SP)})()
+    kept = {}
+
+    def read(seed):
+        planes, expected = _planes(seed)
+        return yuv_d2h._yuv_planar_d2h(*planes, mesh, H, W, T, defer=True, host_planes=kept), expected
+
+    (first, first_expected), (second, second_expected) = read(0), read(1)
+    assert len(allocated) == 6  # two reads in flight: a set of three each
+    np.testing.assert_array_equal(first.result(), first_expected)
+    np.testing.assert_array_equal(second.result(), second_expected)
+    third, third_expected = read(2)
+    assert len(allocated) == 6
+    np.testing.assert_array_equal(third.result(), third_expected)
+    assert [len(free) for free in kept.values()] == [2]

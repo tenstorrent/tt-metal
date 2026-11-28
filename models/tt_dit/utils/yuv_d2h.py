@@ -107,6 +107,29 @@ def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None, input_pat
     return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, input_patch_size=input_patch_size)
 
 
+def _read_planes(planes, mesh_device, kept: dict | None):
+    """Start a non-blocking read of each plane; returns the host tensors and where to hand them back.
+
+    ``Tensor.cpu()`` gives every shard of every read new host memory and zeroes it before the read
+    overwrites it. A caller that reads the same shapes over and over passes a dict it holds on to as
+    ``kept``: the read then lands in host tensors an earlier read handed back, and the second value
+    is the list to append them to once their bytes are copied out. As many sets stay allocated per
+    shape as reads were in flight at once.
+    """
+    if kept is None:
+        return [plane.cpu(blocking=False) for plane in planes], None
+    free = kept.setdefault(tuple((tuple(plane.shape), plane.dtype, plane.layout) for plane in planes), [])
+    try:
+        hosts = free.pop()
+    except IndexError:
+        hosts = [ttnn.allocate_tensor_on_host(plane.spec, mesh_device) for plane in planes]
+        for plane, host in zip(planes, hosts):
+            host.update_tensor_topology(plane.tensor_topology())  # as cpu() labels its result
+    for plane, host in zip(planes, hosts):
+        ttnn.copy_device_to_host_tensor(plane, host, blocking=False)
+    return hosts, free
+
+
 def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int, defer: bool = False):
     """Single-host H/W-sharded planes to the existing asynchronous DMA/reassembly path."""
     if ttnn.using_distributed_env():
@@ -135,6 +158,7 @@ def _yuv_planar_d2h(
     view=None,
     pool: ThreadPoolExecutor | None = None,
     defer: bool = False,
+    host_planes: dict | None = None,
 ) -> "np.ndarray | DeferredYuvPlanar":
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
@@ -181,9 +205,8 @@ def _yuv_planar_d2h(
     out_W = W if out_W is None else out_W
 
     with timing_tree.span(mesh_device, "yuv readback (3 planes)", category=timing_tree.HOST_XFER):
-        host_Y = tt_Y.cpu(blocking=False)
-        host_Cb = tt_Cb.cpu(blocking=False)
-        host_Cr = tt_Cr.cpu(blocking=False)
+        hosts, free = _read_planes((tt_Y, tt_Cb, tt_Cr), mesh_device, host_planes)
+        host_Y, host_Cb, host_Cr = hosts
         read_event = None
         if defer:
             read_event = ttnn.record_event(mesh_device, 0, device_range=_local_range(view))
@@ -309,12 +332,18 @@ def _yuv_planar_d2h(
 
         return out
 
+    def _finish():
+        out = _host_half()
+        if free is not None:
+            free.append(hosts)  # only now: every byte of them is in ``out``
+        return out
+
     if defer:
         out_row = out_H * out_W + 2 * (out_H // 2) * (out_W // 2)
-        return DeferredYuvPlanar(_host_half, (T, out_row))
+        return DeferredYuvPlanar(_finish, (T, out_row))
     path = "C++ planar concat" if HAS_CPP_PLANAR_CONCAT else "torch fallback"
     with timing_tree.span(mesh_device, f"yuv host assemble ({path})", category=timing_tree.HOST_COMPUTE):
-        return _host_half()
+        return _finish()
 
 
 class DeferredYuvPlanar:
@@ -370,6 +399,7 @@ def fast_device_to_host_yuv(
     use_persistent_buffer: bool = True,
     defer: bool = False,
     input_patch_size: int = 0,
+    host_planes: dict | None = None,
 ) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -430,6 +460,11 @@ def fast_device_to_host_yuv(
             rather than the frame itself.  The transfer is complete when it
             returns; what is left is host work the caller can overlap with the
             next frame's device work.  Calling it yields the frame.
+
+        host_planes: A dict the caller keeps between calls that read the same
+            shapes.  The planes are then read into host tensors kept in it
+            instead of new ones per call (see :func:`_read_planes`).  Defaults
+            to ``None``: new host tensors per call.
 
         input_patch_size: ``0`` (default) for BCTHW input.  An even ``p >= 2``
             takes the patchified ``(1, T, H/p, W/p, 3*p*p)`` tensor instead, with
@@ -596,6 +631,7 @@ def fast_device_to_host_yuv(
         view=d2h_view,
         pool=pool,
         defer=defer,
+        host_planes=host_planes,
     )
 
     return out

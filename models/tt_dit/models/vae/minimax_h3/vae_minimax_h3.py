@@ -307,6 +307,9 @@ class MiniMaxH3Vae:
         self._weight_loader = weight_loader
         self._stitcher = None
         self._yuv_pool = None
+        # The yuv readback's host tensors, kept from one canvas to the next and from clip to clip: without
+        # them every canvas reads into new host memory, zeroed and page-faulted first.
+        self._host_planes: dict = {}
         self._blender = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
@@ -1522,7 +1525,12 @@ class MiniMaxH3Vae:
             canvas = ttnn.typecast(canvas, ttnn.bfloat16)
             canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
             planar = fast_device_to_host_yuv(
-                canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
+                canvas,
+                self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                use_persistent_buffer=False,
+                defer=True,
+                host_planes=self._host_planes,
             )
             return lambda: planar().reshape(-1, height * 3 // 2, width)
 
