@@ -1,52 +1,48 @@
 # L1 Ledger: g6_sharded_to_interleaved
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`, Blocking Model): `tile_rows` (extent `block_extent_rows`) and `tile_cols` (extent `block_extent_cols`); the block is the core's whole resident input shard.
-
-Inventory: two CB indices, both bound zero-copy to the input's sharded buffer. No staging, scratch, scaler or output CB exists: the store sources each tile from its shard slot and writes it straight to its output page, so the only phase boundary (shard → output page) needs no storage.
-
-## CBs
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes from `op_design.md` → Blocking Model: `tile_row`, `tile_col`, tile interior, device.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_shard_lane0` | `shard_rows_tiles * shard_cols_tiles` (`S_pages`), globally allocated at the input shard's address — **0 new bytes** | `S_pages`: the whole shard is resident from program start (pre-placed input); lane 0 reads `ceil(n_k / num_lanes)` of those slots | `{tile_rows: spans → block_extent_rows ≤ shard_rows_tiles, tile_cols: spans → block_extent_cols ≤ shard_cols_tiles}` | input dtype: `Float16_b` (bfloat16) or `Bfp8_b` (bfloat8_b); dataflow-only payload, never through DEST, so the DEST-width audit does not apply | none — pre-placed by the producer op; no kernel pushes | writer lane 0 (BRISC) | whole program | shares the input's sharded buffer with `cb_shard_lane1` (same bytes); a second index exists only so each CB has one consumer; capacity = live set (the shard), pinned by the input |
-| `cb_shard_lane1` | `S_pages`, same buffer — **0 new bytes** | `S_pages` resident; lane 1 reads `n_k − ceil(n_k / num_lanes)` slots | `{tile_rows: spans → block_extent_rows, tile_cols: spans → block_extent_cols}` | same as lane 0 | none — pre-placed | writer lane 1 (NCRISC) | whole program | shares the input's sharded buffer with `cb_shard_lane0`; separate index for single-consumer ownership |
+| `cb_input_shard` | `shard_tile_rows · shard_tile_cols` pages of `page_size`, globally allocated on `input_tensor`'s own shard buffer (`ttnn.cb_descriptor_from_sharded_tensor`, total size = the input's bank size). **0 bytes of new L1.** | `shard_tile_rows · shard_tile_cols`: the whole shard is resident before launch and stays resident (it is the caller's tensor); the op reads one page at a time from it and keeps nothing else live | `{tile_row: spans → shard_tile_rows (block uses block_tile_rows ≤ it), tile_col: spans → shard_tile_cols (block uses block_tile_cols ≤ it), tile interior: spans → one whole page, device: n/a (per-device program; every chip has its own copy at the same address)}` | input dtype: `Float16_b` (bf16) / `Bfp8_b` (bf8b). A dataflow-only payload that never passes through DEST, so audit 2 does not apply; the bytes move unchanged | none in this program: resident, written by the program that produced `input_tensor` | writer | whole program; read-only; no `wait_front` / `pop_front` / `push_back` | Aliases `input_tensor`'s shard buffer itself: the capacity is the caller's allocation, not the op's. No other CB exists to share with. The output is written directly to its interleaved pages, never staged, so neither the op nor the inventory adds a buffer. |
 
-Sync: push count = wait count = 0 on both (address binding via `get_read_ptr`; no FIFO pointer moves).
+Capacity vs live set (audit 1): equal. The shard is the input itself, and the op allocates none of it. The CB costs 0 bytes and spans the axes it is sized on, so no axis is over- or under-scaled.
 
-## Non-CB L1 the call adds
-
-| Item | Bytes per core (per L1 bank) | Live | Why it exists |
-|------|------------------------------|------|---------------|
-| output pages, when `memory_config` is L1 interleaved | `[buffer == l1] * ceil(P / N_l1_banks) * page_bytes` | from allocation until the caller frees the output | the op's result; counts against the 1347776 B the model leaves free (spec, Device section) |
+Inventory (Rule 1, Rule 3): one CB, allocating nothing. Pattern 1 (pack into the destination) is realized in its strongest form: the source writes straight into the output's pages, so no staging buffer and no phase boundary exists. Patterns 2-4 have nothing to act on (no phase, no intermediate, no accumulator).
 
 ## Symbol table
 
 | Symbol | Meaning | Bound | Predicate establishing it |
 |--------|---------|-------|---------------------------|
-| `S_pages` | pages per shard = `(s_h / 32) * (s_w / 32)` | fixed by the input's allocation, which lies outside the 1347776 B budget; costs the op 0 B | `validate()`: whole-tile shard shape; TT-Metal shard validation (`tensor_spec.cpp:50-72`). Golden: 5 (p2), 10 (p1), 3 and 11 (other specs) |
-| `n_k` | tiles of core k's shard = `block_extent_rows * block_extent_cols` | `≤ S_pages` | per-core rectangle formula (`op_design.md`, Work Distribution) |
-| `num_lanes` | issue lanes per core | ∈ {1, 2}; Phase 0 = 2 | host constant |
-| `P` | output pages = `R * C` | golden max 1024 | golden `INPUTS`; for an L1 output the host refuses `ceil(P / N_l1_banks) * page_bytes > 1347776` with `RuntimeError` (BB-05) |
-| `N_l1_banks` | L1 banks of the device's interleaved allocator | read from the device (`ttnn.TensorSpec.compute_consumed_memory_bytes_per_bank(page_alignment, num_banks)`, `ttnn/cpp/ttnn-nanobind/tensor.cpp:494-498`, gives the per-bank bytes directly); INFERENCE: one per worker core, ≥ 103 on the production grid | device property |
-| `page_bytes` | tile bytes | ∈ {2048 (bfloat16), 1088 (bfloat8_b)} | `TARGET` dtypes; `tt_backend_api_types.hpp:129`, `:139` |
+| `shard_tile_rows`, `shard_tile_cols` | nominal shard extents in tiles, `shard_spec.shape / 32` | the caller's shard already fits L1: it is allocated before the call, and the 1347776 B model budget excludes the input shards | `validate()` checks 4-6 (sharded, L1, whole tiles) |
+| `block_tile_rows`, `block_tile_cols` | this core's block (= its clipped shard) | `≤ shard_tile_rows`, `≤ shard_tile_cols` | clamp in the Mechanism caps table |
+| `page_size` | `ttnn.tile_size(dtype)` | ∈ {2048, 1088} B, `≤ NOC_MAX_BURST_SIZE = 16384` B | dtype ∈ TARGET (`SUPPORTED` gate); host assert |
+| `tensor_tile_rows · tensor_tile_cols` | output pages | L1 output: `ceil(pages / n_l1_banks) · page_size ≤ 1347776` B, else a host `RuntimeError` (BB-05). INPUTS maximum: 1024 × 1088 = 1,114,112 B, inside the bound even at one bank | host check on a cache miss, `buffer == "l1"` |
+| `n_l1_banks` | L1 banks of the device | ≥ 1 | device L1 memory view |
 
 ## Total per-core footprint
 
-    L1_op(core) = 0                                              # both CBs alias the input shard
-                + [buffer == l1] * ceil(P / N_l1_banks) * page_bytes   # output pages in this core's bank
+```
+op_allocated_L1(core)   = 0                                                    # cb_input_shard aliases the input
+model_budget_used(core) = op_allocated_L1(core)
+                        + [buffer == "l1"] · ceil(tensor_tile_rows · tensor_tile_cols / n_l1_banks) · page_size
+```
 
-No term scales with a block extent (the block is the resident input, already paid for), and none scales with `num_lanes`. p2 (DRAM output): 0 B. p1 (L1 output): `ceil(1024 / N_l1_banks) * 1088` = 10880 B at `N_l1_banks ≥ 103`, about 0.8 % of 1347776 B.
+No term scales with a block knob, because no block-sized buffer exists. The only term is the output's own L1 pages, which the contract charges to the model budget. p1: `ceil(1024 / n_l1_banks) · 1088` B, e.g. 10,880 B at 110 banks. p2 (DRAM output): 0 B.
 
 ## Data-movement budget
 
-Chosen split: the input's own shard split (owner-writes).
-
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` (x) | 0 | resident in L1 shards; each tile is the local source of its own output write, never fetched | none (no fetch over the NoC) |
-| output (p2, DRAM interleaved) | 1 (327680 B written) | each page written once, from the core that holds its tile | 160 unicast page writes (327680 B) from 32 cores into 8 DRAM banks |
-| output (p1, L1 interleaved) | 0 | L1 destination; each page written once | 1024 unicast page writes (1114112 B) from 103 cores into the L1 banks |
+| `input_tensor` | 0 | resident in L1 shards; each slot is the source of its owner's single write, read in place (no NoC read, no staging copy) | 0 |
+| output, p2 (1, 5120) bf16 → DRAM | 1 (written once: 160 × 2048 = 327,680 B) | each page written once by the core that owns its tile | 0 core→core; 327,680 B core→DRAM |
+| output, p1 (1, 128, 256, 32) bf8b → L1 | 0 | L1 interleaved destination | 1,114,112 B core→core (1024 × 1088 B, one write per page) |
 
-Totals per tier — p2: DRAM 327680 B (write), NoC 327680 B, core-local L1 reads 327680 B (the write engine sourcing the shard). p1: DRAM 0 B, NoC 1114112 B, core-local L1 reads 1114112 B, remote L1 writes 1114112 B.
+Totals per tier:
 
-> Cheapest-traffic split considered: the input's own shard split (owner-writes) — every tile crosses the NoC once and the input crosses no tier, which is the named-boundary minimum. Implemented: owner-writes. The implemented split is the cheapest; every alternative (output-page split, output-bank split, gathering cores) adds one NoC fetch per tile (2P transfers) and is `rejected` in the regime table, not deferred.
+| Case | DRAM read | DRAM write | NoC (core→core) | Local L1 reads (source side of the writes) |
+|------|-----------|------------|-----------------|--------------------------------------------|
+| p2 | 0 | 327,680 B | 0 | 327,680 B |
+| p1 | 0 | 0 | 1,114,112 B | 1,114,112 B |
+
+> Cheapest-traffic split considered: the physical-shard (owner) split — one NoC crossing per tile, zero reads, zero DRAM reads; `destination_pull` ties at one crossing only for L1 outputs (delta 0 B per tier there) and does not exist for DRAM outputs. Implemented: the owner split (`owner_writes`). **The implemented split is also the cheapest.** `destination_pull` is a `rejected` regime row (superseded by `owner_writes` across both buffer types), not a deferred one.

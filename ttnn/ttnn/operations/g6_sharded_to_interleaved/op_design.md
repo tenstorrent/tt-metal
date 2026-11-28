@@ -4,19 +4,19 @@
 
 | Field | Value |
 |-------|-------|
-| Classification | data_movement (placement change: one NoC write per tile, no arithmetic, no compute kernel) |
-| Goal | Copy every tile of a height- or width-sharded L1 TILE tensor into a newly allocated interleaved TILE tensor (DRAM or L1, as `memory_config` names), bit for bit, as one device program in which each core writes the tiles of its own resident shard straight to their output pages. |
-| Math | `out[i] = input_tensor[i]` for every logical index i; tile `(a, b)` of the 2-D tile view goes to interleaved page `p = a * C + b` |
-| References | Contract: `docs/explorations/g6_sharded_to_interleaved/spec/g6_sharded_to_interleaved.txt`; math (F1 page map): `docs/explorations/g6_sharded_to_interleaved/math.md`; counts and shard geometry: `docs/explorations/g6_sharded_to_interleaved/tensix.md`; risks: `docs/explorations/g6_sharded_to_interleaved/risks.md`; golden universe: `eval/golden_tests/g6_sharded_to_interleaved/feature_spec.py`; exact gate: `eval/golden_tests/g6_sharded_to_interleaved/helpers.py` (`TOLERANCES`); block semantics: `.claude/references/blocking-model.md`; sharded page layout: `tt_metal/impl/buffers/buffer_distribution_spec.cpp:41-80` (`iterate_within_shard` / `iterate_over_shards`), `:168-174` (core list), `:399-449` (`squeeze_shape_ranks`); legacy shard validation: `tt_metal/impl/tensor/spec/tensor_spec.cpp:50-72` |
+| Classification | data_movement (no compute kernel, no arithmetic) |
+| Goal | Copy a height- or width-sharded L1 TILE tensor into a newly allocated interleaved tensor (DRAM or L1, as `memory_config` names), bit for bit, in one device program. Each shard core writes its own resident tiles straight to their output pages, so every tile crosses the NoC once and nothing is read over the NoC. |
+| Math | `out[a, b] = in[a, b]` for every tile (a, b) of the padded 2-D tile grid; output page `p = a * tensor_tile_cols + b`. Logical values equal `torch.clone(input_tensor)`. |
+| References | `eval/golden_tests/g6_sharded_to_interleaved/feature_spec.py` (TARGET, INPUTS, LOOSE_CASES); `eval/golden_tests/g6_sharded_to_interleaved/helpers.py` (oracle, exact gate); `eval/op_template.py` (registry model); `.claude/references/blocking-model.md`; `.claude/references/l1-footprint-discipline.md`; `ttnn/ttnn/operations/examples/master.md` (perf catalog); `tt_metal/impl/buffers/buffer_distribution_spec.cpp` (shard page map); `ttnn/cpp/ttnn/operations/generic/` (generic_op caching and mesh dispatch) |
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes, positional | on device; TILE; HEIGHT_SHARDED or WIDTH_SHARDED in L1; shard shape a whole number of 32x32 tiles; rank 2 or 4; dtype bfloat16 (Phase 0) or bfloat8_b (TARGET) | none | geometry derived on host: shard-dependent values become CT args (per program) and per-core RT args; buffer address bound per call through the sharded CB |
-| `memory_config` | `ttnn.MemoryConfig` | yes, positional | `memory_layout == INTERLEAVED`; buffer type DRAM (Phase 0) or L1 (TARGET) | none | buffer type is a CT arg (inside the output's `TensorAccessorArgs`); output address is per call |
+| `input_tensor` | `ttnn.Tensor` | yes, positional | on device; rank 2 or 4; TILE; HEIGHT_SHARDED or WIDTH_SHARDED in L1; shard shape a whole number of 32x32 tiles; dtype in TARGET | none | shard base address: RT, through the binding of `cb_input_shard`; shard geometry: per-core RT; page size: CT |
+| `memory_config` | `ttnn.MemoryConfig` | yes, positional | INTERLEAVED, `buffer_type` DRAM or L1 | none | bank layout: CT (output `TensorAccessorArgs`); output base address: common RT |
 
-No output dtype, no compute configuration, no `memory_format`, no output-tensor argument: the op converts placement, never values.
+The shard spec (grid, shard shape, orientation) is read from `input_tensor`; it is never a parameter. There is no dtype, layout, `memory_format` or compute-config parameter.
 
 ## Tensors
 
@@ -24,10 +24,10 @@ No output dtype, no compute configuration, no `memory_format`, no output-tensor 
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | `(d_0, ..., d_{r-1})`, r ∈ {2, 4}, every d_k ≥ 1 |
-| Dtype | bfloat16 (Phase 0); bfloat8_b (TARGET, knob-turn) |
-| Layout | TILE (32x32) |
-| Memory | L1, HEIGHT_SHARDED or WIDTH_SHARDED; shard spec (grid as an ordered list of core ranges, shard shape `(s_h, s_w)` elements with `s_h % 32 == 0` and `s_w % 32 == 0`, orientation) read from the tensor; a shorter last shard is legal |
+| Shape | `(d0, d1)` or `(d0, d1, d2, d3)`, every size ≥ 1 |
+| Dtype | `bfloat16` (Phase 0); `bfloat8_b` (TARGET, refinement) |
+| Layout | TILE |
+| Memory | L1, HEIGHT_SHARDED or WIDTH_SHARDED; shard shape `(rows, cols)` both multiples of 32; any grid, any number of core ranges, ROW_MAJOR or COL_MAJOR orientation; the last shard may hold fewer tiles |
 
 ### Output
 
@@ -36,237 +36,249 @@ No output dtype, no compute configuration, no `memory_format`, no output-tensor 
 | Shape | `input_tensor.shape` (per device) |
 | Dtype | `input_tensor.dtype` |
 | Layout | TILE |
-| Memory | INTERLEAVED, buffer type of `memory_config` (DRAM or L1); newly allocated by this call on every device holding the input (`ttnn.allocate_tensor_on_device` on `input_tensor.device()`); page `p` holds tile `(p // C, p % C)` |
+| Memory | INTERLEAVED in `memory_config.buffer_type` (DRAM or L1); a new buffer allocated by this call on every device that holds the input |
 
-Tile geometry (alignment-aware, per image — never `floor`):
+### Validation and support gate
 
-| Symbol | Formula | p2 `(1, 5120)` | p1 `(1, 128, 256, 32)` |
-|--------|---------|----------------|------------------------|
-| `tensor_rows_tiles` R | `prod(padded_shape[:-1]) / 32` (each image's `d_{r-2}` already rounded up to 32 in `padded_shape`) | 1 | 1024 |
-| `tensor_cols_tiles` C | `padded_shape[-1] / 32` = `ceil(d_{r-1} / 32)` | 160 | 1 |
-| P (pages) | `R * C` | 160 | 1024 |
-| page bytes | `output.buffer_page_size()` = `input.buffer_page_size()` (same dtype): 2048 (bfloat16), 1088 (bfloat8_b) | 2048 | 1088 |
-| `shard_rows_tiles` | `s_h / 32` | 1 | 10 |
-| `shard_cols_tiles` | `s_w / 32` | 5 | 1 |
-| shards | `ceil(R / shard_rows_tiles) * ceil(C / shard_cols_tiles)` (one factor is 1 for height/width sharding) | 32 | 103 (102 of 10 tiles, last of 4) |
+`validate(input_tensor, memory_config)` is the entry point's first line. Structural checks come first and raise `ValueError` (a refusal must never be a support refusal for these); the support gate comes after, on the scenario built from the tensors.
 
-## Support Contract (registry)
+| Order | Check | Raises |
+|-------|-------|--------|
+| 1 | `input_tensor` is a `ttnn.Tensor` stored on a device | `ValueError` |
+| 2 | rank ∈ {2, 4} | `ValueError` |
+| 3 | `layout == TILE_LAYOUT` | `ValueError` |
+| 4 | input memory config is sharded and `buffer_type == L1` | `ValueError` |
+| 5 | `memory_layout ∈ {HEIGHT_SHARDED, WIDTH_SHARDED}` (BLOCK_SHARDED refused) | `ValueError` |
+| 6 | `shard_spec.shape[0] % 32 == 0 and shard_spec.shape[1] % 32 == 0` | `ValueError` |
+| 7 | `memory_config.memory_layout == INTERLEAVED` and `buffer_type ∈ {DRAM, L1}` | `ValueError` |
+| 8 | build `scenario = {shape, dtype, layout, in_scheme, shard_shape, grid, orientation, buffer}` from the tensors (`grid` = the shard spec's core ranges in their order, `buffer` from `memory_config`), then apply `INPUT_TAGGERS` in the order `dtype, layout, in_scheme, buffer` | none |
+| 9 | every axis value in `SUPPORTED` | `UnsupportedAxisValue` |
+| 10 | no `EXCLUSIONS` entry matches (Phase 0: empty list) | `ExcludedCell` |
 
-| Item | Decision |
-|------|----------|
-| `INPUT_TAGGERS` | exactly `tag_dtype`, `tag_layout`, `tag_in_scheme`, `tag_buffer`, each reading `inputs[0][<axis>]` of the scenario dict `{"shape", "dtype", "layout", "in_scheme", "shard_shape", "grid", "orientation", "buffer"}` |
-| `SUPPORTED` (Phase 0) | `dtype: [ttnn.bfloat16]`, `layout: [ttnn.TILE_LAYOUT]`, `in_scheme: ["width_sharded"]`, `buffer: ["dram"]` |
-| `EXCLUSIONS` | `[]` — never a size, shape, rank or shard-geometry entry |
-| `validate()` order | (1) structural requirements → `ValueError`: not on device, not TILE, not sharded, not L1, memory layout other than HEIGHT/WIDTH_SHARDED, shard shape not whole tiles, rank ∉ {2, 4}, `memory_config` not INTERLEAVED; (2) build the scenario dict (in_scheme from `memory_layout`, shard_shape/grid ranges in stored order/orientation from `memory_config().shard_spec`, buffer from `memory_config.buffer_type`) and run the taggers; (3) `SUPPORTED` per axis → `UnsupportedAxisValue`; (4) `EXCLUSIONS` → `ExcludedCell`; (5) BB-05 bound: when the output is L1, the output's bytes per L1 bank must be ≤ 1347776 → `RuntimeError` otherwise (never reached by a golden shape) |
-| Entry point | first line `validate(input_tensor, memory_config)` |
-| Refinement path | every `TARGET − SUPPORTED` value is a knob-turn on the same program (see Dataflow Strategy, TARGET classification): `in_scheme: height_sharded`, `buffer: l1`, `dtype: bfloat8_b` |
-| Structural impossibilities | none beyond `feature_spec.py`'s `INVALID = []` |
+| Registry item | Phase 0 value |
+|---------------|---------------|
+| `INPUT_TAGGERS` | `tag_dtype` → `inputs[0]["dtype"]`; `tag_layout` → `inputs[0]["layout"]`; `tag_in_scheme` → `inputs[0]["in_scheme"]` (`"width_sharded"` / `"height_sharded"`); `tag_buffer` → `inputs[0]["buffer"]` (`"dram"` / `"l1"`). No other tagger, no size, shape, rank or shard-geometry axis. |
+| `SUPPORTED` | `dtype: [ttnn.bfloat16]`, `layout: [ttnn.TILE_LAYOUT]`, `in_scheme: ["width_sharded"]`, `buffer: ["dram"]` |
+| `EXCLUSIONS` | `[]` |
+| Package exports | `g6_sharded_to_interleaved`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS` from `ttnn/operations/g6_sharded_to_interleaved/__init__.py` (the golden suite imports all four) |
+| Structural impossibilities | none beyond `feature_spec.py` (INVALID is correctly empty) |
+
+The kernels and the descriptor builder carry no branch on dtype, `in_scheme` or buffer type: each enters as a value read off the tensors (page size, shard extents, output accessor). Widening `SUPPORTED` to TARGET is the whole of each refinement, plus its verification.
 
 ## Blocking Model
 
-The op is an identity on values; the only freedom is which core writes which tile, in what order, with how many issuers. The input's shard spec has already fixed where every tile lies, and spec rule 4 (one NoC crossing per tile) makes the holder of a tile the only core that can write it in one crossing: a NoC write sources from the issuer's own L1 (`dataflow_api.h:876-885`), so any other core would first have to fetch the tile — a second crossing. The blocking therefore reads the per-core assignment *off the shard* and makes the whole resident shard one block.
-
 ### Axes
+
+Index space: the padded 2-D tile grid of the input, rows = every dimension but the last. `tensor_tile_rows = prod(padded_shape[:-1]) / 32` (rank 4: `d0 · d1 · ceil(d2/32)`, tile padding per image; rank 2: `ceil(d0/32)`), `tensor_tile_cols = padded_shape[-1] / 32`. Leading dims fold into `tile_row`: the op treats them identically and they are contiguous in the 2-D view that both the shard spec and the interleaved page index are defined on.
 
 | Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
 |------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `tile_rows` (all dims but the last, folded; R tiles) | independent — `out[i]` depends on `x[i]` alone, nothing spans it | `block_extent_rows` = `min(shard_rows_tiles, R − a0)` for this core's shard | the core's whole shard height (p2: 1; p1: 10, last core 4) | host function deriving the per-core shard rectangle from `input_tensor.memory_config().shard_spec` + padded shape; passed as per-core RT arg; every count below derives from it | the input's shard spec: shard k on core k of the grid walk (height sharding cuts this axis) | knob-turn (height_sharded is the same formula) |
-| `tile_cols` (last dim; C tiles) | independent — elementwise identity | `block_extent_cols` = `min(shard_cols_tiles, C − b0)` | the core's whole shard width (p2: 5; p1: 1) | same host function; per-core RT arg | the input's shard spec (width sharding cuts this axis) | built (width_sharded is Phase 0) |
-| block count per core | — (not a data axis: number of blocks a core walks) | `num_blocks_this_core` | 1 for a core holding a shard, 0 for a grid core past the last shard | same host function; per-core RT arg | — | — |
-| issue lanes within a core (not a data axis: split of one block's local tile range across the two data-movement RISCs) | — | `num_lanes`; lane `j` owns local tile indices `[lane_start_j, lane_start_j + lane_tiles_j)`, `lane_tiles_0 = ceil(n_k / num_lanes)`, `n_k = block_extent_rows * block_extent_cols` | 2 (lane 0 = BRISC/NoC1, lane 1 = NCRISC/NoC0) | one host module constant; kernel-descriptor count, per-lane RT ranges derive from it | both data-movement RISCs of every shard-holding core | knob-turn (perf lamp L1) |
+| `tile_row` (a) | independent: `out[a,b]` reads only `in[a,b]`, no result spans rows | `block_tile_rows` | the core's whole shard extent along rows: `min(shard_tile_rows, tensor_tile_rows − block_first_tile_row)` (height sharded); `tensor_tile_rows` (width sharded, `shard_tile_rows == tensor_tile_rows`) | host, once per descriptor build, from `shard_spec.shape[0] / 32`; per-core RT arg | pinned by the physical shard: shard k is owned by `cores[k]` | none needed. Sub-blocking is a knob-turn but buys nothing (no staging buffer, no overlap partner) and adds barriers |
+| `tile_col` (b) | independent: same reason, no result spans columns | `block_tile_cols` | `min(shard_tile_cols, tensor_tile_cols − block_first_tile_col)` (width sharded); `tensor_tile_cols` (height sharded, `shard_tile_cols == tensor_tile_cols`) | host, from `shard_spec.shape[1] / 32`; per-core RT arg | pinned by the physical shard | as for `tile_row` |
+| tile interior (32x32 elements, faces, bfp8 exponent groups) | independent, but the page is the atom: a tile is one interleaved page and one NoC transfer | whole page, 1 tile | 1 page | `ttnn.tile_size(dtype)` → CT page size | not split: a sub-tile write fragments the transfer (catalog `tile_reorder`) and a bfp8 tile must move with its shared exponents | none |
+| device (mesh coordinate) | independent: each chip copies its own per-device tensor, nothing crosses chips | 1 device per program instance | 1 | mesh shape of `input_tensor.device()` | SPMD: the same program on every chip (`generic_op` with a `ProgramDescriptor`, `generic_op.cpp:13-23`) | none |
 
-Step-1 table (one row per axis, every cell decided):
+Extents are named by scope: `tensor_tile_rows/cols` (tensor), `shard_tile_rows/cols` (the shard spec, nominal), `block_first_tile_row/col` and `block_tile_rows/cols` (this core's block). Phase 0 cuts each shard into exactly one block, so `num_blocks_this_core ∈ {0, 1}` (0 only for a grid core without a shard).
 
-| Axis | Character | Block factor (Phase 0) | Core assignment | Buffer depth | Why |
-|---|---|---|---|---|---|
-| `tile_rows` | independent | whole shard height of this core (`block_extent_rows`) | fixed by the input's shard spec (shard k → core k of the ordered grid walk) | not a CB knob: the block is the resident shard; writes in flight = the lane's whole range before one barrier | the shard hands over the per-core extent; one block = whole resident shard (l1-footprint Rule 2, sharded) — no L1 cost, no reason to cut |
-| `tile_cols` | independent | whole shard width of this core (`block_extent_cols`) | fixed by the input's shard spec | same | same |
+Why the whole shard is the block: the block is consumed in place from the resident shard and written straight to its pages, so its working set adds no L1 at any extent; the only per-block fixed costs (the write barrier, the zone pair, the RT-arg and accessor setup) are paid fewest times at one block. Splitting into more blocks has no L1 pressure to answer (`l1-footprint-discipline.md` Rule 2, sharded case).
 
-No stage produces intermediate data: the scheme has exactly one stage (store), so there is no derived axis to re-block and no coordinating core.
-
-Commitment: Phase 0 realizes the owner-writes scheme on every core of the input's grid that holds a shard, with both data-movement RISCs issuing. Every knob above — block extents, block count, lane count, grid — is a parameter derived from the input's shard spec or a single host constant; nothing is inlined for a production spec.
-
-Why this is multi-core and why the core count is the blocking decision's choice: owner-writes puts every tile-holding core to work (p2: 32 cores × 2 lanes; p1: 103 cores × 2 lanes). A larger set is illegal (a non-owner needs a second crossing to touch a tile), a smaller set is illegal for the same reason, so the participating set is the maximum the traffic ranking allows — decided by the regime, not by a `min(num_tiles, grid)` shape limit.
+| Additional core-assignment knob | Phase 0 value | Source | What it is |
+|---------------------------------|---------------|--------|------------|
+| `num_write_lanes` | 1 | host constant in the descriptor builder, threaded to the per-lane RT args | data-movement RISCs per shard core that issue the block's writes. 1 = the writer on BRISC / NoC1. At 2 the host cuts the block into two rectangles along its longer tile axis and adds a second instance of the same kernel on NCRISC / NoC0. A knob-turn: no kernel change, no loop-nest change. |
 
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_shard_lane0`, `cb_shard_lane1` | none — capacity is pinned to the input shard (`shard_rows_tiles * shard_cols_tiles` pages, globally allocated on the input's buffer) | whole shard | the shard is resident before the program starts; there is nothing to pipeline into it |
-| (NoC, not a CB) write transactions in flight per barrier | `writes_per_barrier` | the lane's whole range (`lane_tiles_j`), one `noc_async_write_barrier` per lane at the end | maximal overlap of write issue and write flight; hardware back-pressures issue when the NoC command queue is full, so no software window is needed |
+| `cb_input_shard` | none: its capacity is the input's own shard buffer, pinned by the caller | `shard_tile_rows · shard_tile_cols` pages (the whole shard) | nothing to overlap: the data is resident before launch and is read in place |
+| (no streaming CB exists) | — | — | The in-flight depth of this op is the NoC's outstanding-write window. One barrier at the end of the block leaves every write of the block in flight together (catalog `double_buffer`, `trid_double_issue`: issue the batch, then one barrier). |
 
 ### Mechanism caps
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| bfloat8_b shared exponents (1 per 16 datums of a face row; tile = 1024 B mantissas + 64 B exponents, `tt_backend_api_types.hpp:129`) | transfer unit | the transfer unit is one whole page (1088 B / 2048 B); never split a page | a cut tile carries another tile's exponents or loses its own: wrong values on bfloat8_b only (risk R5) |
-| Interleaved page placement (consecutive pages go to consecutive banks) | coalescing of a lane's writes | one NoC write per page; no multi-page transfer | a multi-page write to `get_noc_addr(p)` spills page `p+1` into bank `b`'s next slot (page `p + num_banks`): wrong page map |
-| Sharded in-shard layout: slot `(r, c)` at `r * shard_cols_tiles + c`, row stride the *full* shard width even on a shorter last width shard (`buffer_distribution_spec.cpp:41-52` `iterate_within_shard` with shard strides; `buffer.cpp:468` legacy map) | source slot index | slot stride = `shard_cols_tiles` (from the shard spec), never `block_extent_cols` | the shorter last width shard reads the wrong slots when `shard_rows_tiles > 1` |
-| Slot byte stride | source address | `input.buffer_aligned_page_size()` (the CB page size, `tensor_utils.cpp:67`) | misaligned slot reads if a dtype's page were not a multiple of the L1 alignment (both are: 1088 = 68·16, 2048 = 128·16) |
-| NoC/bank alignment: DRAM 64 B, L1 16 B on Blackhole (`core_config.h:42-43`) | transfer size and destination offset | transfer = page bytes (1088 = 17·64, 2048 = 32·64), destination from the output `TensorAccessor` | a sub-page transfer could violate DRAM alignment (relevant only to perf lamp L2) |
-| NoC burst (`NOC_MAX_BURST_SIZE` = 256 × 64 B = 16384 B, `noc_parameters.h:288-290`) | bytes per write | one page (≤ 2048 B) is one packet | — (never reached) |
-| Legacy shard validation: `num_shards ≤ num_cores`, shard width = physical width (height), shard height = physical height (width) (`tensor_spec.cpp:50-72`) | `num_blocks_this_core` | ≤ 1 by construction; grid cores with index ≥ num_shards get 0 | — (enforced at tensor creation) |
-| Shard → core order: shard k on the k-th core of `corerange_to_cores(grid, num_cores, orientation == ROW_MAJOR)` walking ranges in stored order (`buffer_distribution_spec.cpp:168-174`, `core_coord.cpp:604-626`) | core-assignment | host walks the *same* `CoreRangeSet` object read from the input, in stored order, with `ttnn.corerange_to_cores(grid, None, row_wise)`; never re-sorts or rebuilds it | every shard written to another shard's pages (risk R1/R12) |
+| NoC packet: `NOC_MAX_BURST_SIZE` = 256 words × 64 B = 16384 B on Blackhole (`noc_parameters.h:288-290`) | transfer unit = one page | host asserts `page_size ≤ 16384` (2048 B bf16, 1088 B bf8b); the write uses the one-packet path with `max_page_size = page_size` | a size above the one-packet bound given to the one-packet path truncates the transfer |
+| Interleaved bank map: page p lives in bank `p mod n_banks` | transfer extent = 1 page; consecutive output pages are in different banks | one NoC write per page, never a multi-page write | a coalesced write puts the following pages into the first page's bank: wrong page map |
+| Shard geometry (caller-pinned) | `block_tile_rows`, `block_tile_cols` ≤ the shard; the last shard is clipped at the tensor edge | `block_tile_rows = min(shard_tile_rows, tensor_tile_rows − block_first_tile_row)`, same on cols; cores `k ≥ num_shards` get 0 blocks | the padding slots of a short last shard are written to pages past `tensor_tile_rows · tensor_tile_cols`: writes beyond the output buffer |
+| Slot stride of a short shard: slots keep the full shard stride (`buffer_distribution_spec.cpp:41-52` advances the slot by `shard_strides`, the nominal shard shape) | source slot of local tile (r, c) | `slot = r · shard_tile_cols + c`, the nominal `shard_tile_cols`, never `block_tile_cols` | a width-sharded tensor with `tensor_tile_rows > 1` and a short last shard reads the wrong tiles from it |
+| Page alignment | source slot stride, destination page size | host asserts `input_tensor.buffer_aligned_page_size() == output_tensor.buffer_page_size() == ttnn.tile_size(dtype)`; both tile sizes are multiples of the 64 B DRAM and 16 B L1 alignment | source and destination at different alignment offsets: shifted bytes or a NoC alignment fault |
+| Shards per core (legacy height/width sharding: one shard per core) | `num_shards ≤ len(cores)` | host assert at descriptor build | a shard without an owner: its pages are never written, which a dirty destination exposes |
+
+No DEST, no accumulator and no compute capacity bound exists: the op has no compute kernel.
 
 ### Regimes
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| **owner-writes**: each shard-holding core writes the tiles of its own resident shard, sourced in place from its L1, to their interleaved output pages; the block's local range is split across `num_lanes` RISCs | **built** (Phase 0, all of TARGET) | the validated domain: TILE, HEIGHT_ or WIDTH_SHARDED L1 input with whole-tile shards; DRAM or L1 interleaved output | `block_extent_rows × block_extent_cols` = this core's whole shard | **minimum.** Named boundary: the NoC. Each tile crosses it exactly once, as the write to its output page (p2: 160 × 2048 B to DRAM; p1: 1024 × 1088 B to L1 banks). The input crosses no tier (it is the write's local source). No DRAM crossing for p1; one DRAM write crossing of `out` for p2. | The block is already the whole shard (its bound). Fixed costs paid once per core per call: kernel launch and RT-arg load, `TensorAccessor` construction, the lane's start-index setup (one division), and one write barrier per lane. A smaller block would repeat the barrier and index setup for no traffic saving. |
-| gather-then-write: fewer cores (or other cores) fetch remote shards over the NoC and write the pages | **rejected** — superseded by owner-writes everywhere | — | — | 2 NoC crossings per tile (fetch + write); forbidden by spec rule 4; no shape benefits since every tile already sits on a core that can write it | — |
-| bank-affine re-split: each core writes the pages of one output bank so a core's pages share a bank | **rejected** — superseded by owner-writes | — | — | needs tiles from other shards: 2 crossings per tile; and pages adjacent in a bank (`p`, `p + num_banks`) are never adjacent in a shard, so no write coalescing is gained | — |
-| compute-engine pass: unpack the shard to DEST and pack into a staging CB, then write | **rejected** — superseded by owner-writes | — | — | same NoC traffic plus a local unpack/pack pass and a staging CB; a bfloat8_b repack recomputes shared exponents (spec rule 7) | — |
-| local staging copy: copy shard tiles into a scratch CB, then write from it | **rejected** — superseded by owner-writes | — | — | an extra L1→L1 pass and a scratch buffer; the NoC write can source the shard directly | — |
-| split a dependent axis + cross-core combine | **rejected** — no dependent axis exists (math.md, "Axes and dependence") | — | — | nothing to combine; would only add traffic | — |
-| host round trip or an existing placement op | **rejected** — forbidden (spec rules 3, BB-01/BB-02) | — | — | host crossing or a second program | — |
-| block-sharded input | **deferred** — positive reason: BLOCK_SHARDED is outside TARGET (no production call); `validate()` refuses it with `ValueError` | `memory_layout == BLOCK_SHARDED` | same block | same minimum | same. Reachable: the per-core rectangle formula below is already the 2-D one (`(k_r, k_c)` over a shard grid); only the core walk changes to the trimmed 2-D grid (`buffer_distribution_spec.cpp:177-200`) |
+| `owner_writes` | built | the sole built regime: every input that passes `validate()` (height or width sharded L1 TILE, either output buffer type, any shard spec) | `block_tile_rows × block_tile_cols` = the core's whole shard rectangle clipped to the tensor; one block per shard core | **Minimum.** Boundary: the NoC. Minimum = each tile crosses once, as the write to its output page; no NoC read. Actual: one write per tile, zero reads. DRAM: input 0 crossings (it lives in L1); output 1 write crossing when `buffer == "dram"`, 0 when `"l1"`. | The fixed cost per block is one `noc_async_write_barrier`, one zone pair, one RT-arg load with accessor and read-pointer setup. Intended frequency: once per core per call. One block per core is the minimum, so no larger block exists. |
+| `destination_pull` | rejected, superseded by `owner_writes` | — | an output bank core's pages | Also one crossing per tile, as a NoC read into the page. Exists only for L1 outputs: a DRAM bank cannot issue a read. | Same participation at the production shapes (p1: 103 owners against ≤ one bank core per worker core, about 10 pages each), a second code path that covers only half of TARGET's buffers, and a per-page reverse map (page → shard core, slot). The contract also names the write to the output page as the single crossing. |
+| `relay_through_non_owner` (any split that is not the shard split: tile rows/cols over the full grid, a single core, a gatherer) | rejected, superseded by `owner_writes` | — | any | Two crossings per tile: a fetch from the owner, then the write. The contract forbids fetching a tile from another core's shard. | — |
+| `staged_copy_through_cb` (a reader copies the shard into a CB, a writer drains it) | rejected, superseded by `owner_writes` | — | a CB window | An extra self-aimed NoC read per tile plus a CB handshake, with no compute to overlap: two crossings. The zero-copy read pointer of `cb_input_shard` supersedes it. | — |
+| `two_dispatch` / DRAM-staged (an existing reshard or copy op, or a scratch interleaved buffer) | rejected, superseded by `owner_writes` | — | — | A second program, an extra full-size buffer, every tile twice. Forbidden (BB-01, contract). | — |
 
-Single built regime: there is no selection predicate and no regime-pinned test requirement beyond running both sharding strategies.
+Why one row covers the domain: every axis is independent and the shard pins each tile to the core whose L1 holds it. For a DRAM destination only that core can issue the tile's single crossing, so `owner_writes` is the only one-crossing regime that covers both buffer types. No dependent axis exists, so no combine regime exists. No operand feeds more than one destination, so no multicast regime exists.
 
 ### Traffic ranking
 
-Counted per tile, by tier (cheapest first: core-local L1, NoC, DRAM).
+| Candidate split | Who moves a tile | NoC crossings per tile | DRAM crossings (input / output) | Covers | Rank |
+|-----------------|------------------|------------------------|---------------------------------|--------|------|
+| by physical shard (owner) | the owner writes from its L1 | 1 (write) | 0 / 1 if DRAM output, 0 if L1 | both buffers | 1, chosen |
+| by output bank (destination pull) | the bank core reads | 1 (read) | 0 / 0 | L1 output only | 1 (tie), rejected on coverage |
+| by tile row / tile col over the full grid (`split_work_to_cores`) | a worker fetches from the owner, then writes | 2 | 0 / 1 if DRAM | both | 3 |
+| single core | one core fetches every remote tile, then writes | 2 (1 for its own shard) | 0 / 1 if DRAM | both | 4 (also serial) |
+| dependent axis + cross-core combine | n/a: no dependent axis | — | — | — | — |
+| broadcast of a reuse-shared operand | n/a: the input varies along both split axes, so it is not reuse-shared; each tile has exactly one destination page | — | — | — | — |
 
-| Rank | Candidate split | Input crossings | Output crossings | Cross-core traffic | Verdict |
-|------|-----------------|-----------------|------------------|--------------------|---------|
-| 1 | the input's own shard split (owner-writes) | 0 (local source of the write) | 1 page write per tile: DRAM (p2) or L1 bank (p1) | P unicast writes from S cores, no rendezvous | **chosen** — the minimum; also the cheapest-traffic split |
-| 2 | output-page split (contiguous page ranges per core, `split_work_to_cores`) | 1 NoC fetch per tile not owned by the writer (almost all) | 1 | 2P transfers | rejected (rule 4) |
-| 3 | output-bank split | 1 NoC fetch per tile | 1 | 2P transfers | rejected (rule 4) |
-| 4 | one or few gathering cores | 1 NoC fetch per tile | 1 | 2P transfers, serialized on few issuers | rejected (rule 4, risk R11) |
-| — | dependent-axis split + combine | not applicable: no dependent axis | | | — |
+Chosen: the owner split. It is the traffic minimum and it puts work on every shard core: p2 32 cores × 5 tiles, p1 103 cores × 10 tiles (the last core 4). The core count is the blocking decision's consequence, not a shape limit. The single-crossing rule pins each tile to its owner, and every owner works.
 
-Occupancy did not choose the split: rank 1 wins on crossings, and it happens to occupy every tile-holding core.
-
-Operand-reuse check: one input operand; under the shard split no two cores need the same bytes, so no operand is reuse-shared and no broadcast row exists.
-
-Stall-shadow check: the only wait is each lane's final `noc_async_write_barrier` (acks of its own writes). Every write of the lane is issued before it, and the other lane issues concurrently on the other NoC; no work independent of the acks remains to schedule into the wait.
+Stall-shadow check: the only wait is the final write barrier. Every write of the block is issued before it, so no independent work is left to schedule into that window.
 
 ### Block schedule
 
-Logical schedule per lane (the two lanes of a core run concurrently, each on its own NoC):
-
 ```cpp
-for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // 0 or 1
-    bind_resident_block(block_idx);   // shard base from cb_shard_laneX; (a0, b0, block_extent_rows, block_extent_cols); lane range
-    store_block(block_idx);           // every tile of the lane's range: shard slot -> its interleaved output page, one write each
+// writer kernel, one instance per lane on every core of the input shard grid
+for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {  // num_blocks_this_core ∈ {0, 1}
+    store_block(block_idx);  // every tile of the resident shard rectangle -> its output page, one NoC write each
 }
-retire_writes();                      // one write barrier per lane before return (BB-03)
+drain_writes();              // one write barrier per kernel
 ```
 
-| Operation | Block shape it acts on | Resident across it | Intended frequency of fixed costs |
-|-----------|------------------------|--------------------|-----------------------------------|
-| `bind_resident_block` | `block_extent_rows × block_extent_cols` (the shard) | the whole shard (pre-placed input) | once per core per call: read the shard base address (`get_read_ptr`), construct the output `TensorAccessor`, compute the lane's starting `(r, c)` with one division |
-| `store_block` | the lane's contiguous local range `[lane_start, lane_start + lane_tiles)` of the block, walked row-major with incremental `(r, c)` (no per-tile division) | the shard | one NoC page write per tile (the irreducible transaction: interleaved neighbours change bank); no barrier, no CB handshake inside the block |
-| `retire_writes` | — | — | once per lane per call: `noc_async_write_barrier` on the lane's NoC |
+| Block operation | Block shape | Resident across it | Intended frequency of inits / multicast / barriers |
+|-----------------|-------------|--------------------|----------------------------------------------------|
+| `store_block` | `block_tile_rows × block_tile_cols` tiles (the lane's rectangle when `num_write_lanes = 2`) | the whole input shard, read in place through `cb_input_shard` (never waited on, never popped, never written); the output accessor | read pointer and accessor built once per kernel; no barrier inside; no multicast; one non-posted single-packet NoC write per tile. Source slot `r · shard_tile_cols + c`, destination page `(block_first_tile_row + r) · tensor_tile_cols + block_first_tile_col + c`. Inside a row the page and the slot both advance by one per tile. |
+| `drain_writes` | — | — | exactly one `noc_async_write_barrier` per kernel, also on a core with 0 blocks (a no-op there). After it every write has been acked, as BB-03 requires. |
 
-Per tile `(r, c)` of the block: source = `shard_base + (r * shard_cols_tiles + c) * input_aligned_page_bytes`; destination page = `(a0 + r) * C + (b0 + c)`; size = page bytes.
+There is no `load_block`: the block is already in the core's L1. The kernel never issues a NoC read.
+
+Profiler zones (BB-21): `store_block` runs inside `DeviceZoneScopedN("S2I-STORE-BLOCK")` and `drain_writes` inside `DeviceZoneScopedN("S2I-WRITE-BARRIER")`. Both compile to nothing outside the zone build (`kernel_profiler.hpp:1047`).
 
 ### Perf lamps
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| L1 — issue lanes (`num_lanes` = 2) | p2 writes only 5 tiles per core; a second data-movement binary adds dispatch bytes and a second kernel group per core range, which may cost more than halving 5 issues saves (risk R6) | `num_lanes = 1` (BRISC/NoC1 only); judge on unprofiled trace-replay host time and model step, not profiled kernel time alone (lesson RB-053), separately for p2 and p1 |
-| L2 — whole-page store of padded tiles | p2's tiles hold 1 logical row of 32: 2048 B written per tile where 64 B (row 0 of faces 0 and 1) carry data; DRAM bytes may weigh against the per-call fixed cost | bfloat16 only (spec rule 7 requires whole bfloat8_b tiles): store only the face rows that hold logical rows for tiles of a partially-filled last tile row — 2 writes of 32 B per p2 tile instead of 1 of 2048 B; check the Blackhole DRAM write alignment (64 B, `core_config.h:42`) accepts 32-B pieces before measuring |
-| L3 — issue order | a shard whose tile count is a multiple of the bank count (e.g. 8 tiles to 8 DRAM banks) makes every core hit the same bank at the same step; production specs do not (p2: page `5k + j` spreads 32 cores over all 8 banks since gcd(5, 8) = 1; p1: L1 banks) | start each core's walk at local index `k mod lane_tiles` and wrap (catalog `bank_stagger`) |
-| L4 — kernel core ranges | the kernel group uses the input grid as given (1 range for p2, 2 for p1), including grid cores with no shard that exit at once; dropping them could add ranges (lesson RB-036, BB-17) | kernel ranges trimmed to shard-holding cores; count ranges per RISC and judge on trace-replay start gap |
+| write lanes (`num_write_lanes = 1`) | p1 issues 10 writes of 1088 B per core from one RISC. If the writer is issue-bound rather than NoC-bound, a second RISC on the other NoC halves the issue path. Catalog `split_reader`: this pays only when a data-movement RISC is the bottleneck. Catalog `noc_placement`: writes to interleaved DRAM on NoC0 measured 2.5–4.8× slower than on NoC1, so judge the DRAM (p2) and L1 (p1) destinations separately. | `num_write_lanes = 2`: the block cut along its longer tile axis (p1 rows 5+5, p2 cols 3+2), lane 1 on NCRISC / NoC0. Judge on unprofiled trace-replay host time, not the profiled kernel time (lesson RB-053). |
+| page address per tile (`TensorAccessor::get_noc_addr(page)`) | The accessor does a bank div/mod per page on the issue path; with 5 or 10 pages per core the per-page arithmetic is a visible share of the core's time. | An incremental bank walk inside a row: the bank index +1 with wrap, the bank offset +page_size on wrap. |
+| overlap lamp | does not apply: no compute phase exists to overlap with, and the whole block is in flight before the single barrier | — |
+| grid-synchronization lamp | does not apply: no collective, semaphore or multicast exists. Participation is pinned by ownership: a "fewer cores" alternative would move tiles twice. | — |
 
-Overlap lamp: does not apply — there is no compute phase to overlap with; write issue already overlaps write flight (one barrier at the end). Grid-synchronization lamp: the alternative "fewer participating cores" is illegal (rule 4), so participation is fixed; L1 is the only participation knob.
+Catalog entries that set the knobs (`ttnn/ttnn/operations/examples/master.md`):
+
+| Knob / decision | Entry | What it set |
+|-----------------|-------|-------------|
+| one barrier per block, all writes in flight | `double_buffer`, `trid_double_issue` | never write-one / barrier; batch, then one barrier |
+| transfer unit = one whole page per write | `tile_reorder` | whole 2 KB tile in one NoC write, no face scatter |
+| writer on NoC1 | `noc_placement` | writes on NoC1 for spread placements into interleaved DRAM |
+| `num_write_lanes` default 1, lamp | `split_reader` | a second issuer only when issue-bound |
+| no bank stagger | `bank_stagger` | not needed: shard k starts at page `k·block_tiles`, so at write j the cores hit banks `(k·block_tiles + j) mod n_banks`, already spread (p2: banks `5k mod 8`) |
+| core participation for a one-tile-row tensor | `width_split` | p2 (`tensor_tile_rows = 1`) is width sharded by the caller; the owner split puts its 160 tiles on 32 cores. A tile-row split would strand it on one core. |
 
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| input shard | TILE pages (Float16_b 2048 B / Bfp8_b 1088 B) at the shard's L1 address on its core | pre-placed by the producer; bound zero-copy to `cb_shard_lane0` and `cb_shard_lane1` (`ttnn.cb_descriptor_from_sharded_tensor`, two CB indices on the same buffer) | never read over the NoC; never through a `TensorAccessor`; no CB handshake (address binding only) |
-| store | the same bytes, whole pages | `noc_async_write_page(page_id, out_accessor, src_l1_addr, page_bytes)`; lane 0 on BRISC (`RISCV_0`, NOC_1, `WriterConfigDescriptor` default), lane 1 on NCRISC (`RISCV_1`, NOC_0, `ReaderConfigDescriptor` default) | non-posted writes (acked), so the barrier proves completion |
-| output | interleaved pages in DRAM banks (p2) or L1 banks (p1) | output `TensorAccessor` (interleaved; DRAM/L1 flag in its CT args) resolves bank and offset per page | no compute kernel, no TRISC binaries |
+| Input shard (resident before launch) | TILE pages, `page_size` = 2048 B (bf16) / 1088 B (bf8b, mantissas + shared exponents); slots row-major within the shard at the nominal shard stride | `cb_input_shard`, globally allocated on the input's buffer by `ttnn.cb_descriptor_from_sharded_tensor`; the writer takes the base from `get_read_ptr(cb_input_shard)` | zero-copy; never read over the NoC; never written. The input stays allocated, sharded and unchanged. |
+| Shard slot → output page | the same bytes, unchanged | one non-posted single-packet NoC write per page from the owner (BRISC, NoC1) to `TensorAccessor(output).get_noc_addr(page)` | bank set (DRAM banks or L1 banks) comes from the output's `TensorAccessorArgs`. A bfp8 tile moves as raw bytes, never through unpack/pack. |
+| Completion | — | `noc_async_write_barrier` once per kernel | no transaction outlives the kernel (BB-03) |
+| Mesh | per-device tensors at identical addresses (lock-step mesh allocation) | `ttnn.generic_op([input, output], ProgramDescriptor)` → SPMD over the whole mesh shape (`generic_op.cpp:13-23,34-36`) | one RT-arg set serves every chip. The output is allocated on every device by `allocate_tensor_on_device(..., mesh_device, ...)`. |
 
-TARGET classification (the placement axes as regime rows):
+No `deferred` regime needs Tensix-to-Tensix communication; the op has none.
 
-| TARGET value | Cut it represents, and that axis's character | Class | What changes |
-|--------------|-----------------------------------------------|-------|--------------|
-| `in_scheme: width_sharded` | cut along `tile_cols` (independent) | built (Phase 0) | — |
-| `in_scheme: height_sharded` | cut along `tile_rows` (independent) | knob-turn | nothing in the kernels: the per-core rectangle formula covers it (`n_cols_shards = 1`); widen `SUPPORTED` |
-| `buffer: l1` | destination banks only | knob-turn | output `TensorAccessorArgs` carry L1; the BB-05 footprint check counts the output's L1 pages; widen `SUPPORTED` |
-| `dtype: bfloat8_b` | page bytes 1088 | knob-turn | page and slot sizes are read from the tensors; whole pages move, so exponents travel with their tile; widen `SUPPORTED` |
-| BLOCK_SHARDED (not in TARGET) | cut along both independent axes | deferred regime row | core walk only |
+### Host path (per call)
 
-Mesh: one `ProgramDescriptor` (identical per-device geometry) dispatched by one `ttnn.generic_op` call runs on every device of the mesh; the output is allocated on the input's device object (the mesh) with the per-device shape, so every device's pages are written.
+| Step | What | When |
+|------|------|------|
+| `validate()` | the table under Tensors | every call, first line |
+| allocate output | `ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, TILE_LAYOUT, device, memory_config)`, positional args | every eager call. Under trace this runs at capture time only; a replay executes the recorded program and allocates nothing. |
+| plan + descriptor build | the plan (cores, per-core blocks, coverage assert, L1 bound check) and the `ProgramDescriptor`, memoized in a module-level dict | cache miss only. Key: device / mesh identity, `shape`, `dtype`, input `memory_layout`, shard shape, the ordered core ranges, orientation, output `buffer_type`, `num_write_lanes`. **Orientation and range order must be in the key**: they change the per-core RT values without changing the C++ hash. |
+| patch | (1) the output base address, a common RT arg of the writer; (2) the backing of `cb_input_shard`, rebound to this call's `input_tensor` | every call, before dispatch |
+| dispatch | `ttnn.generic_op([input_tensor, output_tensor], descriptor)`, output last | every call, exactly one program |
+
+Why the patch is enough: the C++ program-cache hash of a descriptor covers kernel sources, CT args, core ranges, RT-arg counts and CB layout, never RT values or addresses (`generic_op_device_operation.cpp:78-147,307-324`). On a hit the framework copies the per-core and common RT values and rebinds every buffer-backed CB from the descriptor passed in (`program_descriptors.cpp:202-242`). Every per-call value is therefore an RT value or the CB binding, and each per-core shard quantity is a per-core RT arg, never a CT arg.
+
+Plan report (BB-08, BB-21): the module exposes `describe_plan(input_tensor, memory_config) -> dict` with `plan = "owner_writes"`, `num_write_lanes`, the per-core role (`"writer"` for cores with a block, `"idle"` otherwise) and each block `(first_row, first_col, rows, cols)`, all read from the memoized plan.
+
+### TARGET axes as blocking
+
+| TARGET value | What it changes | Class |
+|--------------|-----------------|-------|
+| `in_scheme = "width_sharded"` | shards cut `tile_col`, an independent axis: each core's block is self-contained | knob-turn: the block rectangle comes from the shard spec |
+| `in_scheme = "height_sharded"` | shards cut `tile_row`, an independent axis | knob-turn: the same block formula, clipped on rows instead of cols; no new kernel path |
+| `buffer = "l1"` | the output's bank set | knob-turn: the output `TensorAccessorArgs` CT args |
+| `dtype = bfloat8_b` | page size 1088 B | knob-turn: the CT page size; the bytes move unchanged with their exponents |
+
+Each physical shard is the realized form of the logical shard the work-split already defines. None of these values needs a new algorithm or a new regime row.
 
 ## Work Distribution
 
 | Field | Value |
 |-------|-------|
-| Work unit | one block = one core's whole resident shard |
-| Grid | the input's shard grid as given (`input_tensor.memory_config().shard_spec.grid`, ranges in stored order); kernel groups and the two CBs use exactly that `CoreRangeSet` (1 range for p2, 2 for p1) |
-| Core order | `cores = ttnn.corerange_to_cores(grid, None, orientation == ttnn.ShardOrientation.ROW_MAJOR)`; shard k ↔ `cores[k]` |
-| Per-core work | `n_cols_shards = ceil(C / shard_cols_tiles)`; for k < num_shards: `k_r = k // n_cols_shards`, `k_c = k % n_cols_shards`, `a0 = k_r * shard_rows_tiles`, `b0 = k_c * shard_cols_tiles`, `block_extent_rows = min(shard_rows_tiles, R − a0)`, `block_extent_cols = min(shard_cols_tiles, C − b0)`, `n_k = block_extent_rows * block_extent_cols`, `num_blocks_this_core = 1`; for k ≥ num_shards: `num_blocks_this_core = 0` |
-| Lanes | `lane_tiles_0 = ceil(n_k / num_lanes)`, `lane_start_0 = 0`; `lane_tiles_1 = n_k − lane_tiles_0`, `lane_start_1 = lane_tiles_0` (num_lanes = 2) |
-| Remainder | the shorter last shard is a shorter runtime extent of the same block operation (p1: 4 rows on the last core; p2 other spec: 1 column); R and C use the per-image tile-padded `padded_shape` (`ceil`), never `floor(batch * H / 32)` |
-| Why not `split_work_to_cores` | the shard spec already fixes the assignment; any other split adds a NoC crossing per tile (Traffic ranking) |
-
-Production instances:
-
-| Case | Cores (ranges) | Tiles per core | Lane split | Pages per destination bank |
-|------|----------------|----------------|------------|----------------------------|
-| p2 `(1, 5120)` bf16 width → DRAM | 32 (1: (0,0)-(7,3)) | 5 | 3 + 2 | 20 per DRAM bank (8 banks) |
-| p1 `(1, 128, 256, 32)` bf8 height → L1 | 103 (2: (0,0)-(10,8), (0,9)-(3,9)) | 10 (last: 4) | 5 + 5 (last: 2 + 2) | `ceil(1024 / N_l1_banks)` |
-| p2 other spec, col-major → DRAM | 54 (1: (0,0)-(8,5)) | 3 (last: 1) | 2 + 1 (last: 1 + 0) | 20 |
-| p1 other spec, col-major → L1 | 94 (2: (0,0)-(8,9), (9,0)-(9,3)) | 11 (last: 1) | 6 + 5 (last: 1 + 0) | `ceil(1024 / N_l1_banks)` |
-
-Plan report (BB-08, BB-21): the host exposes the per-core assignment of a call — core, shard index k, `(a0, b0, block_extent_rows, block_extent_cols)`, lane ranges — so a dump names each core's role; there is one plan, selected for every input.
+| Work unit | one block = the core's shard rectangle, `block_tile_rows × block_tile_cols` |
+| Grid | the input's own shard grid, its core ranges as given (p2: 1 range, 32 cores; p1: 2 ranges, 103 cores; p2-other: 1 range, 54 cores; p1-other: 2 ranges, 94 cores). The writer kernel and `cb_input_shard` take exactly these ranges, so the kernel group has as many core ranges as the input (BB-17). |
+| Shard → core | `cores = ttnn.corerange_to_cores(shard_spec.grid, None, row_wise=(orientation == ROW_MAJOR))`, computed from the tensor's own `shard_spec.grid` object, never from a rebuilt or sorted range list (the buffer's own map uses this function: `buffer.cpp:440`, `buffer_distribution_spec.cpp:172-174`; ranges walked in order, `core_coord.cpp:604-625`). Shard k → `cores[k]`. |
+| Shard grid | `shards_along_rows = ceil(tensor_tile_rows / shard_tile_rows)`, `shards_along_cols = ceil(tensor_tile_cols / shard_tile_cols)`, `num_shards = shards_along_rows · shards_along_cols` (one factor is 1: height → `shards_along_cols = 1`, width → `shards_along_rows = 1`). Shard k sits at shard-grid position `(k // shards_along_cols, k % shards_along_cols)`, row-major as in `iterate_over_shards`. |
+| Per-core work | `block_first_tile_row = (k // shards_along_cols) · shard_tile_rows`, `block_first_tile_col = (k % shards_along_cols) · shard_tile_cols`; extents per the mechanism-cap clamp |
+| Remainder | the last shard is clipped (p1: core 102 holds 4 tile rows; p2-other: the last shard holds 1 tile column; p1-other: 1 tile row). Cores `k ≥ num_shards` get `num_blocks_this_core = 0` and still receive RT args. Tile geometry uses `ceil` and the per-image padded height. |
+| Coverage invariant | host-asserted at descriptor build: `Σ block_tile_rows · block_tile_cols == tensor_tile_rows · tensor_tile_cols`, and the blocks are disjoint. Every output page is written by the call. |
+| Geometry asserts (host, `RuntimeError`) | height sharded: `shard_tile_cols == tensor_tile_cols`; width sharded: `shard_tile_rows == tensor_tile_rows`; `num_shards ≤ len(cores)` |
+| L1 bound (BB-05) | on a cache miss: when `buffer == "l1"`, `ceil(tensor_tile_rows · tensor_tile_cols / n_l1_banks) · page_size + 0 ≤ 1347776`, else `RuntimeError` (`n_l1_banks` from the device's L1 memory view). Never a support refusal and never a tag. Every INPUTS shape passes even at one bank (1,114,112 B). |
+| Regime selection | single regime, no predicate; reported by `describe_plan` |
+| `split_work_to_cores` | not used: the physical shard pins the core assignment |
 
 ## Circular Buffers
 
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
-|---------------|-------|-----------|-----------|------------------|--------|----------|----------|----------|
-| `cb_shard_lane0` | 0 | `input.buffer_aligned_page_size()` | `shard_rows_tiles * shard_cols_tiles` (the input buffer's `aligned_size_per_bank`; `cb_descriptor_from_sharded_tensor` default) — globally allocated on the input's shard, 0 new bytes | spans both block axes (it *is* the resident shard); capacity pinned by the shard | input dtype (Float16_b / Bfp8_b) | none — pre-placed by the producer op, no kernel pushes | writer lane 0 (BRISC) | whole program |
-| `cb_shard_lane1` | 1 | same | same, same buffer | same | same | none — pre-placed | writer lane 1 (NCRISC) | whole program |
+|---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
+| `cb_input_shard` | 0 | `input_tensor.buffer_aligned_page_size()` (2048 / 1088) | `shard_tile_rows · shard_tile_cols`, set by `ttnn.cb_descriptor_from_sharded_tensor(0, input_tensor)` (total size = the input's bank size) | It is the shard: it spans `tile_row` (`shard_tile_rows`) and `tile_col` (`shard_tile_cols`) and streams over nothing. Globally allocated on the input buffer, so it allocates no L1. | input dtype (`Float16_b` / `Bfp8_b`), a dataflow-only payload that never enters DEST | none in this program: the shard is resident, written by the program that produced `input_tensor` | writer | whole program, read-only, no CB handshake |
 
-CB sync: push count = wait count = 0 on both CBs. The lanes use `get_read_ptr` as an address binding only; no `cb_reserve_back` / `cb_push_back` / `cb_wait_front` / `cb_pop_front` is issued, so no FIFO pointer moves. Two indices on one buffer keep one consumer per CB. Full ledger: `l1_ledger.md`.
+No other CB exists. The output is written through `TensorAccessor` to its interleaved pages, never staged.
 
 ## Block Operation Realization
 
 | # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
 |---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|
-| 1 | `bind_resident_block` | `block_extent_rows × block_extent_cols` | no (raw dataflow API) | `cb_shard_laneX`, whole shard, resident since program start | — | unchanged (no pointer moved) |
-| 2 | `store_block` | lane range of the block: `lane_tiles_j` tiles | no (raw dataflow API) | `cb_shard_laneX`, read by address | output tensor pages (no CB) | unchanged; shard bytes unmodified (input stays intact) |
-| 3 | `retire_writes` | — | no (raw dataflow API) | — | — | all of the lane's writes acked |
+| 1 | `store_block` | `block_tile_rows × block_tile_cols` | no (raw dataflow; see API Mapping) | `cb_input_shard`, the whole shard, resident, read through `get_read_ptr`, never waited on or popped | none: output pages via `TensorAccessor` (`buffer_type` from `memory_config`) | `cb_input_shard` unchanged; writes in flight |
+| 2 | `drain_writes` | — | no | — | — | every write acked |
 
 ## API Mapping
 
 | Block operation | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Which params are block knobs |
 |-----------------|------|----------|-----------|------------------------|----------|-----------|------------------------------|
-| host: bind shard | raw_api (host) | `ttnn.cb_descriptor_from_sharded_tensor(cb_index, input_tensor)` | `ttnn/cpp/ttnn-nanobind/program_descriptors.cpp:517-523`; `ttnn/core/tensor/tensor_utils.cpp:48-72` | defaults: total size = per-bank shard bytes, page = aligned page size, core ranges = shard grid | `cb_shard_lane0`, `cb_shard_lane1` | — | none (pinned by the shard) |
-| host: core walk | raw_api (host) | `ttnn.corerange_to_cores(grid, None, row_wise)` | `tt_metal/common/core_coord.cpp:604-626` | `row_wise = orientation == ROW_MAJOR` | — | — | core-assignment |
-| `bind_resident_block` | raw_api | `get_read_ptr(cb)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:346` | lane's CB index (CT) | `cb_shard_laneX` | — | — |
-| `store_block` | raw_api | `TensorAccessor(TensorAccessorArgs<…>(), out_addr, page_bytes)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:71-100`; `tt_metal/hw/inc/api/tensor/tensor_accessor_args.h:21` | output accessor (interleaved, DRAM/L1 in CT args) | — | output pages | — |
-| `store_block` | raw_api | `noc_async_write_page<AddrGen>(page_id, out_accessor, src_l1_addr, page_bytes)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1417-1450` | `page_id = (a0 + r) * C + (b0 + c)`, `src = shard_base + (r * shard_cols_tiles + c) * slot_bytes`, non-posted | `cb_shard_laneX` | output pages | `block_extent_rows`, `block_extent_cols`, lane range (RT) |
-| `retire_writes` | raw_api | `noc_async_write_barrier()` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1951` | lane's own NoC (default `noc_index`) | — | — | — |
+| `store_block` (source base) | raw_api | `get_read_ptr(cb_input_shard)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:346` | CB index | `cb_input_shard` | — | none |
+| `store_block` (destination) | raw_api | `TensorAccessorArgs<cta_offset>()`, `TensorAccessor(args, output_addr, page_size)`, `get_noc_addr(page_id)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:71,165`; `tech_reports/tensor_accessor/tensor_accessor.md:61-72` | host: `ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()` appended last to the CT args | — | output pages | none |
+| `store_block` (move) | raw_api | `noc_async_write<page_size>(src_l1_addr, dst_noc_addr, page_size)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:875-883` | `max_page_size = page_size` (≤ `NOC_MAX_BURST_SIZE`, so the one-packet path); `posted = false` | `cb_input_shard` | output pages | the call count is `block_tile_rows · block_tile_cols`, the extent knobs |
+| `drain_writes` | raw_api | `noc_async_write_barrier()` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1951` | — | — | — | none |
+| zones | raw_api | `DeviceZoneScopedN(name)` | `tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1012,1047` | `"S2I-STORE-BLOCK"`, `"S2I-WRITE-BARRIER"` | — | — | none |
+| host: shard CB | host | `ttnn.cb_descriptor_from_sharded_tensor(cb_index, tensor)` | `ttnn/cpp/ttnn-nanobind/program_descriptors.cpp:517-555` | `cb_index = 0`; default size and core ranges | — | — | none |
+| host: shard→core list | host | `ttnn.corerange_to_cores(core_range_set, max_cores, row_wise)` | `ttnn/cpp/ttnn-nanobind/tensor.cpp:659-665`; `tt_metal/common/core_coord.cpp:604-625` | `row_wise = orientation == ROW_MAJOR` | — | — | sets `num_blocks_this_core` per core |
+| host: dispatch | host | `ttnn.generic_op(io_tensors, program_descriptor)` | `ttnn/cpp/ttnn/operations/generic/generic_op.cpp:34-36` | `[input_tensor, output_tensor]`, output last | — | — | — |
 
-Helpers considered and rejected (all `raw_api` rows above share this justification — the op has no compute phase and no helper moves resident pages to remote pages):
+**Helpers considered and rejected** (they apply to every `raw_api` row above):
 
-| Candidate | File:Line | Why it cannot express the operation |
-|-----------|-----------|-------------------------------------|
-| eltwise `copy` | `ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp:113` | a compute helper: unpacks to DEST and packs to an output dataflow buffer — adds an engine pass and a staging CB, and a bfloat8_b repack recomputes shared exponents (spec rule 7); the tile still needs a writer afterwards |
-| local copy helpers | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:12-21` | L1 → L1 self-aimed *reads* into a local typed buffer; the op needs local → remote page writes, and a local copy is the rejected staging regime |
-| `tilize` / `untilize` | `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp:206`, `ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp:163` | layout conversion; input and output are both TILE |
-| `McastArgs` | `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp:117-125` | no operand is shared by several cores; each tile has exactly one destination |
-| `reduce` / `prepare_reduce_scaler` | `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp:673` | no reduction |
+| Candidate | File:Line | Why it cannot express this op |
+|-----------|-----------|-------------------------------|
+| eltwise `copy` (CopyTile → PackTile) | `ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp:109-113` | Routes each tile through unpack → DEST → pack in a compute kernel between two CBs. That is an extra L1 staging copy plus a compute kernel for an op with no arithmetic, and for bfloat8_b the unpack/pack round trip re-derives the shared exponents, which the bit-exact rule forbids. |
+| local L1→L1 copy helpers | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:12-23` | Self-aimed NoC reads into a typed local buffer. This op's destination is a NoC-addressed interleaved page (a DRAM bank or another core's L1); the header states a NoC destination needs `Noc::async_write` (lines 20-21). |
+| multicast channel | `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp` | No operand has more than one destination. |
+| tilize / untilize helpers | `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`, `untilize_helpers.hpp` | The layout is unchanged (TILE → TILE). |
+| reduce / matmul helpers | `reduce_helpers_compute.hpp`, `matmul_block_helpers.hpp` | No reduction, no contraction. |
 
-No compute kernel exists, so `compute_kernel_hw_startup()`, `fp32_dest_acc_en` and math fidelity do not apply.
+No helper gap needs closing: `store_block` is a block operation over raw NoC writes, with its per-tile walk inside it and its one barrier outside the walk.
 
 ## Key Risks and Gotchas
 
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
-| Wrong page map (R1) | orientation, two core ranges, shorter last shard and width-vs-height all change which tiles a core holds | one per-core rectangle formula; shard k ↔ `corerange_to_cores` of the input's own `CoreRangeSet` in stored order; slot stride `shard_cols_tiles`; acceptance test covers both production specs plus a column-major, uneven spec per case, with per-tile-distinct values, a dirty destination and special values |
-| Hard-coded spec (R12) | every production cell passes with a hard-coded 32×5 / 103×10 layout | nothing is inlined: grid, shard shape, orientation and strategy are read from the input on every call and enter the program through CT/RT args |
-| Shorter last width shard with `shard_rows_tiles > 1` | its in-shard row stride is the full shard width (padding slots) | slot index uses `shard_cols_tiles`, extents use `block_extent_cols` |
-| Writes in flight at return (R3, BB-03) | the next program starts right after | non-posted writes and one `noc_async_write_barrier` per lane on its own NoC before return |
-| bfloat8_b page size (R5) | 1088 B, not 1024 | page bytes and slot stride read from the tensors, never derived from element size |
-| Cache key (R8, BB-07) | orientation alone changes only per-core RT values; dtype, shape, scheme, destination change CT args / CB format | per-core geometry is RT (bulk-copied on a C++ cache hit, `ttnn/api/ttnn/mesh_device_operation_adapter.hpp:345-348`); CT args carry `C`, `shard_cols_tiles`, page bytes, CB index and the output accessor (buffer type); the Python side memoizes the descriptor per key (padded shape, dtype, memory layout, shard shape, ordered grid ranges, orientation, output buffer type, device) and refreshes only the output address and the sharded-CB binding on a hit — it never rebuilds the descriptor |
-| Input mutated or freed (R13) | the CBs alias the input buffer | lanes only read the shard; no pointer moves, no writes target input addresses; the input is never deallocated |
-| Trace (R10, BB-16) | the model replays captured calls | the first eager call builds and caches the program; the output allocation is a host allocator action outside the recorded commands; no kernel is built after capture |
-| Mesh (R9) | FLUX runs on 4 chips | one descriptor, one `generic_op` call on the mesh; output allocated on the mesh device |
-| L1 budget (R4, BB-05) | p1's output pages land in L1 on the cores that hold the shards | the op allocates no L1 of its own (CBs alias the input); the only term is the output's L1 pages per bank, checked on host against 1347776 B |
-| Profiling zones (BB-21) | time outside a zone reads as waiting | each lane wraps `store_block` and `retire_writes` in its own named zone in the zone build only |
+| Wrong shard → core order | Multiple core ranges (p1: 2) and column-major walks (both other specs) are in the suite; a bounding-box walk, a sorted range list or a hard-coded row-major walk passes the production cells and fails the others | `corerange_to_cores` on the tensor's own `shard_spec.grid` with `row_wise` from the orientation, exactly as the buffer maps itself |
+| Short-shard slot stride | the buffer keeps the nominal shard stride inside a short last shard (`buffer_distribution_spec.cpp:41-52`) | slot row stride = `shard_tile_cols` (mechanism cap). Not exercised by INPUTS (p2 has one tile row), so stated here for correctness on any spec. |
+| Tile-row count of a rank-4 tensor | tile padding is per image on `d2`; `floor(volume/32)` or unpadded rows give the wrong page count when `d2 % 32 ≠ 0` | `tensor_tile_rows = prod(padded_shape[:-1]) / 32` |
+| Stale binding in the memoized descriptor | the cached descriptor holds the first call's input `Buffer*` and output address; an unpatched hit reads a freed or different shard and writes into the previous output | rebind `cb_input_shard` and set the output-address common RT arg on every call. The acceptance test alternates two live inputs of one spec, which catches a stale binding. |
+| Orientation-only change hits the same C++ program | same core ranges, CB layout and CT args, so the hash is equal (cache-order loose case, 3rd entry) | orientation is in the Python memo key, and per-core shard quantities are RT args that the hit path re-copies |
+| Pages left unwritten | a fresh buffer or a dirty-destination reuse hides or exposes an unwritten page; idle grid cores or a dropped last shard leave pages untouched | coverage invariant asserted on the host; one block per shard |
+| bf8b regrouping | any path through the compute engine re-derives the shared exponents | raw byte NoC write of the whole 1088 B page; no compute kernel exists |
+| Transaction left in flight | another program starts right after the call (BB-03) | non-posted writes and one `noc_async_write_barrier` at the end of every kernel instance, including 0-block cores |
+| Mesh: only device 0 written | the four-chip p2 case is not visible to a single-device test | a plain `ProgramDescriptor` through `generic_op` is SPMD over the full mesh shape (`generic_op.cpp:13-23`); the output is allocated on the mesh device |
+| Trace | the signature has no output parameter, so the call itself allocates its output | allocation happens in the host path, which runs at capture time only. Replay allocates and builds nothing (BB-16), provided the model warms the program cache before capture. |
+| Input mutated or aliased | an L1 output could be returned as the input relabelled | the writer only reads the shard; the output is a new `allocate_tensor_on_device` buffer; the acceptance test checks the address, placement and values of the input |
+| Validation order | a structural error refused as `UnsupportedAxisValue` (a `NotImplementedError`) violates the `ValueError` / `RuntimeError` contract | structural checks 1-7 precede the support gate |
+| Production grids need cores up to (10, 9) | a device with a smaller worker grid cannot hold the input | the tests skip there (as the golden helper does); the op itself never assumes a grid |
+| Kernel text and config size (BB-04, BB-18) | the op runs inside traced models | one small writer kernel, no compute or reader kernel, a handful of per-core RT args; zones vanish in the plain build |
