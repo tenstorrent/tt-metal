@@ -21,15 +21,23 @@ namespace hal::pack
  */
 enum class ReadInterfaces : std::uint8_t
 {
-    All      = 0b0000, ///< Rows 0 to 3; with DatumOverride::Zero, the X-range zero mode instead.
+    All      = 0b0000, ///< Rows 0 to 3, as Row0To3; with DatumOverride::Zero, the X-range zero mode instead (see DatumOverride).
     Row0     = 0b0001, ///< Row 0.
     Row0To1  = 0b0011, ///< Rows 0 and 1.
     Row0To2  = 0b0111, ///< Rows 0 to 2.
+    Row0To3  = 0b1111, ///< Rows 0 to 3, also with DatumOverride::Zero.
     Row0And2 = 0b0101, ///< Rows 0 and 2.
     Row1And3 = 0b1010  ///< Rows 1 and 3.
 };
 
-/** @brief Select whether transferred datums keep their Dst values or are packed as zeros read from nothing. */
+/**
+ * @brief Select whether transferred datums keep their Dst values or are packed as zeros read from nothing.
+ *
+ * With Zero, each enabled read interface packs the zeros of the ADC X range, as a row from Dst would. With
+ * ReadInterfaces::All, Zero instead packs X + 1 zero datums in rows of 16, where X is the whole X coordinate of the
+ * packer's channel 1 ADC; that mode expects X + 1 to be a multiple of 16 and channel 0's X to be 0. Use
+ * ReadInterfaces::Row0To3 to zero four rows.
+ */
 enum class DatumOverride : bool
 {
     None = false,
@@ -43,7 +51,7 @@ enum class DestAccess : bool
     Strided  = true ///< Rows 8 apart (16 with remapped addresses), for untilize.
 };
 
-/** @brief Select whether the next transfer continues the current output row or starts a new one. */
+/** @brief Select whether the next transfer continues the current compression row; ignored without compression, and a Last transfer always clears it. */
 enum class Concatenation : bool
 {
     NewRow = false,
@@ -70,16 +78,19 @@ public:
     ReadInterfaces interfaces     = ReadInterfaces::All;   ///< Dst rows read, relative to the start row.
     DatumOverride datum_override  = DatumOverride::None;   ///< Whether datums keep their values or become zero.
     DestAccess dest_access        = DestAccess::RowMajor;  ///< Adjacent or strided Dst rows.
-    Concatenation concatenation   = Concatenation::NewRow; ///< Whether the next transfer continues this output row.
+    Concatenation concatenation   = Concatenation::NewRow; ///< Whether the next transfer continues this compression row; ignored without compression.
     TileBoundary boundary         = TileBoundary::NotLast; ///< Whether this transfer closes the tile.
 };
 
 namespace detail
 {
+inline constexpr std::uint32_t ADDRESS_MODIFIER_WIDTH = 2; ///< Width of the PACR AddrMode field.
+
 constexpr bool is_valid(const ReadInterfaces interfaces)
 {
     return interfaces == ReadInterfaces::All || interfaces == ReadInterfaces::Row0 || interfaces == ReadInterfaces::Row0To1 ||
-           interfaces == ReadInterfaces::Row0To2 || interfaces == ReadInterfaces::Row0And2 || interfaces == ReadInterfaces::Row1And3;
+           interfaces == ReadInterfaces::Row0To2 || interfaces == ReadInterfaces::Row0To3 || interfaces == ReadInterfaces::Row0And2 ||
+           interfaces == ReadInterfaces::Row1And3;
 }
 
 constexpr bool is_valid(const DatumOverride override)
@@ -104,13 +115,13 @@ constexpr bool is_valid(const TileBoundary boundary)
 
 constexpr bool is_valid(const Transfer options)
 {
-    return hal::detail::is_valid(options.address_modifier, 2) && is_valid(options.interfaces) && is_valid(options.datum_override) &&
+    return hal::detail::is_valid(options.address_modifier, ADDRESS_MODIFIER_WIDTH) && is_valid(options.interfaces) && is_valid(options.datum_override) &&
            is_valid(options.dest_access) && is_valid(options.concatenation) && is_valid(options.boundary);
 }
 
 inline constexpr __attribute__((always_inline)) void validate(const Transfer options)
 {
-    hal::detail::require(hal::detail::is_valid(options.address_modifier, 2), "PACR address modifier must be in [0, 3]");
+    hal::detail::require(hal::detail::is_valid(options.address_modifier, ADDRESS_MODIFIER_WIDTH), "PACR address modifier must be in [0, 3]");
     hal::detail::require(is_valid(options.interfaces), "PACR read interfaces must be a ReadInterfaces value");
     hal::detail::require(is_valid(options.datum_override), "PACR datum override must be None or Zero");
     hal::detail::require(is_valid(options.dest_access), "PACR Dst access must be RowMajor or Strided");
@@ -124,7 +135,7 @@ constexpr std::uint32_t transfer_operation(const Transfer options)
         0 /*CfgContext*/,
         0 /*RowPadZero*/,
         hal::to_underlying(options.dest_access) /*DstAccessMode*/,
-        options.address_modifier /*AddrMod*/,
+        options.address_modifier /*AddrMode*/,
         0 /*AddrCntContext*/,
         hal::to_underlying(options.datum_override) /*ZeroWrite*/,
         hal::to_underlying(options.interfaces) /*ReadIntfSel*/,
