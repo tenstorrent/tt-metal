@@ -20,7 +20,9 @@ inline void llk_pack_fast_tilize_init(
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const uint32_t use_32bit_dest =
         pack_src_format[output_id] == (uint)DataFormat::Float32 || pack_src_format[output_id] == (uint)DataFormat::Tf32;
-    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+    constexpr std::uint32_t skip =
+        ckernel::packer::llk_pack_reconfig_skip<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format);
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, skip>(
         use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id]);
 }
 
@@ -30,7 +32,9 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+    constexpr std::uint32_t skip =
+        ckernel::packer::llk_pack_reconfig_skip<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format);
+    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en, skip>(
         pack_dst_format[output_id], face_r_dim, num_faces, pack_src_format[output_id]);
 }
 

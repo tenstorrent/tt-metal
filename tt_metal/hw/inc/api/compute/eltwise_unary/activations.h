@@ -14,6 +14,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+PACK_SFPU_API(2)
 namespace ckernel {
 
 // clang-format off
@@ -56,7 +57,10 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         VectorMode::RC));
 }
 
-ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+ALWI void hardsigmoid_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX)));
+}
 #endif  // !ARCH_QUASAR
 
 // clang-format off

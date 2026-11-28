@@ -10,6 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+PACK_SFPU_API(5)
 namespace ckernel {
 
 // clang-format off
@@ -59,7 +60,10 @@ ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
         param1));
 }
 
-ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
+ALWI void hardtanh_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT(hardtanh));
+}
 #endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

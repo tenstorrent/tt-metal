@@ -19,6 +19,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     NUM_GUARD_TILES,
+    PACK_SRC_FROM_OUTPUT,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -45,7 +46,11 @@ def test_perf_fast_untilize(
         "sources/fast_untilize_test.cpp",
         formats,
         run_types=ALL_PERF_RUN_TYPES,
-        templates=[generate_input_dim(dimensions, dimensions), DEST_SYNC(dest_sync)],
+        templates=[
+            generate_input_dim(dimensions, dimensions),
+            DEST_SYNC(dest_sync),
+            PACK_SRC_FROM_OUTPUT(),
+        ],
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),

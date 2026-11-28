@@ -23,7 +23,10 @@ namespace ckernel {
  * Call before block_max8. The SFPU reads DST directly and needs no unpack
  * operation. The caller owns DST acquire/commit/wait/release and CB publication.
  */
-ALWI void block_max8_init() { MATH((llk_math_block_max8_init<DST_ACCUM_MODE>())); }
+ALWI void block_max8_init() {
+    PACK_MATH_CONTEXT(false);
+    MATH((llk_math_block_max8_init<DST_ACCUM_MODE>()));
+}
 
 /**
  * @brief Replace one DST tile with 128 contiguous block maxima in place.
@@ -48,7 +51,10 @@ ALWI void block_max8(uint32_t dst_index, uint32_t valid_scores = TILE_R_DIM * TI
  *
  * Call before block_max8_fpu. Same requirements as block_max8_init.
  */
-ALWI void block_max8_fpu_init() { MATH((llk_math_block_max8_fpu_init<DST_ACCUM_MODE>())); }
+ALWI void block_max8_fpu_init() {
+    PACK_MATH_CONTEXT(false);
+    MATH((llk_math_block_max8_fpu_init<DST_ACCUM_MODE>()));
+}
 
 /**
  * @brief FPU (GMPOOL) variant of block_max8, with the same arguments and result layout.

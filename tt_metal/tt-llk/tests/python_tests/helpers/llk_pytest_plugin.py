@@ -40,6 +40,7 @@ import re
 import signal
 import sys
 import time
+import zlib
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -657,7 +658,29 @@ def pytest_ignore_collect(collection_path, config):
         and "quasar" in collection_path.parts
     ):
         return True
+    if _skips_sweep_modules() and _is_sweep_module(collection_path):
+        return True
     return None
+
+
+_SWEEP_MODULE_MARK = re.compile(r"^pytestmark = .*\bllk_sweep\b", re.M)
+
+
+# A directory run (the CI jobs) leaves the study modules out; a module named on the command line is still collected.
+def _skips_sweep_modules() -> bool:
+    return os.environ.get("LLK_SWEEP_ALL") != "1" and not os.environ.get(
+        "LLK_SWEEP_STRIDE"
+    )
+
+
+def _is_sweep_module(path) -> bool:
+    # Read, not imported: the sweep modules' parametrization alone costs GBs per xdist worker.
+    if path.suffix != ".py" or not path.is_file():
+        return False
+    try:
+        return _SWEEP_MODULE_MARK.search(path.read_text()) is not None
+    except OSError:
+        return False
 
 
 def _statically_skipped(definition) -> bool:
@@ -783,6 +806,53 @@ def _select_node_list(config, items):
         items=[item for item in items if item.nodeid not in wanted]
     )
     items[:] = selected
+
+
+def _thin_sweep(config, items):
+    """The perf CI runner (--perf-splits) leaves out the tests marked llk_sweep, the local study modules; every other run
+    leaves out the llk_sweep tests of the modules that are not study modules (sweeps inside a CI test file).
+
+    LLK_SWEEP_ALL=1 keeps every id; LLK_SWEEP_STRIDE=n keeps one id in n (chosen by a hash of the node id) and the module's
+    LLK_SWEEP_KEEP ids.
+    """
+    if os.environ.get("LLK_SWEEP_ALL") == "1":
+        return
+    perf_run = config.getoption("--perf-splits") is not None
+    sweep_module = {}
+    # a test id named on the command line runs, as a named study module does
+    named = {
+        (Path(arg.split("::", 1)[0]).name, arg.split("::", 1)[1])
+        for arg in config.args
+        if "::" in arg
+    }
+
+    def thinned(item):
+        if item.get_closest_marker("llk_sweep") is None:
+            return False
+        if perf_run:
+            return True
+        if (item.path.name, item.nodeid.split("::", 1)[-1]) in named:
+            return False
+        if item.path not in sweep_module:
+            sweep_module[item.path] = _is_sweep_module(item.path)
+        return not sweep_module[item.path]
+
+    stride = int(os.environ.get("LLK_SWEEP_STRIDE", "0"))
+    kept, dropped = [], []
+    for item in items:
+        if not thinned(item) or (
+            stride
+            and (
+                zlib.crc32(item.nodeid.encode()) % stride == 0
+                or item.name in getattr(item.module, "LLK_SWEEP_KEEP", ())
+            )
+        ):
+            kept.append(item)
+        else:
+            dropped.append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept
 
 
 def _split_by_cost(config, items):
@@ -946,6 +1016,7 @@ def pytest_collection_modifyitems(config, items):
     result = yield
     _select_tests_by_op(config, items)
     _select_node_list(config, items)
+    _thin_sweep(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 

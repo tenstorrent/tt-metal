@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -18,6 +20,14 @@
 
 #ifdef TRISC_PACK
 #include "experimental/2_0/llk_pack_tile.h"
+#endif
+
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<10> = true;
+}  // namespace ckernel::packer
 #endif
 
 namespace ckernel {
@@ -44,6 +54,7 @@ template <
     TensorShape OutShape>
 ALWI void tilize_init(
     LLKOperand<InFormat, InShape> /*in*/, std::uint32_t block, LLKOperand<OutFormat, OutShape> /*out*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(is_legal_tile_shape(InShape), "tilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));

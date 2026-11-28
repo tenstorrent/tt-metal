@@ -117,9 +117,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
- * NOTE: In the future the block pack must be folded further into a hardware MOP / REPLAY buffer (as
- * is being done for Quasar) inside llk-lib, without changing this signature. Tracked under the Compute
- * API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47480.
+ * NOTE: On Blackhole pack_block<ntiles>(ifrom_dst, icb) packs the block in one packer run where the layout allows;
+ * right behind matmul math, pack_block<ntiles, DST_ACCUM_MODE, K> picks the forms for K. A runtime count packs per tile.
  *
  * Return value: None
  *
@@ -139,6 +138,46 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
 }
+
+/// @cond
+// The count as a template argument: on Blackhole the block forms. Out of the docs: the documented pack_block is the
+// run-time count above.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) {
+    LLK_SAN_FUNCTION();
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb)));
+#elif defined(ARCH_QUASAR)
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#endif
+}
+/// @endcond
+
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The count as the front end sees it: N for a constant, 0 for one known only at run time (main's loop, no block path).
+template <std::uint32_t N>
+struct pack_block_count {
+    std::uint32_t value;
+    constexpr explicit pack_block_count(std::uint32_t v) : value(v) {}
+    constexpr operator std::uint32_t() const { return value; }
+};
+
+// The macro tests the count through this call: GCC folds __builtin_constant_p of a const local whose run-time
+// initializer has equal arms (also as a by-value argument), and that local is no template argument; read through a
+// reference, the count is evaluated under the language's constant rules.
+constexpr std::uint32_t pack_fe_n(const std::uint32_t& v) { return v; }
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t N>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, pack_block_count<N> ntiles) {
+    if constexpr (N != 0) {
+        pack_block<N, is_fp32_dest_acc_en>(ifrom_dst, icb);
+    } else {
+        pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles.value);
+    }
+}
+#endif
 
 // clang-format off
 /**
@@ -201,3 +240,43 @@ ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_r
 ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
 
 }  // namespace ckernel
+
+// Not in a kernel that includes the id-free (2.0) compute API (experimental/2_0/internal/no_call_site_macros.h).
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK) && !defined(CKERNEL_NO_CALL_SITE_MACROS)
+// Lets today's pack_block(dst, cb, n) calls with a constant count reach the block forms; other arities pass through.
+#define PACK_BLOCK_NARGS_(a1, a2, a3, a4, a5, a6, a7, a8, n, ...) n
+#define PACK_BLOCK_NARGS(...) PACK_BLOCK_NARGS_(__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define PACK_BLOCK_CAT_(a, b) a##b
+#define PACK_BLOCK_CAT(a, b) PACK_BLOCK_CAT_(a, b)
+#define PACK_BLOCK_CALL_1(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_2(...) pack_block(__VA_ARGS__)
+// The count's template argument also marks a pack_block for the pack (llk_pack_out_set<0xFE>); a qualified call still
+// expands.
+#define PACK_BLOCK_CALL_3(d, cb, n)                                                         \
+    pack_block(                                                                             \
+        d,                                                                                  \
+        cb,                                                                                 \
+        ::ckernel::pack_block_count<                                                        \
+            (__builtin_constant_p(::ckernel::pack_fe_n(n)) ? ::ckernel::pack_fe_n(n) : 0) + \
+            0 * sizeof(::ckernel::packer::llk_pack_out_set<0xFE>)>(n))
+#define PACK_BLOCK_CALL_4(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_5(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_6(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_7(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_8(...) pack_block(__VA_ARGS__)
+#define pack_block(...) PACK_BLOCK_CAT(PACK_BLOCK_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
+namespace ckernel {
+// pack_tile whose template argument marks the output CB for the pack (llk_pack_out_set); a qualified call still
+// expands.
+template <std::size_t mark>
+ALWI void pack_tile_marked(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
+    pack_tile(ifrom_dst, icb, output_tile_index);
+}
+}  // namespace ckernel
+// The mark: the CB id when a constant, 0xFF else.
+#define PACK_TILE_MARK(cb) \
+    (0 * sizeof(::ckernel::packer::llk_pack_out_set<(__builtin_constant_p(::ckernel::pack_fe_n(cb)) ? static_cast<int>(::ckernel::pack_fe_n(cb)) : 0xFF)>))
+#define PACK_TILE_CALL_2(d, cb) pack_tile_marked<PACK_TILE_MARK(cb)>(d, cb)
+#define PACK_TILE_CALL_3(d, cb, i) pack_tile_marked<PACK_TILE_MARK(cb)>(d, cb, i)
+#define pack_tile(...) PACK_BLOCK_CAT(PACK_TILE_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
+#endif

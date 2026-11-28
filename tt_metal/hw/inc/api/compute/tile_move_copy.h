@@ -49,6 +49,7 @@ ALWI void copy_init(
     std::uint32_t transpose = 0,
     std::uint32_t transpose_within_16x16_face = false,
     std::uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);

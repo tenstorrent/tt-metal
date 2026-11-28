@@ -27,6 +27,7 @@ namespace ckernel {
  */
 template <bool is_32bit = false, bool transpose_of_faces = true>
 ALWI void transpose_dest_init([[maybe_unused]] uint32_t operand = 0) {
+    PACK_MATH_CONTEXT(false);
 #ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest_init<transpose_of_faces, is_32bit>()));
 #else

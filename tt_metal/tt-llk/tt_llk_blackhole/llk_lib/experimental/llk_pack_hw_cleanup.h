@@ -12,6 +12,13 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_strides_writer<4> = true;
+} // namespace ckernel::packer
+
 using namespace ckernel;
 using namespace ckernel::packer;
 
@@ -35,6 +42,7 @@ inline void _llk_pack_hw_cleanup_configure_current_bank_()
  */
 inline void _llk_pack_hw_cleanup_poison_pack_ambient_()
 {
+    ckernel::packer::llk_pack_live_forget();
     _llk_pack_configure_addrmod_<PackMode::Default>();
 
     // 1x1 NOP double-loop so accidental MOP runs are inert.

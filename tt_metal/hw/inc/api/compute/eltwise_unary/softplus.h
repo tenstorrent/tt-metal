@@ -10,6 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+PACK_SFPU_API(8)
 namespace ckernel {
 
 // clang-format off
@@ -80,7 +81,10 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
         threshold));
 }
 
-ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_INIT(softplus)); }
+ALWI void softplus_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT(softplus));
+}
 #endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -40,6 +42,7 @@ namespace experimental {
 // clang-format on
 template <EltwiseBinaryType eltwise_binary_type, DataFormat AFormat, TensorShape AShape>
 ALWI void binary_tiles_init(LLKOperand<AFormat, AShape> /*a*/, bool acc_to_dest = false) {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_eltwise_binary_init<
           LLKOperand<AFormat, AShape>::descriptor,
           eltwise_binary_type,
@@ -343,6 +346,7 @@ template <
     DataFormat Format,
     TensorShape Shape>
 ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(is_legal_tile_shape(Shape), "binary_reuse_dest_init: illegal tile shape for the L1 operand.");
     // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true).
     UNPACK((llk_unpack_A_init<

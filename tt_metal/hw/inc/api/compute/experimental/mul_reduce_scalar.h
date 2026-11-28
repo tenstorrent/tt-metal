@@ -38,6 +38,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
 }
@@ -52,6 +53,7 @@ template <
     bool accumulate_in_one_tile,
     bool is_fp32_dest_acc_en>
 ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler) {
+    PACK_MATH_CONTEXT(false);
     MATH(constexpr MathFidelity mul_f = program_fidelity ? MATH_FIDELITY : mul_fidelity);
     MATH(constexpr MathFidelity reduce_f = program_fidelity ? MATH_FIDELITY : reduce_fidelity);
     // The reduce tail's move_dest_to_src only encodes tiles 0..7, so 8 caps num_tiles even when DEST holds more.
@@ -184,6 +186,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
 // clang-format on
 template <MathFidelity mul_fidelity>
 ALWI void mul_reduce_scalar_init_fidelity(uint32_t icb0, uint32_t icb1) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<mul_fidelity>(icb0, false /*acc_to_dest*/)));
 }

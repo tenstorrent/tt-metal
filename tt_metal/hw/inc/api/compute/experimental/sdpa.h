@@ -35,6 +35,14 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<6> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 // Every op (MUL, ADD, SUB) accumulates both passes into dest, so the output tiles must be zero on entry: a freshly
@@ -44,6 +52,7 @@ template <
     std::uint32_t num_tiles,
     bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
@@ -84,6 +93,7 @@ template <
     std::uint32_t num_tiles,
     bool skip_addrmod = false>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles_init(std::uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<
           eltwise_binary_type,
           num_tiles,
@@ -136,6 +146,7 @@ ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(std::uint32_t dst_tile_index)
 
 template <MathFidelity math_fidelity, std::uint32_t num_tiles, bool skip_addrmod = false>
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init_fidelity(std::uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<
           EltwiseBinaryType::ELWMUL,
           num_tiles,
@@ -743,6 +754,7 @@ ALWI void sdpa_tail(
     // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
     if constexpr (dense && !untilize) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
+        PACK((ckernel::packer::llk_pack_live_forget()));
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
     }
@@ -786,6 +798,7 @@ ALWI void sdpa_tail(
 
     if constexpr (dense && !untilize) {
         // Restore packing stride from tile to tile to 64 rows
+        PACK((ckernel::packer::llk_pack_live_forget()));
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
 

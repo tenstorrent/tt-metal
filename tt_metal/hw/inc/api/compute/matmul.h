@@ -16,6 +16,7 @@
 #include "llk_unpack_AB_matmul_api.h"
 #include "llk_unpack_common_api.h"
 #endif
+PACK_MATMUL_API(1)
 // defines the default throttle level for matmul kernels (default 0)
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
@@ -120,6 +121,7 @@ ALWI void matmul_init(
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+    PACK_MATH_CONTEXT(true);
 #else
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
@@ -234,6 +236,7 @@ ALWI void matmul_block_init(
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #endif
+    PACK_MATH_CONTEXT(true);
 #else
     static_assert(!row_mop, "The matmul row MOP is only implemented for Blackhole");
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));

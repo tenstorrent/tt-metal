@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -62,6 +64,7 @@ constexpr DataCopyType unary_bcast_dcopy() {
 // clang-format on
 template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
@@ -148,6 +151,7 @@ ALWI void unary_bcast_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile
 // clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape>
 ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(is_legal_tile_shape(AShape), "bcast_init: illegal tile shape for operand A.");
     static_assert(tBcastDim != BroadcastType::NONE, "bcast_init: use add/sub/mul_init for BroadcastType::NONE.");
     // ADD/SUB use LoFi (no fidelity multiplier), MUL uses MATH_FIDELITY; the ternary must stay inside MATH()

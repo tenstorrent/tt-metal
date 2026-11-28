@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -45,6 +47,7 @@ namespace experimental {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void copy_init(
     LLKOperand<Format, Shape> /*src*/, std::uint32_t transpose = 0, std::uint32_t transpose_within_16x16_face = 0) {
+    PACK_MATH_CONTEXT(false);
     static_assert(
         is_legal_tile_shape(Shape),
         "copy_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");

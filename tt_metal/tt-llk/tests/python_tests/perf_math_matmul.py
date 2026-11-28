@@ -41,6 +41,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
@@ -289,6 +290,12 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            # The gate measures the per-tile pack of ttnn's run-time-count pack_block (the matmul head's test runs production's,
+            # per tile here); test_matmul and test_math_matmul keep the block forms.
+            MATMUL_PACK_BLOCK(
+                0,
+                in32=formats.input_format == DataFormat.Float32,
+            ),
             MATMUL_ROW_MOP(row_mop),
         ],
         runtimes=[

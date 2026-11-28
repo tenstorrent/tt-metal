@@ -1,0 +1,387 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+
+#include "ckernel.h"
+#include "counters.h"
+#include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
+
+// Globals
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "llk_unpack_A.h"
+#include "llk_unpack_common.h"
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t num_faces          = params.num_faces;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                = params.buffer_A;
+#endif
+    const int num_total_tiles               = NUM_TILES_IN_BLOCK * NUM_BLOCKS;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_total_tiles * num_faces;
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /* transpose_of_faces */,
+            0 /* within_face_16x16_transpose */,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            if constexpr (!unpack_to_dest)
+            {
+                _perf_unpack_stream_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en, PERF_RUN_TYPE>(src_handshake_iters);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (int tile = 0; tile < num_total_tiles; ++tile)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif
+
+#ifdef LLK_TRISC_MATH
+
+#ifdef FORMAT_INT32
+const bool is_int_fpu_en = true;
+#else
+const bool is_int_fpu_en = false;
+#endif
+
+#include "llk_lib_math_wrappers.h"
+#include "params.h"
+
+using namespace ckernel;
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t num_faces          = params.num_faces;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const int DST_INDEX                    = params.DST_INDEX;
+#endif
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces;
+
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
+            tensor_shape, formats.math);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            if constexpr (unpack_to_dest)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                                DST_INDEX + tile, formats.math, formats.math, tensor_shape);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                _perf_math_stream_clear_valid</* src A */ true, /* src B */ true, PERF_RUN_TYPE>(src_handshake_iters);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            if constexpr (!unpack_to_dest)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            LLK_ASSERT(
+                                ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "Block tile index exceeds maximum destination tiles");
+                            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                                DST_INDEX + tile, formats.math, formats.math, tensor_shape);
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
+                {
+                    _llk_math_wait_for_dest_available_<dest_sync>();
+                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                    {
+                        LLK_ASSERT(
+                            ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            DST_INDEX + tile, formats.math, formats.math, tensor_shape);
+                    }
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif
+#ifdef LLK_TRISC_PACK
+
+#include "llk_lib_pack_wrappers.h"
+#include "llk_pack_common.h"
+#include "params.h"
+
+// pack_block alternating between two outputs of different format and page size, as the gathered bmm kernels pack the
+// output and the partials: every block is a first block, so never W. alt_head_form 0: main's per-tile form.
+#if defined(ARCH_BLACKHOLE)
+static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
+{
+    return fmt == static_cast<std::uint32_t>(DataFormat::Float32) ? 4096 : (fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ? 1088 : 2048);
+}
+
+// llk_pack_block's block forms write the destination by bytes under full sync (llk_pack_rmw_tile), its per-tile packs
+// except at half sync with fp32 DEST and an unpack to DEST (llk_pack_rmw_per_tile)
+constexpr bool alt_rmw = dest_sync == DstSync::SyncFull;
+
+template <bool fp32>
+inline void alt_pack_tile([[maybe_unused]] const std::uint32_t fmt, const std::uint32_t tile, const std::uint32_t addr)
+{
+    _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default, false, alt_rmw || !(fp32 && unpack_to_dest)>(tile, addr);
+}
+
+// llk_pack_block's form for the first block after a reconfigure: llk_pack_reconf_form's rows for the pair formats
+// (mirrored in test_pack_block_form.py). Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit.
+constexpr char alt_reconf_form[2][3][4][17] = {
+    {
+        {"TTBTBTBTBBBBBBBB", "TTBTBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"}, // Bfp8_b
+        {"TBBTBBBTBBBBBBBB", "TBBTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float32
+        {"TBBBBTBTBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float16_b
+    },
+    {
+        {"TTBTBTBTBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTTTBBBBBBBBBBBB"}, // Bfp8_b
+        {"TBBTBBBTBBBBBBBB", "TBBTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float32
+        {"TBBBBTBTBBBBBBBB", "TBTBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float16_b
+    },
+};
+
+#if !defined(RUNTIME_FORMATS)
+// The production reconfigure of a constant output (llk_pack_reconfig_data_format_ct) for outputs A and B; the third entry
+// is the init's strides, which take output A's format as the packer input.
+constexpr unsigned char alt_imm_src[3]   = {static_cast<unsigned char>(formats.pack_src), static_cast<unsigned char>(formats.pack_src),
+                                            static_cast<unsigned char>(formats.pack_dst)};
+constexpr unsigned char alt_imm_dst[3]   = {static_cast<unsigned char>(formats.pack_dst), static_cast<unsigned char>(alt_pack_dst),
+                                            static_cast<unsigned char>(formats.pack_dst)};
+constexpr unsigned char alt_imm_faces[3] = {4, 4, 4};
+constexpr unsigned char alt_imm_part[3]  = {0, 0, 0};
+constexpr ckernel::packer::llk_pack_reconfig_imm_t alt_imm =
+    ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, dest_sync>(alt_imm_src, alt_imm_dst, alt_imm_faces, alt_imm_part);
+
+template <std::uint32_t dst>
+inline void alt_reconfig_imm()
+{
+    ckernel::packer::reconfig_packer_data_format_imm_and_state<
+        is_fp32_dest_acc_en,
+        alt_imm.strides_full,
+        alt_imm.format,
+        alt_imm.section,
+        alt_imm.lf8,
+        alt_imm.threshold,
+        alt_imm.dstacc,
+        alt_imm.ystride,
+        alt_imm.zwstride,
+        static_cast<std::uint32_t>(formats.pack_src),
+        dst,
+        4>();
+}
+#endif
+
+inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntiles, const std::uint32_t head, const bool src32)
+{
+    const bool bfp = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
+    const bool wide = fmt == static_cast<std::uint32_t>(DataFormat::Float32);
+    const std::uint32_t column = (dest_sync == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
+    if (!head || alt_reconf_form[src32 ? 1 : 0][bfp ? 0 : (wide ? 1 : 2)][column][(ntiles < 16 ? ntiles : 16) - 1] == 'T')
+    {
+        return 0; // per tile
+    }
+    return bfp ? 2 : 1; // closed : plain
+}
+#endif
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t num_faces          = params.num_faces;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const int DST_INDEX                    = params.DST_INDEX;
+    const int RELU_CONFIG                  = params.RELU_CONFIG;
+    const Operand& buffer_Res              = params.buffer_Res;
+#endif
+#if defined(ARCH_BLACKHOLE)
+    const std::uint32_t fmt_a   = formats.pack_dst;
+    const std::uint32_t fmt_b   = static_cast<std::uint32_t>(alt_pack_dst);
+    const std::uint32_t page_a  = alt_page_bytes(fmt_a);
+    const std::uint32_t page_b  = alt_page_bytes(fmt_b);
+    const std::uint32_t tiles_a = ((static_cast<std::uint32_t>(NUM_BLOCKS) + 1) / 2) * NUM_TILES_IN_BLOCK;
+    const std::uint32_t base_a  = L1_ADDRESS(buffer_Res[0]);
+    // output B starts at the next 1 KB after the tiles of A (the python side reads it from the same offset)
+    const std::uint32_t base_b = base_a + ((tiles_a * page_a + 1023) & ~1023u) / 16;
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
+            formats.pack_src, fmt_a, page_a, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, RELU_CONFIG);
+        _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false>(fmt_a, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
+    }
+    // each output's form is decided once, as with constant counts; read through a volatile so the main arm compiles to
+    // the same loop and the arms differ in data only. A 32 bit CB with a 32 bit DEST takes the src32 family.
+    const bool alt_src32 = is_fp32_dest_acc_en && (fmt_a == static_cast<std::uint32_t>(DataFormat::Float32) || fmt_b == static_cast<std::uint32_t>(DataFormat::Float32));
+    const volatile std::uint32_t head_v = alt_head_form ? 1 : 0;
+    const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, 1, alt_src32) & (0u - head_v);
+    const std::uint32_t form_b          = alt_form(fmt_b, NUM_TILES_IN_BLOCK, 1, alt_src32) & (0u - head_v);
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                std::uint32_t cur = 0;
+                for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    const std::uint32_t out  = block & 1;
+                    const std::uint32_t fmt  = out ? fmt_b : fmt_a;
+                    const std::uint32_t page = out ? page_b : page_a;
+                    if (out != cur)
+                    {
+#if !defined(RUNTIME_FORMATS)
+                        if (alt_imm.ok && num_faces == 4)
+                        {
+                            if (out)
+                            {
+                                alt_reconfig_imm<static_cast<std::uint32_t>(alt_pack_dst)>();
+                            }
+                            else
+                            {
+                                alt_reconfig_imm<static_cast<std::uint32_t>(formats.pack_dst)>();
+                            }
+                        }
+                        else
+#endif
+                        {
+                            _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, fmt, page);
+                        }
+                        cur = out;
+                    }
+                    if constexpr (alt_l1_acc)
+                    {
+                        _llk_pack_reconfig_l1_acc_(out);
+                    }
+                    const std::uint32_t first = (block >> 1) * NUM_TILES_IN_BLOCK;
+                    const std::uint32_t base  = out ? base_b : base_a;
+                    const std::uint32_t form  = out ? form_b : form_a;
+                    const std::uint32_t addr0 = base + first * (page / 16);
+                    if (form == 0)
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            alt_pack_tile<is_fp32_dest_acc_en>(fmt, DST_INDEX + tile, addr0 + tile * (page / 16));
+                        }
+                    }
+                    else if (form == 1)
+                    {
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, alt_rmw>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK);
+                    }
+                    else
+                    {
+                        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en, alt_rmw>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK, page);
+                    }
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                    {
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+                if constexpr (alt_l1_acc)
+                {
+                    _llk_pack_reconfig_l1_acc_(0);
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+#endif
+}
+#endif

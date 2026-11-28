@@ -22,51 +22,12 @@
  */
 inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
 
-// Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
-// already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
-// (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
-template <
-    PackMode pack_mode = PackMode::Default,
-    bool zero_output = false,
-    bool skip_addrmod_config = false,
-    bool skip_packer_strides = false>
-inline void llk_pack_init_impl(
-    const std::uint32_t pack_src_reg_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
-    const std::uint32_t num_tiles,
-    const bool is_input_8bit_format) {
-    // Blackhole's MOP does not take the format at all; set_packer_strides is its only consumer here and
-    // reconfig_packer_data_format re-derives that, so a format reconfig between init and execute is legal
-    // and must not read as drift.
-    SAN_HOOK(init<OperationPack>(
-        StateDiscard<std::uint32_t>(pack_src_reg_format),
-        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
-        StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
-        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateDiscard<bool>(is_input_8bit_format),
-        StateVal<OperationPack::NumTiles>(num_tiles)));
+#include "llk_pack_block_tile.h"
 
-    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
-}
-
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr) {
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
-}
-
-template <
-    PackMode pack_mode = PackMode::Default,
-    bool zero_output = false,
-    bool skip_addrmod_config = false,
-    bool skip_packer_strides = false>
-inline void llk_pack_init(
-    const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
-    // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
-    const std::uint32_t output_id = get_output_id(pack_output);
-
+// counted: the call passed a tile count (llk_pack_init_of_output).
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool counted>
+inline void llk_pack_init_body_of_output(
+    const std::uint32_t output_id, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
     if constexpr (!skip_addrmod_config) {
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     }
@@ -77,13 +38,45 @@ inline void llk_pack_init(
     if constexpr (pack_mode == PackMode::Tilize) {
         is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
     }
-    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_tile_c_dim(output_id),
-        get_output_num_faces(output_id),
-        num_tiles,
-        is_input_8bit_format);
+    llk_pack_init_of_output<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, counted, DST_ACCUM_MODE>(
+        output_id, num_tiles, is_input_8bit_format);
+}
+
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool counted>
+__attribute__((noinline, cold)) void llk_pack_init_body_absent_output(
+    const std::uint32_t num_tiles, const std::uint32_t input_operand) {
+    if constexpr (llk_pack_first_valid_output() >= 0) {
+        llk_pack_init_body_of_output<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, counted>(
+            llk_pack_first_valid_output(), num_tiles, input_operand);
+    }
+}
+
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool counted>
+__attribute__((always_inline)) inline void llk_pack_init_body(
+    const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
+    const std::uint32_t output_id = get_output_id(pack_output);
+    // Formats reach the packer only through the strides; an absent output's tile dims are the default tile's.
+    if constexpr (!skip_packer_strides) {
+        if (llk_pack_output_absent(output_id)) {
+            llk_pack_init_body_absent_output<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, counted>(
+                num_tiles, input_operand);
+            return;
+        }
+    }
+    llk_pack_init_body_of_output<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, counted>(
+        output_id, num_tiles, input_operand);
+}
+
+template <
+    PackMode pack_mode = PackMode::Default,
+    bool zero_output = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false>
+inline void llk_pack_init(
+    const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
+    llk_pack_init_body<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, true>(
+        pack_output, num_tiles, input_operand);
 }
 
 // input_operand is only consumed by the Blackhole tilize workaround. Keep the common non-tilize API
@@ -93,10 +86,22 @@ template <
     bool zero_output = false,
     bool skip_addrmod_config = false,
     bool skip_packer_strides = false>
-inline void llk_pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles) {
     static_assert(pack_mode != PackMode::Tilize, "PackMode::Tilize requires an explicit input_operand");
-    llk_pack_init<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+    llk_pack_init_body<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, true>(
         pack_output, num_tiles, 0 /* input_operand unused outside PackMode::Tilize */);
+}
+
+// One tile.
+template <
+    PackMode pack_mode = PackMode::Default,
+    bool zero_output = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false>
+__attribute__((always_inline)) inline void llk_pack_init(const std::uint32_t pack_output) {
+    static_assert(pack_mode != PackMode::Tilize, "PackMode::Tilize requires an explicit input_operand");
+    llk_pack_init_body<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false>(
+        pack_output, 1, 0 /* input_operand unused outside PackMode::Tilize */);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
@@ -125,7 +130,14 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         StateDiscard<std::uint32_t>(tile_index),
         StateDiscard<std::uint32_t>(output_tile_index)));
 
-    llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    // joint_sdpa, packing a block of 8+ reserved tiles (its k512 QK row): main's word-wise destination write with its Z reset.
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<static_cast<int>(pack_mode) * 0 + 1>() && !LLK_SIZE_MODE) {
+        if (ckernel::packer::pack_sdpa_reserve >= 8) {
+            llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, true>(tile_index, pack_tile_addr, output_id);
+            return;
+        }
+    }
+    llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, LLK_SIZE_MODE>(tile_index, pack_tile_addr, output_id);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
@@ -155,6 +167,8 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, LLK_SIZE_MODE>(tile_index, pack_tile_addr, output_id);
     }
 }
+
+#include "llk_pack_block.h"

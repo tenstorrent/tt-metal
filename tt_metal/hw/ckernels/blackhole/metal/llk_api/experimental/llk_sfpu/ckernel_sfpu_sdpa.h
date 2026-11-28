@@ -13,6 +13,9 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_softplus.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "api/compute/pack_math_context.h"
+
+PACK_SDPA_API()
 
 namespace ckernel::sfpu {
 

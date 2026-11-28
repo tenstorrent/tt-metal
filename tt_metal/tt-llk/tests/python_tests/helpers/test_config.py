@@ -1046,6 +1046,7 @@ class TestConfig:
         include_dirs: list = None,
         src_include_dirs: list = None,
         helpers_trees: list = None,
+        kernel_flags: list = None,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -1067,6 +1068,8 @@ class TestConfig:
         # compiled. Regression coverage: tests/hardware_free/harness/test_config.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
+        # Extra compiler flags of this variant's kernel parts, e.g. production's LTO for a test that times compute API code.
+        self.kernel_flags = list(kernel_flags or [])
 
         if TestConfig.SPEED_OF_LIGHT:
             templates = templates + runtimes
@@ -1142,6 +1145,9 @@ class TestConfig:
                 # `formats` may be an InputOutputFormat (carries the hint) or a
                 # FormatConfig (doesn't); fall back to None for the latter.
                 register_format_hint=getattr(formats, "register_format_hint", None),
+                pack_src_from_output=any(
+                    getattr(t, "pack_src_from_output", False) for t in self.templates
+                ),
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(
@@ -1452,7 +1458,14 @@ class TestConfig:
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
-        parts = temp_str + ["<<search-dirs>>"] + search_dirs + build_modes
+        parts = (
+            temp_str
+            + ["<<search-dirs>>"]
+            + search_dirs
+            + build_modes
+            + ["<<kernel-flags>>"]
+            + self.kernel_flags
+        )
         self.unshifted_variant_id = sha256(str(" | ".join(parts)).encode()).hexdigest()
         self.variant_id = (
             sha256(
@@ -1943,6 +1956,12 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
+                # As the JIT's descriptors, the pack thread knows whether an operand unpacks to DEST.
+                if name == "pack":
+                    optional_kernel_flags += (
+                        f" -DLLK_UNPACK_TO_DEST_ANY={int(bool(self.unpack_to_dest))}"
+                    )
+
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
                 # ARCH_COMPUTE so it overrides the march implied by -mcpu.
                 if self.requires_vector_ext and name == "unpack":
@@ -1999,6 +2018,7 @@ class TestConfig:
                     [f"-I{VARIANT_DIR}"],
                     local_options_compile,
                     optional_kernel_flags,
+                    self.kernel_flags,
                     f"-DLLK_TRISC_{trisc_define}",
                     device_print_flags,
                     TestConfig.OPTIONS_LINK,

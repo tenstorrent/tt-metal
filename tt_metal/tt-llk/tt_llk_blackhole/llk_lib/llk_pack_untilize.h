@@ -14,6 +14,13 @@
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_strides_writer<1> = true;
+} // namespace ckernel::packer
+
 using namespace ckernel;
 using namespace ckernel::packer;
 
@@ -132,6 +139,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
             // Scratch slot loaded in _llk_pack_untilize_init_ holds the per-row L1 stride.
             // Replaces ADDDMAREG + STALLWAIT + WRCFG + NOP — saves ~3 cyc + 1 STALLWAIT per row.
             // Mirrors llk_unpack_tilize.h:285 precedent.
+            LLK_PACK_W_INVALIDATE();
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
             TTI_NOP;
         });
@@ -193,6 +201,7 @@ template <
 inline void _llk_pack_untilize_init_(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
+    ckernel::packer::llk_pack_live_forget();
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
@@ -209,6 +218,7 @@ inline void _llk_pack_untilize_init_(
     _llk_pack_untilize_configure_addrmod_();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
+    LLK_PACK_OTHER_PROGRAM_SET();
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
@@ -323,6 +333,7 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
  */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
+    ckernel::packer::llk_pack_live_forget();
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);

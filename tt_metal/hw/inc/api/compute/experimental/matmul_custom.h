@@ -11,6 +11,7 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
 #endif
+PACK_MATMUL_API(3)
 
 // defines the default throttle level for no-mop matmul kernels (default 0)
 #ifndef MM_THROTTLE
@@ -58,6 +59,7 @@ ALWI void mm_no_mop_init_short(
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+    PACK_MATH_CONTEXT(true);
 }
 
 // clang-format off
@@ -113,6 +115,7 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    PACK_MATH_CONTEXT(true);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     // Both arches now re-derive operand tile geometry in reinit so 16x32 tiny-tile addrmods are
     // restored (previously the Blackhole branch dropped the cb ids and reset to full-32x32 addrmods).
@@ -131,6 +134,7 @@ ALWI void mm_no_mop_init_short_fidelity(
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+    PACK_MATH_CONTEXT(true);
 }
 
 template <MathFidelity math_fidelity>
@@ -156,6 +160,7 @@ ALWI void mm_no_mop_reinit_short_fidelity(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    PACK_MATH_CONTEXT(true);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_reinit_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 }

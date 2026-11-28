@@ -58,7 +58,7 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
-int main(void)
+__attribute__((noinline)) int main(void) // not in the naked _start (no stack frame) when a kernel is built with LTO
 {
 #if defined(ARCH_QUASAR) && !defined(TT_METAL_TTSIM)
     // Raise the memory-access timeout from the 65536-cycle reset value: a long wait (big MOP, long unpack) would otherwise

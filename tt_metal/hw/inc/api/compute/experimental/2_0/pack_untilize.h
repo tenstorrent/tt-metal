@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -46,6 +48,7 @@ template <
     DataFormat OutFormat,
     TensorShape OutShape>
 ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(is_legal_tile_shape(InShape), "pack_untilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "pack_untilize_init: illegal output tile shape.");
     static_assert(

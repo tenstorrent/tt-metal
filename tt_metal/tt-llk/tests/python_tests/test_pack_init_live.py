@@ -1,0 +1,224 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Per-tile packs on output A alternating with output B, the two of different format and packer input width, with the compute API's
+default pack inits (pack_api_shim.h) after every reconfigure: hw_configure keeps the default program live, inits skip what is live
+(pack_strides_width for the strides, pack_mop_dirty for the MOP). Init modes: n none, l one-tile, c counted one-tile, z zero-output then
+one-tile, m two-tile then one-tile, s counted with the address modes and strides skipped (SDPA streaming's refresh), r and R the
+compute API's reconfigure of a constant and a run-time output with no init; u2d: a Float32 input unpacked to DEST (half sync, fp32
+DEST), where a 32-bit output keeps the gated reconfigure and the others wait for the unpacker. Checked against the golden (A: output
+of the even blocks, B: output of the odd blocks).
+"""
+
+import pytest
+import torch
+from conftest import skip_for_wormhole
+from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
+from helpers.chip_architecture import ChipArchitecture
+from helpers.data_format_inference import infer_pack_in
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import (
+    FACES_PER_TILE,
+    PackGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+    PerfRunType,
+    format_dict,
+)
+from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import BuildMode, TestConfig
+from helpers.test_variant_parameters import (
+    DEST_INDEX,
+    DEST_SYNC,
+    LOOP_FACTOR,
+    MATH_FIDELITY,
+    NUM_BLOCKS,
+    NUM_FACES,
+    NUM_TILES_IN_BLOCK,
+    PACK_INIT_LIVE,
+    PACK_SRC_FROM_OUTPUT,
+    RELU_CONFIG,
+    TILE_COUNT,
+    TILIZE,
+    generate_input_dim,
+)
+from helpers.unpack import unpack_res_tiles
+from helpers.utils import passed_test, result_tensor
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
+
+pytestmark = pytest.mark.llk_sweep
+
+F16B, F32, B8 = DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b
+BLOCKS = 6
+PAGE = {F32: 4096, B8: 1088, F16B: 2048}
+# (output A, output B): bf16, f32 and bfp8 outputs of different widths, both orders
+PAIRS = [(F16B, F32), (F32, F16B), (B8, F32), (B8, F16B), (F16B, B8)]
+TILES = [1, 2]
+MODES = ["n", "l", "c", "z", "m", "s", "r", "R"]
+
+
+def _golden(src, fmt, first_tile, tiles):
+    gen = get_golden_generator(PackGolden)
+    out = []
+    for t in range(first_tile, first_tile + tiles):
+        g = gen(src[t * 1024 : (t + 1) * 1024], fmt, input_dimensions=[32, 32])
+        if fmt in QUANTIZE_TO_FORMAT:
+            g = QUANTIZE_TO_FORMAT[fmt](g).to(format_dict[fmt])
+        out.append(g)
+    return torch.cat(out)
+
+
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@skip_for_wormhole
+@parametrize(
+    pair=PAIRS,
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    block_tiles=TILES,
+    init_mode=MODES,
+    u2d=[False, True],
+)
+def test_pack_init_live(
+    pair,
+    dest_acc,
+    block_tiles,
+    init_mode,
+    u2d,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
+    fmt_a, fmt_b = pair
+    wide = dest_acc == DestAccumulation.Yes
+    if F32 in pair and not wide:
+        pytest.skip("the gathered kernels pack a Float32 output from a 32 bit DEST")
+    if u2d and (not wide or init_mode not in ("r", "R")):
+        pytest.skip(
+            "an unpack to DEST needs fp32 DEST; its cases are the reconfigure modes"
+        )
+    dest_sync = DestSync.Half if block_tiles <= (4 if wide else 8) else DestSync.Full
+    if wide and block_tiles > 8:
+        pytest.skip("block exceeds the 32 bit DEST section")
+    src_fmt = F32 if u2d else F16B
+    formats = InputOutputFormat(src_fmt, fmt_a)
+    # output B's packer input as the JIT's per-CB pack_src_format: the same inference as output A's
+    src_b = infer_pack_in(
+        src_fmt,
+        fmt_b,
+        src_fmt,
+        dest_acc,
+        chip_arch=ChipArchitecture.BLACKHOLE,
+        pack_src_from_output=True,
+    )
+    tile_cnt = BLOCKS * block_tiles
+    dims = [32, 32 * tile_cnt]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=src_fmt,
+        input_dimensions_A=dims,
+        stimuli_format_B=src_fmt,
+        input_dimensions_B=dims,
+    )
+    # source block k goes to output A (k even) or B (k odd), tile (k // 2) * block_tiles + i of it
+    gold_a, gold_b = [], []
+    for k in range(BLOCKS):
+        (gold_a if k % 2 == 0 else gold_b).append(
+            _golden(src_A, fmt_a if k % 2 == 0 else fmt_b, k * block_tiles, block_tiles)
+        )
+    gold_a, gold_b = torch.cat(gold_a), torch.cat(gold_b)
+    tiles_a = tiles_b = (BLOCKS // 2) * block_tiles
+    off_b = (tiles_a * PAGE[fmt_a] + 1023) & ~1023
+    res_page = 4096
+
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+    kwargs = {
+        "test_name": "sources/pack_init_live_test.cpp",
+        "formats": formats,
+        # Compile-time formats, as the JIT's arrays: the constant-output reconfigure (llk_pack_reconfig_imm) needs them.
+        "compile_time_formats": True,
+        "templates": [
+            generate_input_dim(dims, dims),
+            TILIZE(),
+            MATH_FIDELITY(MathFidelity.LoFi),
+            DEST_SYNC(dest_sync),
+            PACK_INIT_LIVE(f"{fmt_b.name}/{src_b.name}/{init_mode}"),
+            PACK_SRC_FROM_OUTPUT(),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt_A),
+            DEST_INDEX(0),
+            RELU_CONFIG(0),
+            NUM_FACES(num_faces=FACES_PER_TILE),
+            NUM_BLOCKS(BLOCKS),
+            NUM_TILES_IN_BLOCK(block_tiles),
+            LOOP_FACTOR(loop_factor),
+        ],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            src_fmt,
+            src_B,
+            src_fmt,
+            fmt_a,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            operand_res_tile_size=res_page,
+        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": u2d,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf, run_types=run_types, test_config_kwargs=kwargs
+    )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        # a misplaced tile elsewhere cannot match by luck
+        write_to_device(
+            TestConfig.TENSIX_LOCATION,
+            configuration.variant_stimuli.buf_res_addr,
+            [0] * (tile_cnt_A * res_page),
+        )
+    configuration.run()
+    raw = read_from_device(
+        TestConfig.TENSIX_LOCATION,
+        configuration.variant_stimuli.buf_res_addr,
+        num_bytes=off_b + tiles_b * PAGE[fmt_b],
+    )
+    res_a = unpack_res_tiles(
+        raw[: tiles_a * PAGE[fmt_a]],
+        fmt_a,
+        tiles_a,
+        False,
+        FACES_PER_TILE,
+        16,
+        tile_stride_bytes=PAGE[fmt_a],
+    )
+    res_b = unpack_res_tiles(
+        raw[off_b : off_b + tiles_b * PAGE[fmt_b]],
+        fmt_b,
+        tiles_b,
+        False,
+        FACES_PER_TILE,
+        16,
+        tile_stride_bytes=PAGE[fmt_b],
+    )
+    ok_a = passed_test(
+        gold_a, result_tensor(res_a, fmt_a, gold_a), fmt_a, print_errors=False
+    )
+    ok_b = passed_test(
+        gold_b, result_tensor(res_b, fmt_b, gold_b), fmt_b, print_errors=False
+    )
+    assert (
+        ok_a and ok_b
+    ), f"output A {'ok' if ok_a else 'wrong'}, output B {'ok' if ok_b else 'wrong'}"

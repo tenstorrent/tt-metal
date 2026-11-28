@@ -10,6 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+PACK_SFPU_API(4)
 namespace ckernel {
 /**
  * Please refer to documentation for any_init.
@@ -43,6 +44,7 @@ ALWI void gelu_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
     PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
 }
 
@@ -66,6 +68,7 @@ ALWI void gelu_tanh_tile_init() {
 
 template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
     if constexpr (fast) {
         PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
     } else {

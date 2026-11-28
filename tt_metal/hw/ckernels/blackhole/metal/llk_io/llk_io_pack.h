@@ -8,6 +8,7 @@
 #include "ckernel_gpr_map.h"
 #include "ckernel_include.h"
 #include "llk_pack_common.h"
+#include "llk_size_mode.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "llk_assert.h"
@@ -15,10 +16,37 @@
 
 using namespace ckernel;
 
+namespace ckernel::packer {
+// An SDPA kernel with a CB at 24 or above (joint_sdpa's intermediates; the sdpa kernel uses 0-17): its reconfigure picks the
+// form by its mask CB and its pushes (pack_sdpa_long_push).
+template <int dep>
+constexpr bool llk_pack_sdpa_joint() {
+    bool high = false;
+    for (std::uint32_t i = 24; i < sizeof(pack_dst_format); i++) {
+        high = high || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
+    }
+    // joint_sdpa leaves CBs 4, 6 and 8-15 unused; sdpa, sparse_sdpa and flash_decode configure some of them
+    bool mid = pack_dst_format[4] != to_underlying(DataFormat::Invalid) || pack_dst_format[6] != to_underlying(DataFormat::Invalid);
+    for (std::uint32_t i = 8; i < 16; i++) {
+        mid = mid || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
+    }
+    return llk_pack_sdpa_api<dep * 0 + 1>::value && high && !mid;
+}
+
+// joint_sdpa without its mask CB (c_3, made only when the joint length needs a mask): the full reconfigure everywhere.
+template <int dep>
+constexpr bool llk_pack_sdpa_joint_unmasked() {
+    return llk_pack_sdpa_joint<dep>() && pack_dst_format[3] == to_underlying(DataFormat::Invalid);
+}
+}  // namespace ckernel::packer
+
 // Blocking call to wait for free space needed to pack N tiles
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<skip_sync * 0 + 1>()) {
+        ckernel::packer::pack_sdpa_reserve = num_tiles;
+    }
     std::uint32_t output = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
@@ -67,7 +95,14 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     // version of the value at tiles_received_ptr This is because consumer is polling the value at tiles_received_ptr,
     // and it will eventually see the updated value
     TT_SETDMAREG(0, tiles_received_new, 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
-    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    // Full sync stays as main: there the pack runs in series with the producer and the early push timing read slower (L3 tp screen).
+    // So does a block-float push of 8+ tiles: its pack runs near the unpacker's rate, and the early hand-off costs unpack issue (counters).
+    // Kernels bound by the kernel config buffer (LLK_SIZE_MODE) keep main's push and its code size.
+    constexpr bool any_bfp = ckernel::packer::llk_pack_any_bfp(pack_dst_format);
+    if (DST_SYNC_MODE != DstSync::SyncHalf || LLK_SIZE_MODE || !ckernel::packer::pack_push_drained ||
+        (any_bfp && num_tiles >= 8 && IS_BFP_FORMAT(pack_dst_format[operand]))) {
+        TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
+    }
     TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, tiles_received_addr_tensix);
 }
 
@@ -75,6 +110,13 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     SYNC_SIGNAL("SYNC-CB-PUSH", operand);
+    if constexpr (
+        ckernel::packer::llk_pack_sdpa_joint<push_blocks * 0 + 1>() &&
+        !ckernel::packer::llk_pack_sdpa_joint_unmasked<push_blocks * 0 + 1>()) {
+        if (num_tiles >= 8) {
+            ckernel::packer::pack_sdpa_long_push = true;
+        }
+    }
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);

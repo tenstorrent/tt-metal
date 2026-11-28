@@ -36,6 +36,7 @@ constexpr DataCopyType unary_bcast_data_copy_type =
 
 template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_bcast_init(uint32_t icb) {
+    PACK_MATH_CONTEXT(false);
     // NOTE: no call_line parameter here — a defaulted call_line would let a stale 2-arg
     // unary_bcast_init(icb, ocb) call (the removed full init) compile with ocb silently taken as
     // call_line. The sentinel still tracks the operand; only the source line for this specific call
@@ -357,6 +358,7 @@ ALWI void mul_tiles_bcast(
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
@@ -367,6 +369,7 @@ ALWI void add_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
  * executed correctly.
  */
 ALWI void sub_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -378,6 +381,7 @@ ALWI void sub_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::COL, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -389,6 +393,7 @@ ALWI void add_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
  * executed correctly.
  */
 ALWI void add_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR, MathFidelity::LoFi>(
         icb0, icb1)));
@@ -401,6 +406,7 @@ ALWI void add_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line
  * correctly.
  */
 ALWI void mul_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -439,6 +445,7 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
 // clang-format on
 ALWI void mul_bcast_cols_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         icb0, icb1, acc_to_dest)));
@@ -450,6 +457,7 @@ ALWI void mul_bcast_cols_init(
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
 ALWI void mul_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -461,6 +469,7 @@ ALWI void mul_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
  * correctly.
  */
 ALWI void sub_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::COL, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -472,6 +481,7 @@ ALWI void sub_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
  * executed correctly.
  */
 ALWI void sub_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::SCALAR, MathFidelity::LoFi>(
         icb0, icb1)));
@@ -498,6 +508,7 @@ ALWI void sub_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line
 // clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void bcast_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));

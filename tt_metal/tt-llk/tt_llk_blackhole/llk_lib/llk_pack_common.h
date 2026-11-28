@@ -31,6 +31,7 @@ inline void _llk_packer_wait_for_math_done_()
     // then waits on MATH_PACK holding the mutex the unpack thread needs every iteration: deadlock. Naming the Sync
     // class costs nothing when unmutexed.
     TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+    ckernel::packer::pack_push_drained = false;
 }
 
 /**
@@ -45,6 +46,61 @@ template <std::uint32_t WaitRes = p_stall::NONE>
 inline void _llk_packer_set_math_semaphore_()
 {
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
+}
+
+inline void llk_pack_pre_dst_write();
+
+// The early offset write is one RMWCIB of the offset's second byte: a WRCFG holds the config unit the other threads share for two
+// cycles, which delays a math re-init in the same window (perf_generalized_moe_gate combine). Fast untilize moves the GPR offsets.
+static_assert((DEST_REGISTER_HALF_SIZE & 0xff) == 0 && (DEST_REGISTER_HALF_SIZE >> 8) <= 0xf, "the DEST half offset is in bits 8-11");
+constexpr std::uint32_t PACK_DEST_OFFSET_B1_MASK = 0xf;
+
+// ttsim does not model the cfg read of RMWCIB on the offset register and aborts there: it writes the offset from the GPRs.
+#if defined(TT_METAL_TTSIM)
+inline constexpr bool llk_pack_offset_rmw_modeled = false;
+#else
+inline constexpr bool llk_pack_offset_rmw_modeled = true;
+#endif
+
+// One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
+template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops, bool pre = false, bool offset_by_gpr = true>
+inline void _llk_pack_dest_half_done_()
+{
+    constexpr std::uint32_t next_half_gpr = half ? p_gpr_pack::DEST_OFFSET_LO : p_gpr_pack::DEST_OFFSET_HI;
+    if constexpr (offset_first && !offset_by_gpr)
+    {
+        TTI_RMWCIB1(PACK_DEST_OFFSET_B1_MASK, half ? 0 : DEST_REGISTER_HALF_SIZE >> 8, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+    }
+    else if constexpr (offset_first)
+    {
+        TTI_WRCFG(next_half_gpr, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+    }
+    if constexpr (offset_first)
+    {
+        if constexpr (pre)
+        {
+            llk_pack_pre_dst_write();
+        }
+    }
+    if constexpr (clear_dest)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+        TTI_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, half);
+        _llk_packer_set_math_semaphore_<p_stall::NONE>();
+    }
+    else
+    {
+        _llk_packer_set_math_semaphore_<p_stall::PACK>();
+    }
+    if constexpr (!offset_first)
+    {
+        TTI_WRCFG(next_half_gpr, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        if constexpr (offset_nops)
+        {
+            TTI_DMANOP;
+            TTI_DMANOP;
+        }
+    }
 }
 
 /**
@@ -62,37 +118,135 @@ inline void _llk_packer_set_math_semaphore_()
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest only when clear_dest is true
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true, std::uint32_t words = 0>
 inline void _llk_pack_dest_section_done_()
 {
-    if constexpr (clear_dest)
+    constexpr bool offset_nops = (words & 1) == 0;
+    constexpr bool by_branch   = (words & 2) != 0;
+    // words bit 2: main's release whatever the kernel's traits (fast tilize, whose uninit waits on the last tilize MOP).
+    constexpr bool main_order  = (words & 4) != 0;
+    // The packer takes the DEST offset when it accepts a PACR, so the next half's offset goes ahead of the drain wait, except with
+    // fp32 DEST and an unpack to DEST, or an unpack-bound matmul (llk_pack_late_start), where the earlier pack start contends
+    // with the unpackers for L1; a pack-bound matmul takes it there too. Kernels whose math waits on the release keep main's order
+    // (pack_main_release).
+    constexpr bool pack_bound   = ckernel::packer::llk_pack_matmul_pack_bound<static_cast<std::uint32_t>(Dst)>();
+    constexpr bool offset_first = Dst == DstSync::SyncHalf && !pack_size_mode<Dst> && !main_order && !ckernel::packer::llk_pack_main_release<static_cast<std::uint32_t>(Dst)>() &&
+                                  (pack_bound || !((is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) ||
+                                                   ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en) ||
+                                                   ckernel::packer::llk_pack_copy<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));
+    constexpr bool offset_by_gpr = pack_fast_untilize_linked<Dst> || !llk_pack_offset_rmw_modeled;
+    if constexpr (Dst == DstSync::SyncHalf && by_branch)
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
-
-        if constexpr (Dst == DstSync::SyncFull)
+        if (dest_offset_id == 0)
         {
-            TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+            _llk_pack_dest_half_done_<
+                is_fp32_dest_acc_en,
+                clear_dest,
+                0,
+                offset_first,
+                offset_nops,
+                !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>(),
+                offset_by_gpr>();
         }
         else
         {
-            static_assert(Dst == DstSync::SyncHalf);
-            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+            _llk_pack_dest_half_done_<
+                is_fp32_dest_acc_en,
+                clear_dest,
+                1,
+                offset_first,
+                offset_nops,
+                !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>(),
+                offset_by_gpr>();
         }
-
-        // Tell math that it can write again
-        _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        flip_packer_dest_offset_id();
+    }
+    else if constexpr (offset_first)
+    {
+        const std::uint32_t done_half = dest_offset_id % 2;
+        flip_packer_dest_offset_id();
+        // Arithmetic pick of the next half's offset: a branch on the parity here lets GCC duplicate the loop body per half
+        if constexpr (offset_by_gpr)
+        {
+            TT_WRCFG(
+                p_gpr_pack::DEST_OFFSET_HI - (p_gpr_pack::DEST_OFFSET_HI - p_gpr_pack::DEST_OFFSET_LO) * done_half,
+                p_cfg::WRCFG_32b,
+                DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        }
+        else
+        {
+            TT_RMWCIB1(PACK_DEST_OFFSET_B1_MASK, (DEST_REGISTER_HALF_SIZE >> 8) * (1 - done_half), DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        }
+        if constexpr (!is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>())
+        {
+            llk_pack_pre_dst_write();
+        }
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, done_half);
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+    }
+    else if constexpr (Dst == DstSync::SyncHalf && !offset_nops)
+    {
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+        flip_packer_dest_offset_id();
+        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     else
     {
-        // Without ZEROACC, block SEMGET itself until PACK has finished reading DST.
-        _llk_packer_set_math_semaphore_<p_stall::PACK>();
-    }
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
 
-    if constexpr (Dst == DstSync::SyncHalf)
-    {
-        flip_packer_dest_offset_id();
-        select_packer_dest_registers<Dst>();
+            if constexpr (Dst == DstSync::SyncFull)
+            {
+                TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+            }
+            else
+            {
+                static_assert(Dst == DstSync::SyncHalf);
+                TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+            }
+
+            // Tell math that it can write again
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            // Without ZEROACC, block SEMGET itself until PACK has finished reading DST.
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+
+        if constexpr (Dst == DstSync::SyncHalf)
+        {
+            flip_packer_dest_offset_id();
+            select_packer_dest_registers<Dst>();
+        }
     }
+    ckernel::packer::pack_push_drained = true;
+}
+
+// The same release for the forms beyond main's signature, under a name no kernel renames: a kernel may wrap
+// _llk_pack_dest_section_done_ with main's two template arguments (hybrid_llk_shims.hpp).
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t words>
+inline void _llk_pack_dest_section_done_ext_()
+{
+    _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en, clear_dest, words>();
 }
 
 /**
@@ -155,6 +309,19 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+}
+
+// The predicted next destination and its tile 0, issued ahead of the release's drain wait so they run inside the packer drain.
+// The section's PACRs have all issued and each latched its address when it started, as for back-to-back per-tile packs.
+inline void llk_pack_pre_dst_write()
+{
+    const std::uint32_t next = ckernel::packer::pack_pre_next;
+    if (next != 0 && (next & ckernel::packer::LLK_PACK_PRE_WRITTEN) == 0)
+    {
+        ckernel::packer::program_packer_destination_t<false, true>(next);
+        set_dst_write_addr(0);
+        ckernel::packer::pack_pre_next = next | ckernel::packer::LLK_PACK_PRE_WRITTEN;
+    }
 }
 
 /**

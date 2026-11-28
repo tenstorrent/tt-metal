@@ -14,17 +14,26 @@
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_strides_writer<2> = true;
+template <>
+inline constexpr bool pack_main_release<2> = true;
+} // namespace ckernel::packer
+
 /**
  * @brief Configures address modification modes for row packing.
  *
  * Address mods are applied automatically after each PACR instruction to update counters.
- * - ADDR_MOD_0: Increment Y by 1 (advance to next row in dest)
+ * - ADDR_MOD_0: Increment Y by 4 (advance past the four rows one PACR reads)
  * - ADDR_MOD_1: Clear Y to 0 (reset for next tile)
  */
 inline void _llk_pack_rows_configure_addrmod_()
 {
     ckernel::addr_mod_pack_t {
-        .y_src = {.incr = 1},
+        .y_src = {.incr = 4},
     }
         .set(ADDR_MOD_0);
 
@@ -37,9 +46,8 @@ inline void _llk_pack_rows_configure_addrmod_()
 /**
  * @brief Configures the MOP template for packing rows.
  *
- * The MOP uses a single outer loop with num_rows inner iterations:
- * - Each inner iteration packs one row (16 datums) using ADDR_MOD_0 (Y += 1)
- * - The last outer loop iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0 after num_rows rows
+ * Each PACR packs four rows, read interface k reading dest row Y + k, and advances Y by 4 (ADDR_MOD_0).
+ * The last PACR packs the remaining one to four rows with Last=1 and clears Y (ADDR_MOD_1).
  *
  * @param num_rows: Number of rows to pack from the destination register.
  */
@@ -47,43 +55,40 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 {
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr std::uint32_t MOP_OUTER_LOOP   = 1;
-    const std::uint32_t MOP_INNER_LOOP       = num_rows;
+    // No branch, the init runs cold: the last PACR's interface mask is 0 (all four), 1, 3 or 7 for rows mod 4 of 0-3.
+    const std::uint32_t pack_groups          = (num_rows + 3) >> 2;
+    const std::uint32_t last_intf_sel        = (1u << (num_rows & 0x3)) - 1;
 
-    ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_0,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            p_pacr::SINGLE_INTF_ACTIVE,
-            0, // OvrdThreadId
-            0, // Concat
-            p_pacr::NO_CTXT_CTRL,
-            0, // Flush
-            0) // Last
-    );
+    const std::uint32_t pack_four_rows = TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        ADDR_MOD_0,
+        p_pacr::ADDR_CNT_CTXT_0,
+        ZERO_OUTPUT_FLAG,
+        p_pacr::ALL_INTF_ACTIVE,
+        0, // OvrdThreadId
+        0, // Concat
+        p_pacr::NO_CTXT_CTRL,
+        0,  // Flush
+        0);
 
-    // Last outer loop instruction must have Last=1 to close the block
-    // and use ADDR_MOD_1 to reset Y counter
-    tmp.set_last_outer_loop_instr(TT_OP_PACR(
+    const std::uint32_t pack_last_rows = TT_OP_PACR(
         p_pacr::CFG_CTXT_0,
         p_pacr::NO_ROW_PAD_ZERO,
         p_pacr::DST_ACCESS_NORMAL_MODE,
         ADDR_MOD_1,
         p_pacr::ADDR_CNT_CTXT_0,
         ZERO_OUTPUT_FLAG,
-        p_pacr::SINGLE_INTF_ACTIVE,
+        last_intf_sel,
         0, // OvrdThreadId
         0, // Concat
         p_pacr::NO_CTXT_CTRL,
-        0, // Flush
-        1) // Last
-    );
+        0,  // Flush
+        1);
 
+    ckernel::ckernel_template tmp(MOP_OUTER_LOOP, pack_groups, pack_four_rows);
+    tmp.set_last_outer_loop_instr(pack_last_rows);
     tmp.program();
 }
 
@@ -105,6 +110,7 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
  */
 inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 {
+    ckernel::packer::llk_pack_live_forget();
     // In row-major layout, each row is FACE_C_DIM (16) datums.
     // A full tile has TILE_R_DIM * TILE_C_DIM / FACE_C_DIM = 32 * 32 / 16 = 64 rows.
     constexpr std::uint32_t MAX_ROWS = (TILE_R_DIM * TILE_C_DIM) / FACE_C_DIM;
@@ -115,10 +121,12 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 
     _llk_pack_rows_configure_addrmod_();
     _llk_pack_rows_mop_config_(num_rows);
+    LLK_PACK_OTHER_PROGRAM_SET();
 
     // To ensure that Y_POS counter gets reset to 0 after the operation is completed,
     // we need to set pack_reads_per_xy_plane to 1. When Y_POS counter hits that value, it will reset.
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    // Byte 1 of the register, one instruction (cfg_reg_rmw_tensix pushes it as three).
+    TTI_RMWCIB1(0xff, y_pos_counter_limit, PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_ADDR32);
 
     // Set the packer X counter to pack the specified number of datums per row
     TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
@@ -134,7 +142,6 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
  * 1. Sets the W counter to the tile_index to select which dest tile to read from
  * 2. Programs the packer destination address in L1 where data will be written
  * 3. Executes the MOP template
- * 4. Reset Z counters after pack operation
  *
  * @param tile_index: Index of the tile in the destination register to read from.
  * @param address: L1 memory address where the packed rows will be written.
@@ -146,12 +153,9 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
     // Set the tile index in dest to read from
     set_dst_write_addr(tile_index);
 
-    ckernel::packer::program_packer_destination(address);
+    ckernel::packer::program_packer_destination_t<false>(address);
 
     ckernel::ckernel_template::run();
-
-    // Reset Z counters after pack operation
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
 }
 
 /**

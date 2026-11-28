@@ -23,7 +23,10 @@ namespace ckernel {
 
 // Public API (visible to all TRISCs; only TRISC_MATH does work).
 // Relies on the ADDR_MOD_7 zero-advance invariant that hw_configure sets and every op leaves in place.
-inline void sinkhorn_4x4_init() { MATH((_llk_math_sinkhorn_4x4_init_())); }
+inline void sinkhorn_4x4_init() {
+    PACK_MATH_CONTEXT(false);
+    MATH((_llk_math_sinkhorn_4x4_init_()));
+}
 
 // Comb 4x4 per-row max-sub. Runs after exp_tile_init and before
 // exp_tile; must not clobber LREG12..14.

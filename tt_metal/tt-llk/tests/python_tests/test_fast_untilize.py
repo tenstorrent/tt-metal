@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     NUM_GUARD_TILES,
+    PACK_SRC_FROM_OUTPUT,
     PERF_RUN_TYPE,
     TILE_COUNT,
     generate_input_dim,
@@ -87,6 +88,7 @@ def make_fast_untilize_test_config(
             generate_input_dim(input_dimensions, input_dimensions),
             PERF_RUN_TYPE(perf_run_type),
             DEST_SYNC(dest_sync),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

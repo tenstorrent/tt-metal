@@ -43,6 +43,11 @@
 #endif
 #ifdef TRISC_PACK
 #include "llk_pack_common.h"
+// Writes the pack address modes itself: default inits keep theirs.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_init_writer<1> = true;
+}  // namespace ckernel::packer
 #endif
 
 namespace ckernel {

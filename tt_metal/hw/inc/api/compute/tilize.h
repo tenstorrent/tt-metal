@@ -33,6 +33,14 @@
 #endif
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<5> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 // clang-format off
@@ -50,6 +58,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_tilize_init(icb, block)));
@@ -100,6 +109,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 template <bool neginf_srcA = true, bool zero_srcA_reduce = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tilizeA_B_reduce_init(
     uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1_scaler, call_line);
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
         icb0, icb1_scaler, block)));
@@ -124,6 +134,7 @@ ALWI void tilizeA_B_reduce_init(
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block, uint32_t ocb) {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
@@ -249,6 +260,7 @@ namespace fast_tilize_detail {
 
 template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
 #ifdef ARCH_BLACKHOLE
     if (full_dim == 1) {
         tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
@@ -368,7 +380,8 @@ ALWI void fast_tilize_block(
             PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
 
             MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-            PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+            // main's release order: the next half's offset ahead of the drain leaves the last tilize MOP running into the uninit
+            PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, false, 4>()));
 
             tiles_done += chunk;
         }

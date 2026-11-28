@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -56,6 +58,7 @@ template <
     DataFormat OF,
     TensorShape OS>
 ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<SF, SS> /*scaler*/, LLKOperand<OF, OS> /*out*/) {
+    PACK_MATH_CONTEXT(false);
     SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_init: illegal scaler tile shape.");

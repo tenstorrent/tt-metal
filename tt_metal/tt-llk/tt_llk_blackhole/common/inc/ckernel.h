@@ -676,6 +676,15 @@ enum ExecBool : bool
     Exec
 };
 
+// Set while the replay buffer holds _llk_pack_block_fast_init_'s tile; it assumes no compiler-made record (#58433) runs
+// on this thread in between. Internal linkage: its stores vanish unless the fast block init is compiled in.
+[[maybe_unused]] static bool pack_fast_replay_valid = false;
+#if defined(TRISC_PACK) || defined(LLK_TRISC_PACK)
+#define LLK_PACK_REPLAY_WRITTEN() (pack_fast_replay_valid = false)
+#else
+#define LLK_PACK_REPLAY_WRITTEN() ((void)0)
+#endif
+
 template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 [[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(std::uint32_t start, std::uint32_t len, Callable &&callable, Args &&...args)
 {
@@ -686,6 +695,7 @@ template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 #endif
 
     // Issue instruction to load replay buffer
+    LLK_PACK_REPLAY_WRITTEN();
     TT_REPLAY(start, len, Exec, 1);
 
     // Send in the user's desired instructions

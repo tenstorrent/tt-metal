@@ -11,6 +11,12 @@
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 #include "sanitizer/api.h"
 
+// Inits from a descriptor's own format and geometry: default inits keep their address modes, strides and X counter.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_init_writer<2> = true;
+}  // namespace ckernel::packer
+
 /*************************************************************************
  * LLK PACK -- LLKOperand (id-free, compile-time NTTP) overloads
  *

@@ -1170,6 +1170,170 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
+
+    pack_block: bool = (
+        False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness, 5 the plain and closed blocks that program the output (the first block of an output), 6 the calls of True with the W base programmed again before the W offset passes its 256 KB reach
+    )
+
+    def convert_to_cpp(self) -> str:
+        # negative: a block too short for llk_pack_block, which packs it one tile at a time as main does
+        en = bool(self.pack_block) and self.pack_block > 0
+        return (
+            f"constexpr bool pack_block_en = {str(en).lower()};\n"
+            f"constexpr bool pack_block_w = {str(en and self.pack_block == 3).lower()};\n"
+            f"constexpr bool pack_block_fast = {str(en and self.pack_block == 4).lower()};\n"
+            f"constexpr bool pack_block_plain = {str(en and self.pack_block == 5).lower()};\n"
+            f"constexpr bool pack_block_far = {str(en and self.pack_block == 6).lower()};"
+        )
+
+
+@dataclass
+class PACK_API(TemplateParameter):
+    """The compute API's pack_block through pack_api_shim.h (Blackhole): arm "0" the form tables, "T", "B" or "W" one form, "M" main's per-tile loop; tiles per block and the matmul K as pack_block<tiles, acc, kt>; the output CB, the kernel's matmul and pack-thread SFPU API traits, and a compile-time DEST start (dst) as a constant tile loop passes."""
+
+    api_arm: str = "0"
+    api_tiles: int = 1
+    api_kt: int = 0
+    api_out: int = 16
+    api_matmul: bool = False
+    api_sfpu: bool = False
+    api_dst: int = -1
+    api_partial_face: bool = False
+
+    def convert_to_cpp(self) -> str:
+        arm = "0" if self.api_arm == "0" else f"'{self.api_arm}'"
+        lines = [
+            f"constexpr char pack_api_arm = {arm};",
+            f"constexpr std::uint32_t pack_api_tiles = {self.api_tiles};",
+            f"constexpr std::uint32_t pack_api_kt = {self.api_kt};",
+            f"#define PACK_API_SHIM_OUT {self.api_out}",
+        ]
+        if self.api_matmul:
+            lines.append("#define PACK_API_SHIM_MATMUL")
+        if self.api_sfpu:
+            lines.append("#define PACK_API_SHIM_SFPU")
+        if self.api_dst >= 0:
+            lines.append(f"#define PACK_API_DST {self.api_dst}")
+        if self.api_partial_face:
+            lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
+        return "\n".join(lines)
+
+
+class PACK_API_SWEEP(TemplateParameter):
+    """A pack sweep arm through pack_api_shim.h and pack_api_sweep.h: PACK_API's arm, tiles, K, traits and compile-time DEST start, the
+    block loop's state (0 steady, 1 a pack init before every block, 2 outputs A and B alternating with a reconfigure), B's form (arm_b),
+    output 17 of format_b, A's CB depth in blocks (cbd, 0 every block of a run), the output tile (faces, face_r; a tile under 32 rows has
+    partial faces, as the JIT's Tile), and MATH_FIDELITY where the test has no MATH_FIDELITY of its own. Not a dataclass: it adds no
+    CSV column, the sweeps keep their arm in dst_index."""
+
+    def __init__(
+        self,
+        arm,
+        tiles,
+        kt=0,
+        matmul=False,
+        sfpu=False,
+        dst=0,
+        state=0,
+        arm_b="T",
+        cbd=0,
+        format_b=DataFormat.Float16_b,
+        faces=4,
+        face_r=16,
+        fidelity=None,
+    ):
+        tile_r = face_r * (2 if faces > 2 else 1)
+        self.api = PACK_API(arm, tiles, kt, 16, matmul, sfpu, dst, tile_r < 32)
+        (
+            self.state,
+            self.arm_b,
+            self.cbd,
+            self.format_b,
+            self.faces,
+            self.face_r,
+            self.fidelity,
+        ) = (state, arm_b, cbd, format_b, faces, face_r, fidelity)
+        self.pack_src_b = None  # B's packer input, set by pack_sweep.bind_pack_src_b
+
+    def convert_to_cpp(self) -> str:
+        arm_b = "0" if self.arm_b == "0" else f"'{self.arm_b}'"
+        lines = [
+            self.api.convert_to_cpp(),
+            f"constexpr std::uint32_t pack_sweep_state = {self.state};",
+            f"constexpr char pack_sweep_arm_b = {arm_b};",
+            f"constexpr std::uint32_t pack_sweep_cbd = {self.cbd};",
+            f"#define PACK_API_SHIM_NUM_FACES {self.faces}",
+            f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r}",
+        ]
+        if self.state == 2:
+            # output B only where it is packed: the other arms keep production's one-output arrays
+            lines += [
+                "#define PACK_API_SHIM_OUT2 17",
+                f"#define PACK_API_SHIM_OUT2_FORMAT ckernel::to_underlying(DataFormat::{self.format_b.name})",
+            ]
+            if self.pack_src_b is not None:
+                lines.append(
+                    f"#define PACK_API_SHIM_OUT2_SRC ckernel::to_underlying(DataFormat::{self.pack_src_b.name})"
+                )
+        if self.fidelity is not None:
+            lines.append(
+                f"constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::{self.fidelity};"
+            )
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        # The variant hash reads the templates' repr: the dataclass repr of TemplateParameter shows no field of this class.
+        return f"PACK_API_SWEEP({self.convert_to_cpp()!r})"
+
+
+class PACK_RMW_DEST(TemplateParameter):
+    """Opt-in byte-wise destination write of the default packs (Blackhole), on when LLK_PACK_RMW=1."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define PACK_RMW_DEST" if os.environ.get("LLK_PACK_RMW") == "1" else ""
+
+
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
+
+    def __init__(self, pack_block: int = 0, in32: bool = False):
+        self.matmul_pack_block = int(pack_block)
+        # A Float32 input operand: the compile-time CB format trait a ttnn kernel's pack reads (llk_pack_in32_api).
+        self.in32 = bool(in32)
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block}{', in32' if self.in32 else ''})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+            and other.in32 == self.in32
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.matmul_pack_block, self.in32))
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}" + (
+            "\n#define MATMUL_PACK_IN32 1" if self.in32 else ""
+        )
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 4 closed block with the W offset."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
+
+
+@dataclass
 class ENABLE_2X_FORMAT(TemplateParameter):
     enable_2x_format: bool = False
 
@@ -2764,4 +2928,44 @@ class GATED_REDUCE_SCALARS(RuntimeParameter):
         return (
             "\n".join(f"std::uint32_t {name.upper()};" for name in vars(self)),
             "IIII",
+        )
+
+
+@dataclass
+class PACK_SRC_FROM_OUTPUT(TemplateParameter):
+    """The packer input of a block float input from a 16-bit DEST follows the output format family, as in production (data_format.cpp)."""
+
+    pack_src_from_output = True
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
+class PACK_INIT_LIVE(TemplateParameter):
+    """pack_init_live_test.cpp: "<B format>/<B packer input>/<init mode n|l|c|z|m|s|r|R>": the second output and the default inits or reconfigures between outputs."""
+
+    pack_init_live: str
+
+    def convert_to_cpp(self) -> str:
+        fmt, src, mode = self.pack_init_live.split("/")
+        return (
+            f"constexpr DataFormat alt_pack_dst = DataFormat::{fmt};\n"
+            f"constexpr DataFormat alt_pack_src = DataFormat::{src};\n"
+            f"constexpr char init_mode = '{mode}';"
+        )
+
+
+@dataclass
+class PACK_BLOCK_ALT(TemplateParameter):
+    """pack_block_alt_test.cpp: pack_block_alt is "<alt format>/<l1 acc: a|n>/<form: h|m>": the second output's format, packer L1 accumulate on it, and head (llk_pack_block's form of the first block of an output) or main (every tile one by one)."""
+
+    pack_block_alt: str
+
+    def convert_to_cpp(self) -> str:
+        fmt, acc, form = self.pack_block_alt.split("/")
+        return (
+            f"constexpr DataFormat alt_pack_dst = DataFormat::{fmt};\n"
+            f"constexpr bool alt_l1_acc = {str(acc == 'a').lower()};\n"
+            f"constexpr bool alt_head_form = {str(form == 'h').lower()};"
         )

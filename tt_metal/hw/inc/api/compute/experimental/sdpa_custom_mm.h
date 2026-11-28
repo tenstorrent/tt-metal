@@ -13,9 +13,18 @@
 #include "experimental/llk_unpack_AB_custom_mm_api.h"
 #include "experimental/llk_unpack_AB_sdpa_custom_mm_api.h"
 #endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<9> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 ALWI void sdpa_custom_mm_block_init_pack_short() {
+    PACK((ckernel::packer::llk_pack_live_forget()));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2)));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2)));
 }
@@ -79,6 +88,7 @@ ALWI void sdpa_custom_mm_block(
 }
 
 ALWI void sdpa_custom_mm_block_uninit() {
+    PACK((ckernel::packer::llk_pack_live_forget()));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * FACE_R_DIM * 2)));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
 }

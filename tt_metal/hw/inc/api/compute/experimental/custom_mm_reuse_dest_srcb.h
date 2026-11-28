@@ -14,6 +14,16 @@
 #include "experimental/llk_unpack_A_sdpa_api.h"
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<8> = true;
+template <>
+inline constexpr bool pack_main_release<3> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)
@@ -40,6 +50,7 @@ constexpr std::uint32_t CUSTOM_MM_MAX_DEST_ROWS =
  */
 // clang-format on
 ALWI void custom_mm_reuse_dest_srcb_pack_init() {
+    PACK((ckernel::packer::llk_pack_live_forget()));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2)));
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2)));
 }

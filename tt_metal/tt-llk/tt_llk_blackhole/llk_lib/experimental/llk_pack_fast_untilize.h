@@ -65,6 +65,15 @@
 #include "experimental/llk_fast_untilize_common.h"
 #include "llk_pack.h"
 
+namespace ckernel::packer
+{
+// The block packs of a kernel that includes this header close a fast untilize left open (_llk_pack_close_fast_untilize_).
+template <>
+inline constexpr bool pack_fast_untilize_linked<DstSync::SyncHalf> = true;
+template <>
+inline constexpr bool pack_fast_untilize_linked<DstSync::SyncFull> = true;
+} // namespace ckernel::packer
+
 namespace ckernel
 {
 
@@ -222,8 +231,13 @@ inline void _llk_pack_fast_untilize_program_output_row_stride_(const std::uint32
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
 {
+    ckernel::packer::llk_pack_live_forget();
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
 
+    pack_fast_untilize_seen = true;
+    LLK_PACK_FAST_UNTILIZE_MARK_OPEN();
+    pack_fast_untilize_src  = pack_src_format;
+    LLK_PACK_W_INVALIDATE();
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
     select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
@@ -414,11 +428,7 @@ inline void _llk_pack_fast_untilize_block_strided_(
 
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
-    // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
-    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
-    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
-    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        pack_src_format, FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+    _llk_pack_restore_default_program_(pack_src_format);
 }
 
 } // namespace ckernel

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -15,6 +17,7 @@
 #ifdef TRISC_UNPACK
 #include "experimental/2_0/llk_unpack_AB_matmul.h"
 #endif
+PACK_MATMUL_API(2)
 
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
@@ -40,6 +43,7 @@ namespace experimental {
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
 ALWI void matmul_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, std::uint32_t transpose = 0) {
+    PACK_MATH_CONTEXT(true);
     static_assert(is_legal_tile_shape(S0), "matmul_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_init: illegal tile shape for in1.");
     MATH((llk_math_matmul_init<
@@ -97,6 +101,7 @@ ALWI void matmul_block_init(
     std::uint32_t ct_dim = 1,
     std::uint32_t rt_dim = 1,
     std::uint32_t kt_dim = 1) {
+    PACK_MATH_CONTEXT(true);
     static_assert(is_legal_tile_shape(S0), "matmul_block_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape for in1.");
     MATH((llk_math_matmul_init<

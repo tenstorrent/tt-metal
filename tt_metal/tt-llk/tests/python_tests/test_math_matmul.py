@@ -34,6 +34,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
     matmul_config_columns,
     matmul_config_from_axes,
+    matmul_pack_form,
     sweep_matmul,
     sweep_tiny_tiles_matmul,
 )
@@ -53,6 +54,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
@@ -408,6 +410,19 @@ def run_math_matmul(
                 MATMUL_ROW_MOP(mop_per_row),
                 DEST_SYNC(matmul_config.dest_sync),
                 PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+                MATMUL_PACK_BLOCK(
+                    matmul_pack_form(
+                        formats,
+                        matmul_config.dest_sync,
+                        math_fidelity,
+                        matmul_config.tile_dimensions.rt_dim,
+                        matmul_config.tile_dimensions.ct_dim,
+                        matmul_config.tile_dimensions.kt_dim,
+                        matmul_config.tile_dimensions.in0_tile_r_dim,
+                        matmul_config.tile_dimensions.in1_tile_c_dim,
+                        throttle,
+                    )
+                ),
             ],
             runtimes=[
                 TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),

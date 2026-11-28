@@ -26,6 +26,7 @@ namespace ckernel {
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
 ALWI void deepseek_binary_dest_reuse_add_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
     MATH(
