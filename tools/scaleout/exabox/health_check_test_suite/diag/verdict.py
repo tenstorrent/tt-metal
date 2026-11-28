@@ -20,7 +20,16 @@ from .busbar import (
     BUSBAR_QUIET_CLOCK,
     BUSBAR_REBOOT,
 )
-from .device_tests import DIDT_MATMUL_GALAXY, GDDR_ACT_ALL, GDDR_ACT_C3, GDDR_FAST, GDDR_FULL
+from .device_tests import (
+    DIDT_MATMUL_GALAXY,
+    GDDR_ACT_ALL,
+    GDDR_ACT_C3,
+    GDDR_FAST,
+    GDDR_FULL,
+    NOC_INTEGRITY,
+    PCIE_READ,
+    PCIE_WRITE,
+)
 from .eth_status import ETH_STATUS
 from .eth_summary import _one_line
 from .galaxy import parse_bdf_physical
@@ -32,6 +41,7 @@ from .snapshot_checks import (
     ASIC_LOCATION_PER_UBB,
     ASIC_THERMAL_PRECHECK,
     DRAM_STATUS,
+    GDDR_DBI_FW,
     GDDR_BIST_PER_CHANNEL,
     GDDR_TRAINING_PER_CHANNEL,
     PCIE_ENUM_COUNT,
@@ -147,6 +157,12 @@ ROWS: dict[str, Row] = {
         "replace that tray's board",
     ),
     "F10": Row("PCIe width or speed low", (PCIE_GEN, PCIE_LANE_WIDTH, BUSBAR_PCIE_LINK), "PCIE/LINK", _PCIE),
+    "F11": Row(
+        "PCIe bandwidth low",
+        _tests(PCIE_READ, PCIE_WRITE),
+        "PCIE/LINK",
+        "check the link width and speed, then swap that tray's host PCIe cable with a neighbour tray's",
+    ),
     "F13": Row(
         "Ethernet trace ports down",
         (ETH_STATUS + "*",),
@@ -169,6 +185,12 @@ ROWS: dict[str, Row] = {
         "raise that chip's vdd_min to 760 mV and retest",
     ),
     "F21": Row("GDDR fault", GDDR, "CHIP/BOARD", _BOARD),
+    "F22": Row(
+        "GDDR DBI errors on old firmware",
+        (GDDR_DBI_FW,),
+        "",
+        "flash firmware 19.17.1 or newer to every chip, then re-run",
+    ),
     "F24": Row(
         "chip hangs under load",
         (BUSBAR_HANG,),
@@ -185,6 +207,7 @@ ROWS: dict[str, Row] = {
         "flash the same firmware bundle to every chip and re-run; if it repeats, replace that tray's board",
     ),
     "F27": Row("overheating", (ASIC_THERMAL_PRECHECK,), "", "check that tray's fans and airflow"),
+    "F29": Row("NOC data errors", _tests(NOC_INTEGRITY), "CHIP/BOARD", _BOARD),
 }
 
 # A check no row names: what to do by its IP block.

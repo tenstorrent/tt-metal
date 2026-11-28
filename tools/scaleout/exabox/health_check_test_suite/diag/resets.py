@@ -9,7 +9,7 @@ import shlex
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .common import (
     call_hook,
@@ -99,6 +99,7 @@ def reset_loop(
     sys_root: Path = Path("/sys"),
     gate: str | None = None,
     hook: str | None = None,
+    after_reset: Callable[[str], None] | None = None,
 ) -> None:
     """Run each reset of the plan, then rescan the chips' root ports and recount
     the chips by BDF. Before each reset the *gate* command runs (a refusal skips
@@ -109,7 +110,8 @@ def reset_loop(
     If `snapshot_out` and `post_reset_phases` are provided, a fresh snapshot is
     taken + validated after each reset iteration, and appended to
     `post_reset_phases` as (name, Phase) pairs for the caller to splice into the
-    report.
+    report. `after_reset`, if given, runs after each reset's recount with the
+    same label ("r1_glx_reset", ...), while every chip is still there.
     """
 
     def _post_reset_snapshot(label: str) -> None:
@@ -210,11 +212,14 @@ def reset_loop(
                 )
         # Post-reset snapshot: validate the unit's state after this iteration.
         # Skipped on dry-run / offline.
-        _post_reset_snapshot(f"r{i+1}_{flag.lstrip('-')}")
+        label = f"r{i+1}_{flag.lstrip('-')}"
+        _post_reset_snapshot(label)
         # Bail if a reset broke enumeration — no point chasing the rest
         if retried:
             log(f"Reset {i+1} broke enumeration; stopping reset loop")
             break
+        if after_reset is not None:
+            after_reset(label)
 
 
 def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, Phase]]) -> None:

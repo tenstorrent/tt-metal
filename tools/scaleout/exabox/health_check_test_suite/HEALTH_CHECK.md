@@ -82,8 +82,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | yes, if installed and BMC credentials set | snapshot + 2 triage reads + 30 s + sys-triage | Quick ETH link health, the unit read as found |
-| `daily` | `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -glx_reset` × 3, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
+| `daily` | `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + pcie_read + pcie_write; ETH status after each reset | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
+| `weekly` | `tt-smi -glx_reset` × 3, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + eth_data_integrity + noc_integrity + pcie_read + pcie_write + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); ETH status after each reset; then `tt-smi -glx_reset`, a snapshot and the GDDR and eth tests that passed, again | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly`, with gddr_act_all (pytest, ~25.5 min) in place of gddr_act_c3, which the retest after the reset runs again too | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + ~30 min + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -145,12 +145,23 @@ two-digit index: `eth_link_up` is `*TensixDeploymentEthernet*LinkUp` and
 on `eth_bandwidth` means it runs both `Bandwidth` and `BandwidthBidir`, both of
 which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles. Both run
 with `TT_METAL_SLOW_DISPATCH_MODE=1`: fast dispatch to active ethernet cores was
-removed, and under fast dispatch each eth test skips itself and exits 0.
+removed, and under fast dispatch each eth test skips itself and exits 0. Gtests
+get the single-Galaxy `TT_MESH_GRAPH_DESC_PATH` unless set: without it every test skips.
 
 A gtest check passes only if at least one of its test cases passed, as a pytest
-check does. A filter that matches nothing (one without the index wildcard, say)
-and a run whose tests all skip both exit 0 having tested nothing, and are
-recorded as FAIL with the `passed` / `failed` / `skipped` counts.
+check does. A run that passed and failed nothing (no match, all skipped, suite
+setup or conftest failed) is a WARN `not run: <reason>` with the counts. A test
+that started and never ended counts as failed.
+
+`weekly`/`full` add `eth_data_integrity` (DRAM data sent over every link, compared
+on the far side) and `noc_integrity` (the same over each chip's NOC). `pcie_read` /
+`pcie_write` run `mem_bench` and record GB/s in `data.gbps` (an error or a missing
+binary FAILs; the rate is not judged). Failed eth tests name each link end (BDF,
+UBB/ASIC, channel, port) in `details` and `data.links`, and the chips in `parts`.
+`gddr_dbi_fw` WARNs on firmware older than 19.17.1 (GDDR DBI errors).
+
+The ETH status read (below) also runs after each pre-test reset on `daily`,
+`weekly` and `full` (`eth_status_after_r<n>_glx_reset`; `--skip-eth-status` skips it).
 
 `weekly` and `full` also run `didt_matmul_galaxy`, a pytest-based dI/dt stress
 test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
@@ -160,8 +171,7 @@ re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
 that passed 1000 iterations failed under a 5000-iteration soak. `--timeout
 1200` overrides the repo-wide 300 s pytest-timeout (too short for this run)
 while still bounding a wedged run in standalone invocations, and
-zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
-filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
+zero-collected runs are recorded as not run, as the gtest runs above are. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
 
@@ -172,7 +182,8 @@ GDDR ACT screen (pytest, `tests/dram/test_dram_act_patterns.py`):
 - `gddr_act_c3` (`weekly`): controller 3, then all 8 controllers at once.
 - `gddr_act_all` (`full`): all 8 at once, then the corner controllers 7, 3, 4, 0 alone. Superset of `gddr_act_c3`.
 - A hit skips the remaining passes. A self-test plants the alias first, so a decode bug fails.
-- The alias is boot-dependent: a pass clears one boot. So a passing ACT test gets a `retest`:
+- The alias is boot-dependent: a pass clears one boot. So a passing ACT test gets a `retest`, as do
+  the GDDR and eth tests on `weekly` and `full` (a fault that only shows from a fresh reset):
   `tt-smi -glx_reset`, snapshot validation, rerun as `<check>_after_reset`. The retest snapshot is the
   last `snapshot_after_*`, so the verdict uses it. `--skip-reset` / `--skip-tests` skip it;
   `Tier.retest` / `Tier.retest_reset` set the tests and the reset.
@@ -184,7 +195,7 @@ Output, per hit:
 - `logs/<check>.json`: full per-target results (the runner sets `DIAG_RESULT_JSON` for every pytest).
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
-pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
+pytest invocations themselves are `TESTS` / `BENCHES` / `PYTESTS` in `diag/device_tests.py`.
 
 ## Bus-bar stage
 
@@ -743,7 +754,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 ### ETH
 | Check | Rule | On fail |
 |---|---|---|
-| `eth_links_up` | Per chip, every enabled internal (non-QSFP) port reports live. Expected mask = `(ETH_INTERNAL_BY_ASIC \| ETH_EXAMAX_BY_ASIC) & ENABLED_ETH`, with the topology tables indexed by *physical* `ASIC_LOCATION` (derived from the BDF, not FW telemetry). Compared against `ETH_LIVE_STATUS` masked to the same non-QSFP set. | **FAIL** if any expected port is down (reports OK chip count + first failing BDF and `down_ports`). **WARN** if `ETH_LIVE_STATUS=0x0` on all chips despite FW ≥ 19.9. **SKIP** if the field is absent from the snapshot, or is all-zero on FW < 19.9 (the field is only populated by FW bundle ≥ 19.9, so a capability gap isn't misattributed to a real link fault). |
+| `eth_links_up` | Per chip, every enabled internal (non-QSFP) port reports live. Expected mask = `(ETH_INTERNAL_BY_ASIC \| ETH_EXAMAX_BY_ASIC) & ENABLED_ETH`, with the topology tables indexed by *physical* `ASIC_LOCATION` (derived from the BDF, not FW telemetry). Compared against the link-up half of `ETH_LIVE_STATUS` (bits 16-31; bits 0-15 are port heartbeats, which stop while a workload owns the ports) masked to the same set. QSFP ports are `eth_status_cabling`'s. | **FAIL** if any expected port is down (reports OK chip count + first failing BDF and `down_ports`). **WARN** if `ETH_LIVE_STATUS=0x0` on all chips despite FW ≥ 19.9. **SKIP** if the field is absent from the snapshot, or is all-zero on FW < 19.9 (the field is only populated by FW bundle ≥ 19.9, so a capability gap isn't misattributed to a real link fault). |
 | `eth_speed` | (no field in current tt-smi schemas) | SKIP — pending future schema |
 
 The `eth_link_up` gtest (test phase) is distinct from the snapshot-phase

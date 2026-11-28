@@ -84,25 +84,25 @@ class TestRetest(unittest.TestCase):
         # Its reset log must not overwrite the pre-test loop's reset_1_r.log.
         self.assertEqual(reset.call_args.kwargs["logs_dir"], self.logs / "retest")
         tests.assert_called_once()
-        self.assertEqual(tests.call_args.args[1], ("gddr_act_c3", "gddr_act_all"))
+        self.assertEqual(tests.call_args.args[1], ["gddr_act_c3", "gddr_act_all"])
         self.assertEqual(tests.call_args.kwargs["name_suffix"], retest.RETEST_SUFFIX)
         self.assertEqual(snap.name, "snapshot_after_retest_glx_reset")
         self.assertEqual(snap.status, PASS)
         ok = next(c for c in phase.checks if c.name == "retest_reset_ok")
         self.assertEqual(ok.status, PASS)
 
-    def test_skipped_when_a_retest_test_failed(self):
+    def test_only_the_tests_that_passed_rerun(self):
         phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=FAIL))
+        reset.assert_called_once()
+        self.assertEqual(tests.call_args.args[1], ["gddr_act_c3"])
+
+    def test_skipped_when_no_retest_test_passed(self):
+        phase, snap, reset, tests = self._run(first_run(gddr_act_all=FAIL))
         reset.assert_not_called()
         tests.assert_not_called()
         self.assertIsNone(snap)
         self.assertEqual([(c.name, c.status) for c in phase.checks], [("retest", SKIP)])
         self.assertIn("gddr_act_all", phase.checks[0].details)
-
-    def test_skipped_when_a_retest_test_did_not_run(self):
-        phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS))
-        reset.assert_not_called()
-        self.assertEqual(phase.checks[0].status, SKIP)
 
     def test_broken_reset_fails_the_verdict_and_skips_the_rerun(self):
         phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=PASS), reset_status=FAIL)
@@ -185,8 +185,8 @@ class TestTierRetest(unittest.TestCase):
                 self.assertIn(t, tier.tests, name)
 
     def test_act_tests_are_retested(self):
-        self.assertEqual(TIERS["weekly"].retest, ("gddr_act_c3",))
-        self.assertEqual(TIERS["full"].retest, ("gddr_act_all",))
+        self.assertIn("gddr_act_c3", TIERS["weekly"].retest)
+        self.assertIn("gddr_act_all", TIERS["full"].retest)
         # gddr_act_all runs both of gddr_act_c3's passes.
         self.assertNotIn("gddr_act_c3", TIERS["full"].tests)
 

@@ -364,6 +364,23 @@ def run_diag(
     # Phase 2: reset loop + per-reset snapshot revalidations
     reset_phase = Phase(name="reset_loop")
     post_reset_phases: list = []
+    eth_after_phases: list[Phase] = []
+
+    def _eth_after(label: str) -> None:
+        # The ETH links as each reset leaves them, kept apart from the snapshot fold.
+        p = Phase(name=f"eth_status_after_{label}")
+        t = time.time()
+        _guarded(
+            p,
+            "eth_status_read",
+            WARN,
+            lambda: run_eth_status(tt_metal_path, p, dry_run, logs_dir / p.name, interval_s=5),
+        )
+        p.duration_s = time.time() - t
+        if any(c.status != SKIP for c in p.checks):
+            p.rollup()
+        eth_after_phases.append(p)
+
     # Only revalidate via fresh snapshots when running live (not --input-snapshot).
     snap_out_for_resets = None if input_snapshot else snapshot_out
     t0 = time.time()
@@ -385,12 +402,16 @@ def run_diag(
                 logs_dir=logs_dir,
                 gate=reset_gate,
                 hook=hook,
+                after_reset=_eth_after if plan.eth_after_reset and not skip_eth_status else None,
             )
 
         _guarded(reset_phase, "reset_loop", FAIL, _resets)
     # reset_loop prints its own per-reset lines as they run; rollup line only.
     _finish(report, reset_phase, t0, summary=False, all_skip_stays_skip=True)
     fold_post_reset_snapshots(report, post_reset_phases)
+    for p in eth_after_phases:
+        report["phases"][p.name] = asdict(p)
+        print_phase_summary(p.name, report["phases"][p.name])
     # Taken after the resets, which re-enumerate the chips and so restart their counters.
     aer_before = read_aer() if plan.aer_diff and not dry_run else {}
 

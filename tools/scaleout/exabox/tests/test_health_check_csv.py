@@ -20,7 +20,7 @@ sys.path.insert(0, str(SUITE_DIR))
 sys.path.insert(0, str(SUITE_DIR / "test_infrastructure"))
 
 import analyze_health_check_results as A  # noqa: E402
-from diag.galaxy import BOARD_ID_PREFIX_REVC, expected_bdf  # noqa: E402
+from diag.galaxy import BOARD_ID_PREFIX_REVC, ETH_EXAMAX_BY_ASIC, ETH_INTERNAL_BY_ASIC, expected_bdf  # noqa: E402
 from diag.model import FAIL, PASS, Check, Phase  # noqa: E402
 from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from utils.health_check_models import CheckRecord  # noqa: E402
@@ -54,6 +54,33 @@ def _device(tray: int, asic: int, gen: int = 5) -> dict:
     board |= {"dram_speed": "16G", "pcie_width": "8" if asic == 6 else "1", "pcie_speed": gen}
     telem = {"ENABLED_GDDR": "0xff", "HARVESTING_STATE": "0x0", "ASIC_LOCATION": hex(asic), "DDR_STATUS": "0x55555555"}
     return {"board_info": board, "smbus_telem": telem}
+
+
+class TestEthLinksUp(unittest.TestCase):
+    """eth_links_up judges the link-up half of ETH_LIVE_STATUS on on-host ports only."""
+
+    def check(self, live) -> Check:
+        devs = [_device(t, a) for t in range(1, 5) for a in range(1, 9)]
+        for d in devs:
+            d["smbus_telem"].update(ENABLED_ETH="0x3edf", ETH_LIVE_STATUS=hex(live(d)))
+        snap = Phase(name="snapshot")
+        validate_snapshot({"device_info": devs}, snap)
+        return next(c for c in snap.checks if c.name == "eth_links_up")
+
+    def test_links_up_with_the_heartbeats_stopped_pass(self):
+        self.assertEqual(self.check(lambda d: 0x3EDF << 16).status, PASS)
+
+    def test_a_down_on_host_port_fails_while_down_qsfp_ports_do_not(self):
+        def live(d):
+            asic = int(d["smbus_telem"]["ASIC_LOCATION"], 16)
+            up = ETH_INTERNAL_BY_ASIC[asic] | ETH_EXAMAX_BY_ASIC[asic]
+            if d["board_info"]["bus_id"] == expected_bdf(2, 1):
+                up &= ~(1 << 4)
+            return up << 16 | 0x3EDF
+
+        c = self.check(live)
+        self.assertEqual(c.status, FAIL)
+        self.assertEqual([(f["bdf"], f["down_ports"]) for f in c.data["failures"]], [(expected_bdf(2, 1), [4])])
 
 
 class TestCauseAndPart(unittest.TestCase):

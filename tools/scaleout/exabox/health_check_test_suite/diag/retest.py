@@ -38,13 +38,14 @@ def run_retest(
     """Returns the post-reset snapshot phase, or None. Named snapshot_after_* so
     normalize_health_report() judges the run on it."""
     first = {c.name: c.status for c in first_run.checks}
-    not_passed = [n for n in names if first.get(n) != PASS]
-    if not_passed:
+    # A test that failed the first time already counts; the second boot is for the ones that passed.
+    passed = [n for n in names if first.get(n) == PASS]
+    if not passed:
         phase.add(
             Check(
                 name="retest",
                 status=SKIP,
-                details=f"{', '.join(not_passed)} did not pass on the first boot; no second boot",
+                details=f"none of {', '.join(names)} passed on the first boot; no second boot",
                 ip="other",
             )
         )
@@ -74,5 +75,5 @@ def run_retest(
             snap_phase.rollup()
             print_phase_summary(snap_phase.name, asdict(snap_phase))
 
-    run_tests(tt_metal, names, phase, dry_run, logs_dir, name_suffix=RETEST_SUFFIX)
+    run_tests(tt_metal, passed, phase, dry_run, logs_dir, name_suffix=RETEST_SUFFIX)
     return snap_phase

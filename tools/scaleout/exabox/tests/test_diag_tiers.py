@@ -171,6 +171,17 @@ class TestStageOrder(unittest.TestCase):
     def test_tests_and_end(self):
         t = select_stages(TIERS["weekly"], "gddr_full, eth_link_up,end")
         self.assertEqual((t.resets, t.tests, t.post_test_resets), ((), ("gddr_full", "eth_link_up"), ("-glx_reset",)))
+        self.assertEqual((t.retest, t.eth_after_reset), (("gddr_full", "eth_link_up"), False))
+
+    def test_links_stage_runs_on_the_scheduled_tiers(self):
+        for name in ("daily", "weekly", "full"):
+            with self.subTest(name):
+                t = TIERS[name]
+                self.assertTrue(t.eth_after_reset)
+                self.assertTrue({"eth_link_up", "eth_bandwidth", "pcie_read", "pcie_write"} <= set(t.tests))
+        self.assertTrue({"eth_data_integrity", "noc_integrity"} <= set(TIERS["weekly"].tests))
+        self.assertEqual(TIERS["full"].retest[1], "gddr_act_all")
+        self.assertFalse(TIERS["flash"].eth_after_reset)
 
     def test_unknown_or_out_of_order_is_refused(self):
         for order in ("bogus", "end,reset", "eth_link_up,gddr_full"):

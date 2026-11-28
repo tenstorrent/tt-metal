@@ -18,6 +18,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
+from diag.snapshot_checks import fw_bundles  # noqa: E402
 from diag.verdict import ROWS, verdict_lines  # noqa: E402
 
 CHIP = "0000:46:00.0 (UBB2/U6)"
@@ -56,14 +57,17 @@ CASES = {
     "F08": (check("pcie_enum_count", parts=[CHIP]), "swap UBB2's host PCIe cable"),
     "F09": (check("pcie_aer_diff", WARN, parts=[CHIP]), "if the errors follow the tray"),
     "F10": (check("pcie_gen", WARN, "Gen4", parts=[CHIP]), "to see if the fault follows"),
+    "F11": (check("pcie_read", parts=[CHIP]), "swap UBB2's host PCIe cable"),
     "F13": (check("eth_status_links_down", details=f"{CHIP} ch4, TRACE port 2 down"), "a trace port stays"),
     "F14": (check("eth_status_links_down", details=f"{CHIP} ch8, QSFP-DD port 5 down"), "QSFP-DD cable on those"),
     "F19": (check("didt_matmul_galaxy_after_reset", parts=[CHIP]), "vdd_min to 760 mV"),
     "F21": (check("gddr_act_c3", parts=[CHIP]), "replace UBB2's board"),
+    "F22": (check("gddr_dbi_fw", WARN, "FW bundle 19.16.0.0 is older than 19.17.1"), "flash firmware 19.17.1"),
     "F24": (check("busbar_hang", parts=[CHIP]), "if that chip hangs again, replace UBB2's board"),
     "F25": (check("busbar_reboot", cause="POWER"), "PSUs and power feed"),
     "F26": (check("busbar_quiet_clock", WARN, parts=[CHIP]), "same firmware bundle"),
     "F27": (check("asic_thermal_precheck", WARN, "hot", parts=[CHIP]), "UBB2's fans and airflow"),
+    "F29": (check("noc_integrity_after_reset", parts=[CHIP]), "replace UBB2's board"),
 }
 
 
@@ -143,6 +147,16 @@ class TestVerdict(unittest.TestCase):
             lines[3:], ["Final verdict: FAIL: 1 fault(s)", f"Repair recommendation: Fault 1: {lines[2][10:]}"]
         )
 
+    def test_links_stage_checks_land_on_their_rows(self):
+        def lines(name, ip, details="link a <-> b"):
+            check = Check(name=name, status=FAIL, details=details, ip=ip, parts=[CHIP])
+            return "\n".join(verdict_lines(report(phase("tests", check))))
+
+        self.assertIn("reseat or replace the cable", lines("eth_bandwidth", "eth", "QSFP-DD port 3"))
+        self.assertIn("reseat or replace the cable", lines("eth_data_integrity_after_reset", "eth", "TRACE port 7"))
+        self.assertIn("FAIL F11 ", lines("pcie_read", "pcie"))
+        self.assertIn("FAIL F29 ", lines("noc_integrity", "asic"))
+
     def test_non_gating_phases_are_evidence_only(self):
         lines = verdict_lines(
             report(
@@ -193,6 +207,10 @@ class TestVerdict(unittest.TestCase):
             "Fault 1: check UBB2's fans and airflow",
         )
         self.assertEqual(lines[-2], "Final verdict: FAIL: 2 fault(s), 1 warning(s)")
+
+
+def test_only_parsed_fw_bundles_older_than_19_17_1_are_old():
+    assert fw_bundles(["19.16.0.0", "19.17.1", "N/A", "", None, 19]) == (["19.16.0.0", "19.17.1"], ["19.16.0.0"])
 
 
 if __name__ == "__main__":

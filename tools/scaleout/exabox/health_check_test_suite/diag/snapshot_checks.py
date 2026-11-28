@@ -8,6 +8,7 @@ Also run after every pre-test reset, against a fresh snapshot (see resets.py).
 """
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from .galaxy import (
@@ -36,6 +37,14 @@ GDDR_TRAINING_PER_CHANNEL = "gddr_training_per_channel"
 GDDR_BIST_PER_CHANNEL = "gddr_bist_per_channel"
 DRAM_STATUS = "dram_status"
 ETH_SPEED = "eth_speed"
+GDDR_DBI_FW = "gddr_dbi_fw"
+GDDR_DBI_MIN_FW = (19, 17, 1)  # older FW bundles give GDDR DBI errors
+
+
+def fw_bundles(versions) -> tuple[list[str], list[str]]:
+    """(parsed FW bundle versions, those older than GDDR_DBI_MIN_FW); one that does not parse is not judged."""
+    known = {v: tuple(map(int, m.groups())) for v in versions if (m := re.match(r"(\d+)\.(\d+)\.(\d+)", str(v)))}
+    return sorted(known), sorted(v for v, t in known.items() if t < GDDR_DBI_MIN_FW)
 
 
 def _parts(bdfs) -> list[str]:
@@ -354,6 +363,18 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             )
         )
 
+    bundles, old = fw_bundles([d.get("firmwares", {}).get("fw_bundle_version") for d in devs])
+    phase.add(
+        Check(
+            name=GDDR_DBI_FW,
+            status=WARN if old else PASS if bundles else SKIP,
+            details=f"FW bundle {', '.join(old or bundles) or 'not read'}"
+            + (" is older than 19.17.1: GDDR DBI errors" if old else ""),
+            data={"old": old},
+            ip="fw",
+        )
+    )
+
     # 8. GDDR per-channel training + BIST decoded from smbus_telem.DDR_STATUS.
     # Layout in header comment at top of file.
     train_failures: list[dict] = []
@@ -586,9 +607,12 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         )
     )
 
-    # 12b. ETH links up — verify internal (non-QSFP) ports report as live.
-    # Expected per chip = (Internal | ExaMAX) & ENABLED_ETH. Compare to
-    # ETH_LIVE_STATUS masked to the same non-QSFP set.
+    # 12b. ETH links up — verify on-host internal (non-QSFP) ports report link up.
+    # Expected per chip = (Internal | ExaMAX) & ENABLED_ETH. Compare to the
+    # link-up half of ETH_LIVE_STATUS (bits 16-31; bits 0-15 are the port
+    # heartbeats, which stop while a workload owns the ports) masked to the
+    # same set. QSFP ports lead to other hosts or loop back on this one;
+    # eth_status_cabling judges those.
     #
     # The port-topology tables (ETH_INTERNAL_BY_ASIC, ETH_EXAMAX_BY_ASIC) are
     # indexed by *physical* ASIC_LOCATION (the chip's slot on the UBB, fixed
@@ -620,7 +644,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         loc = _phys_asic_loc(d)
         live_str = d.get("smbus_telem", {}).get("ETH_LIVE_STATUS")
         try:
-            live = int(live_str, 16) if live_str is not None else None
+            live = int(live_str, 16) >> 16 & 0xFFFF if live_str is not None else None
         except (ValueError, TypeError):
             live = None
         live_status_vals.append(live)

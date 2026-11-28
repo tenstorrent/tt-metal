@@ -130,5 +130,8 @@ export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$TT_METAL_HOME/build/lib}"
 # tt-smi often lives at ~/.local/bin or /usr/local/bin but isn't on PATH
 # in non-login SSH sessions.
 export PATH="$PATH:$HOME/.local/bin:/usr/local/bin"
+# Slurm copies the submit host's soft process limit (often 512) into the job; opening a
+# 32-chip mesh needs more threads than that, so raise it to the hard limit.
+ulimit -S -u "$(ulimit -H -u)" 2>/dev/null || true
 
 exec python3 "$SCRIPT_DIR/diag_runner.py" --tier "$TIER" "$@"

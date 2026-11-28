@@ -22,6 +22,7 @@ from unittest import mock
 TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 from diag import common, resets  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
@@ -85,6 +86,12 @@ class TestResetLoop(unittest.TestCase):
         with mock.patch.object(resets, "run", self._fake_run(on_reset, rc)), contextlib.redirect_stdout(io.StringIO()):
             resets.reset_loop("tt-smi", plan, phase, dry_run=False, sys_root=self.root, **kw)
         return phase
+
+    def test_after_reset_runs_after_each_reset_until_a_tray_is_lost(self):
+        seen = []
+        self._loop(("-glx_reset", "-glx_reset"), after_reset=seen.append)
+        self._loop(("-glx_reset",), on_reset=lambda: drop_tray(self.root, "4"), after_reset=seen.append)
+        self.assertEqual(seen, ["r1_glx_reset", "r2_glx_reset"])
 
     def test_every_chip_back_passes_and_every_root_port_is_rescanned(self):
         phase = self._loop(("-glx_reset", "-glx_reset"))

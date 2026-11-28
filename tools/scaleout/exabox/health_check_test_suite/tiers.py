@@ -21,7 +21,7 @@ Where the steps a tier can name are defined:
 
     resets, post_test_resets,
     retest_reset              tt-smi flags: "-glx_reset"
-    tests, retest             TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
+    tests, retest             TESTS (gtest), BENCHES (mem_bench) and PYTESTS (pytest) in diag/device_tests.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
 A name that isn't defined there fails at import, so a typo stops
@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import NamedTuple
 
-from diag.device_tests import PYTESTS, TESTS
+from diag.device_tests import BENCHES, PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
 
@@ -49,10 +49,11 @@ class Tier:
     # Pre-test reset loop, in order. Each reset is followed by a rescan, a chip recount and a revalidated snapshot.
     resets: tuple[str, ...] = ()
 
-    # Device tests, in order: names from TESTS / PYTESTS.
+    # Device tests, in order: names from TESTS / BENCHES / PYTESTS.
     tests: tuple[str, ...] = ()
 
-    # Rerun after retest_reset + snapshot: the GDDR ACT alias is boot-dependent.
+    # Rerun after retest_reset + snapshot: the GDDR ACT alias is boot-dependent,
+    # and a DRAM or ETH fault that only shows from a fresh reset shows here.
     # -glx_reset matches the deployment runner's per-iteration reset.
     retest: tuple[str, ...] = ()
     retest_reset: str = "-glx_reset"
@@ -74,6 +75,10 @@ class Tier:
     # after the post-test reset like the triage tools; it never resets, and
     # stops before opening a chip if one has dropped off PCIe.
     eth_status: bool = False
+
+    # The same ETH status read after each pre-test reset: a link that
+    # trains on one reset and not the next shows here, by reset.
+    eth_after_reset: bool = False
 
     # Print the ETH link summary at the end of the run (diag/eth_summary.py), for
     # the person at the console rather than the dashboard: a verdict, what is
@@ -134,8 +139,19 @@ BUSBAR_STEPS: dict[str, tuple[Step, ...]] = {
 
 _WEEKLY = Tier(
     resets=("-glx_reset", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
-    retest=("gddr_act_c3",),
+    tests=(
+        "gddr_full",
+        "gddr_act_c3",
+        "eth_link_up",
+        "eth_bandwidth",
+        "eth_data_integrity",
+        "noc_integrity",
+        "pcie_read",
+        "pcie_write",
+        "didt_matmul_galaxy",
+    ),
+    retest=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "eth_data_integrity"),
+    eth_after_reset=True,
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
@@ -158,7 +174,8 @@ TIERS: dict[str, Tier] = {
     # The scheduled run.
     "daily": Tier(
         resets=("-glx_reset", "-glx_reset"),
-        tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
+        tests=("gddr_fast", "eth_link_up", "eth_bandwidth", "pcie_read", "pcie_write"),
+        eth_after_reset=True,
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
@@ -171,7 +188,7 @@ TIERS: dict[str, Tier] = {
     "full": replace(
         _WEEKLY,
         tests=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.tests),
-        retest=("gddr_act_all",),
+        retest=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.retest),
         sys_triage=True,
         load_mode="full",
     ),
@@ -224,6 +241,7 @@ def select_stages(tier: Tier, order: str) -> Tier:
     return replace(
         tier,
         resets=tier.resets if "reset" in names else (),
+        eth_after_reset=tier.eth_after_reset and "reset" in names,
         tests=tests,
         retest=tuple(t for t in tier.retest if t in tests),
         post_test_resets=(tier.post_test_resets or RESET_FLAGS) if "end" in names else (),
@@ -240,7 +258,7 @@ def _validate() -> None:
         problems += [
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
-        problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
+        problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in {**TESTS, **BENCHES, **PYTESTS}]
         problems += [f"{name}: retest {t!r} is not in its tests" for t in tier.retest if t not in tier.tests]
         if tier.retest_reset not in RESET_FLAGS:
             problems.append(f"{name}: unknown retest reset flag {tier.retest_reset!r}")
