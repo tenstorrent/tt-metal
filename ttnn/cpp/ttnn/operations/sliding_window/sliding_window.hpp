@@ -206,7 +206,7 @@ Tensor move_config_tensor_to_device(
     tt::tt_metal::distributed::MeshDevice* device,
     bool store_in_dram = false);
 
-uint32_t align_buffer(uint32_t size);
+uint32_t align_buffer(uint32_t size, uint32_t alignment_bytes);
 
 }  // namespace ttnn::operations::sliding_window
 

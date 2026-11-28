@@ -205,7 +205,10 @@ inline bool needs_rm_composite_output(
         return false;
     }
     const uint32_t element_size = tile_staged && input.dtype() == DataType::BFLOAT8_B ? 2 : input.element_size();
-    if ((!tile_staged && has_nontile_w(input)) || has_subaligned_shard_row(*input.device(), output_mc, element_size)) {
+    // Host tensors carry no device to read the L1 alignment from; they never take the native sharded path.
+    if ((!tile_staged && has_nontile_w(input)) ||
+        (input.storage_type() == StorageType::DEVICE &&
+         has_subaligned_shard_row(*input.device(), output_mc, element_size))) {
         return true;
     }
     // A shard wider than what is left of the row pads the output row past the input's, and the kernels

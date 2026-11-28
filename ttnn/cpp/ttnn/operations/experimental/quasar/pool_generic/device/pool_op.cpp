@@ -11,6 +11,7 @@
 #include <tt-metalium/utils/math.hpp>
 #include <utility>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
@@ -53,7 +54,8 @@ void validate_pool2d(
             input_h * input_w,
             std::numeric_limits<uint32_t>::max());
 
-        if (get_index_data_type(input_h, input_w) == DataType::INT32) {
+        const tt::ARCH arch = tt::tt_metal::experimental::get_device_properties(*input.device()).arch();
+        if (get_index_data_type(input_h, input_w, arch) == DataType::INT32) {
             // Int32 indices walk signed values (padding indices and wrap increments are negative).
             const uint32_t in_h_padded =
                 input_h + sliding_window_config.get_pad_h() + sliding_window_config.get_ceil_pad_h();
@@ -77,7 +79,8 @@ void validate_pool2d(
                 return_indices,
                 input_h,
                 input_w,
-                output_layout);
+                output_layout,
+                arch);
             TT_FATAL(
                 !params.is_large_kernel,
                 "return_indices with INT32 indices does not yet support windows of {}x{} (more than {} rows per "
@@ -193,7 +196,9 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     auto output_spec_data = compute_output_specs(op_attr, tensor);
     if (op_attr.return_indices_) {
         DataType index_dtype = get_index_data_type(
-            op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
+            op_attr.sliding_window_config_.input_hw.first,
+            op_attr.sliding_window_config_.input_hw.second,
+            tt::tt_metal::experimental::get_device_properties(*tensor.input_tensor_.device()).arch());
 
         // the index output spec is the same as the input spec just with a different data type
         tt::tt_metal::TensorLayout output_layout_ind = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(

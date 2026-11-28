@@ -44,6 +44,7 @@
 #include "ttnn/operations/experimental/quasar/op_slicing/op_slicing.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 namespace ttnn::operations::conv {
 // get_conv_padded_input_shape_and_mem_config has external linkage but is not declared in
@@ -334,6 +335,7 @@ ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig determine_ma
 // Mirrors the parallel/block-config derivation inside calculate_L1_usage_for_conv_op so the ACT page count is the
 // one the factory sizes DFB_ACT_RM from (`cb(ACT).num_pages` entries of the ACT_ROW_MAJOR page size).
 static uint32_t block_sharded_act_rm_extra_bytes_qsr(
+    const MeshDevice& device,
     uint32_t batch_size,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -363,8 +365,13 @@ static uint32_t block_sharded_act_rm_extra_bytes_qsr(
     }
     const ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    const uint32_t input_channels_alignment =
-        get_input_channels_alignment(TensorMemoryLayout::BLOCK_SHARDED, input_layout, false, is_mm_conv, std::nullopt);
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        TensorMemoryLayout::BLOCK_SHARDED,
+        input_layout,
+        false,
+        is_mm_conv,
+        std::nullopt,
+        tt::tt_metal::experimental::get_device_properties(device).node_local_mem_alignment());
     const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
     const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
     const ttnn::Shape weights_shape(
@@ -412,6 +419,7 @@ static uint32_t block_sharded_act_rm_extra_bytes_qsr(
         false);
     (void)conv_out_memory_config;
     const std::vector<ttnn::prim::CBInfo> cb_info = ttnn::prim::get_cb_info(
+        device,
         compute_config,
         block_config,
         parallelization_config,
@@ -438,6 +446,7 @@ static uint32_t block_sharded_act_rm_extra_bytes_qsr(
 // Quasar variant of conv2d_utils::determine_conv_config_for_auto_shard: the same selection rule, but the
 // BLOCK_SHARDED candidate is charged for the un-overlapped ACT_ROW_MAJOR DFB this port allocates.
 static Conv2dConfig determine_conv_config_for_auto_shard_qsr(
+    const MeshDevice& device,
     const Conv2dConfig& conv_config,
     bool is_mm_conv,
     uint32_t batch_size,
@@ -469,6 +478,7 @@ static Conv2dConfig determine_conv_config_for_auto_shard_qsr(
         is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout) {
         return calculate_L1_usage_for_conv_op(
+            device,
             batch_size,
             in_channels,
             out_channels,
@@ -512,6 +522,7 @@ static Conv2dConfig determine_conv_config_for_auto_shard_qsr(
         return winning_config.conv_config;
     }
     const uint32_t block_act_rm_extra = block_sharded_act_rm_extra_bytes_qsr(
+        device,
         batch_size,
         in_channels,
         out_channels,
@@ -684,6 +695,7 @@ Result conv2d_L1(
         }
         // In this case we deduce the shard layout.
         conv_config = determine_conv_config_for_auto_shard_qsr(
+            *device,
             conv_config,
             mm_conv,
             batch_size,
@@ -722,12 +734,14 @@ Result conv2d_L1(
         mm_conv,
         auto_shard);
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor_post_tm.layout(),
         false,
         mm_conv,
-        input_tensor_post_tm.memory_config());
+        input_tensor_post_tm.memory_config(),
+        device_props.node_local_mem_alignment());
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
@@ -739,7 +753,8 @@ Result conv2d_L1(
         in_channels_padded,
         kernel_size[1],
         dilation[1],
-        input_tensor_post_tm.dtype());
+        input_tensor_post_tm.dtype(),
+        device_props.arch());
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -1676,6 +1691,7 @@ public:
             conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
         }
         auto conv_L1_usage = calculate_L1_usage_for_conv_op(
+            *device,
             batch_size,
             input_channels,
             output_channels,
@@ -1701,6 +1717,7 @@ public:
         // This port materialises the block-sharded ACT_ROW_MAJOR DFB the shared estimate treats as overlapped
         // (see block_sharded_act_rm_extra_bytes_qsr); without it the slicer stops one slice too early.
         const uint32_t block_act_rm_extra = block_sharded_act_rm_extra_bytes_qsr(
+            *device,
             batch_size,
             input_channels,
             output_channels,
@@ -1756,6 +1773,7 @@ public:
                 conv_config.weights_dtype = weight_tensor.dtype();
             }
             conv_config = determine_conv_config_for_auto_shard_qsr(
+                *device,
                 conv_config,
                 false,
                 batch_size,
@@ -1793,7 +1811,8 @@ public:
             false,
             compute_grid_size,
             input_layout,
-            single_slice ? BufferType::L1 : BufferType::DRAM));
+            single_slice ? BufferType::L1 : BufferType::DRAM,
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment()));
         return sliced_input_tensor_memory_config;
     }
 

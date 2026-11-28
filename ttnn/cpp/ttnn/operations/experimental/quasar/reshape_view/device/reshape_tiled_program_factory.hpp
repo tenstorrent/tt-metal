@@ -25,7 +25,8 @@ Tensor compute_reshape_mapping_host_tensor(
     const Shape& input_shape,
     const Shape& output_shape,
     const std::array<uint32_t, 2>& tile_shape,
-    const std::array<uint32_t, 2>& face_shape);
+    const std::array<uint32_t, 2>& face_shape,
+    uint32_t l1_alignment);
 
 }  // namespace detail
 

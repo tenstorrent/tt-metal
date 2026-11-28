@@ -40,7 +40,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
     const ttnn::Shape& input_shape,
     const ttnn::Shape& output_shape,
     const tt::tt_metal::CoreCoord& core_grid,
-    uint32_t l1_alignment,
+    const MeshDevice& device,
     const DataType& input_dtype,
     const Layout& input_layout,
     const DataType& output_dtype,
@@ -56,6 +56,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
 
     uint32_t smallest_RM_elem_size =
         tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16));  // Size of BFloat16
+    const uint32_t l1_alignment = tt::tt_metal::experimental::get_device_properties(device).node_local_mem_alignment();
     uint32_t input_channels_alignment =
         is_in_tiled ? tt::constants::TILE_WIDTH : (l1_alignment / smallest_RM_elem_size);
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
@@ -83,6 +84,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             0);
     } else {  // auto-sharding
         std::optional<sliding_window::ParallelConfig> sw_parallel_config = pool::determine_pool_config_for_auto_shard(
+            device,
             input_dtype,
             input_layout,
             core_grid,
@@ -225,7 +227,7 @@ static std::vector<Tensor> pool2d_L1(
                 input_tensor_shape,
                 output_shape,
                 input_tensor.device()->compute_with_storage_grid_size(),
-                tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment(),
+                *input_tensor.device(),
                 input_tensor.dtype(),
                 input_tensor.layout(),
                 dtype,
@@ -479,6 +481,7 @@ public:
             };
 
             auto parallel_config = pool::determine_pool_config_for_auto_shard(
+                *device,
                 dtype,
                 input_layout,
                 device->compute_with_storage_grid_size(),
@@ -598,6 +601,7 @@ public:
 
         // Calculate complete L1 usage for this slice
         auto pool_l1_usage = pool::calculate_L1_usage_for_pool2d_slice(
+            *device,
             input_slice_height,
             input_slice_width,
             output_slice_height,
@@ -654,7 +658,7 @@ public:
             ttnn::Shape({1, 1, input_slice_nhw, channels}),
             ttnn::Shape({batch_size, output_slice_height, this_output_width, channels}),
             device->compute_with_storage_grid_size(),
-            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment(),
+            *device,
             dtype,
             input_layout,
             dtype,

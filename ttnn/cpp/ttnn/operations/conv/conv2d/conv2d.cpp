@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -112,6 +113,7 @@ Result conv2d_L1(
         }
         // In this case we deduce the shard layout.
         conv_config = determine_conv_config_for_auto_shard(
+            *device,
             conv_config,
             mm_conv,
             batch_size,
@@ -149,12 +151,14 @@ Result conv2d_L1(
         mm_conv,
         auto_shard);
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor_post_tm.layout(),
         false,
         mm_conv,
-        input_tensor_post_tm.memory_config());
+        input_tensor_post_tm.memory_config(),
+        device_props.node_local_mem_alignment());
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
@@ -166,7 +170,8 @@ Result conv2d_L1(
         in_channels_padded,
         kernel_size[1],
         dilation[1],
-        input_tensor_post_tm.dtype());
+        input_tensor_post_tm.dtype(),
+        device_props.arch());
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -563,6 +568,7 @@ public:
             conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
         }
         auto conv_L1_usage = calculate_L1_usage_for_conv_op(
+            *device,
             batch_size,
             input_channels,
             output_channels,
@@ -619,6 +625,7 @@ public:
                 conv_config.weights_dtype = weight_tensor.dtype();
             }
             conv_config = determine_conv_config_for_auto_shard(
+                *device,
                 conv_config,
                 false,
                 batch_size,
@@ -655,7 +662,8 @@ public:
             false,
             compute_grid_size,
             input_layout,
-            single_slice ? BufferType::L1 : BufferType::DRAM));
+            single_slice ? BufferType::L1 : BufferType::DRAM,
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment()));
         return sliced_input_tensor_memory_config;
     }
 

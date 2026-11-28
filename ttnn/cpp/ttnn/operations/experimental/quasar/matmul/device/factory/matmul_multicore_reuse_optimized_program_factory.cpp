@@ -156,13 +156,13 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        in1_is_sharded
-            ? in1_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        in1_is_sharded ? in1_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in1_single_tile_size);
 
     // DFB sizes
     uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;

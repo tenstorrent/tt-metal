@@ -14,7 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "tt-metalium/data_formats/tile_constants.hpp"
-#include "tt-metalium/discovery/hal.hpp"
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "tt-metalium/data_formats/data_format.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -53,6 +53,7 @@ uint32_t calculate_act_cb_size_with_reuse(
 }
 
 std::vector<CBInfo> get_cb_info(
+    const tt::tt_metal::distributed::MeshDevice& device,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
     const Conv2dParallelizationConfig& pconfig,
@@ -70,6 +71,8 @@ std::vector<CBInfo> get_cb_info(
     bool skip_act_cb_create,
     uint32_t input_channels_padded,
     std::optional<uint32_t> reader_indices_actual_page_size) {
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(device);
+    const tt::ARCH arch = device_props.arch();
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -88,7 +91,7 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_input_dtype));
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(arch, compute_kernel_config);
 
     TT_FATAL(conv_config.weights_dtype.has_value(), "get_cb_info expects conv_config.weights_dtype to be already set");
     const tt::DataFormat weights_df = datatype_to_dataformat_converter(conv_config.weights_dtype.value());
@@ -115,7 +118,8 @@ std::vector<CBInfo> get_cb_info(
             block_config.act_block_h_ntiles,
             input_channels_padded,
             kernel_size[1],
-            tt::tt_metal::hal::get_arch(),
+            arch,
+            device_props.node_local_mem_alignment(),
             input_datatype,
             per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
             weights_tile_size,
@@ -165,7 +169,13 @@ std::vector<CBInfo> get_cb_info(
         pconfig.per_core_out_matrix_height_ntile * pconfig.per_core_out_matrix_width_ntile;
 
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
-        is_1d_depthwise_conv, sharding_scheme, input_channels_padded, kernel_size[1], dilation[1], input_datatype);
+        is_1d_depthwise_conv,
+        sharding_scheme,
+        input_channels_padded,
+        kernel_size[1],
+        dilation[1],
+        input_datatype,
+        arch);
     const uint32_t num_blocks_act_w = is_1d_depthwise_conv
                                           ? (coalesce_1d_depthwise_kw_reads ? 1 : kernel_size[0] * kernel_size[1])
                                           : weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
@@ -220,8 +230,8 @@ std::vector<CBInfo> get_cb_info(
     const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
                                               sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
                                               !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
-    const bool partials_use_output_cb = !untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv &&
-                                        tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR;
+    const bool partials_use_output_cb =
+        !untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv && arch != tt::ARCH::QUASAR;
     // This must match the compute kernel's out_block_num_tiles. Both factories pass one full per-core output-width
     // block to compute, so dedicated partials storage is exactly one output block reused through ordinary CB FIFO
     // wraparound. When formats allow output aliasing, only the final block of the existing output allocation is used.
@@ -378,9 +388,9 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
  * - Linear growth until reaching peak performance
  * - Constant peak rate for larger transfers
  */
-static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch, uint32_t l1_alignment) {
     // Minimum NOC transfer size that was benchmarked
-    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t min_transfer_size_bytes = l1_alignment;
 
     // Architecture-specific performance characteristics
     struct NocPerformanceParams {
@@ -416,9 +426,9 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
  * - Linear growth until reaching peak performance
  * - Constant peak rate for larger transfers
  */
-static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch, uint32_t l1_alignment) {
     // Minimum NOC transfer size that was benchmarked
-    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t min_transfer_size_bytes = l1_alignment;
 
     // Architecture-specific performance characteristics
     struct NocPerformanceParams {
@@ -454,9 +464,10 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
  * - Linear growth until reaching peak performance
  * - Constant peak rate for larger transfers
  */
-static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+static float get_mcast_many_l1_linked_noc_transfer_rate(
+    uint32_t transfer_size_bytes, tt::ARCH arch, uint32_t l1_alignment) {
     // Minimum NOC transfer size that was benchmarked
-    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t min_transfer_size_bytes = l1_alignment;
 
     // Architecture-specific performance characteristics
     struct NocPerformanceParams {
@@ -592,6 +603,7 @@ bool is_split_reader_viable(
     uint32_t input_channels_padded,
     uint32_t kernel_width,
     tt::ARCH arch,
+    uint32_t l1_alignment,
     DataType input_datatype,
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
@@ -621,7 +633,8 @@ bool is_split_reader_viable(
     const uint32_t noc_transfer_unit_bytes = input_bytes_per_element * input_channels_padded * coallesced_read_channels;
 
     // Get transfer rate in GB/s for local L1-to-L1 NoC transfers
-    const float noc_local_l1_transfer_rate_gbps = get_local_l1_noc_transfer_rate(noc_transfer_unit_bytes, arch);
+    const float noc_local_l1_transfer_rate_gbps =
+        get_local_l1_noc_transfer_rate(noc_transfer_unit_bytes, arch, l1_alignment);
 
     // Calculate total activation data size in bytes
     const uint32_t activation_data_bytes = input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
@@ -635,8 +648,8 @@ bool is_split_reader_viable(
     const uint32_t weight_data_bytes = weights_tile_size * weights_block_ntiles;
 
     // Get transfer rates in GB/s for DRAM-to-L1 and L1-to-L1 multicast
-    const float noc_mcast_rate_gbps = get_mcast_many_l1_linked_noc_transfer_rate(weight_data_bytes, arch);
-    const float noc_dram_rate_gbps = get_all_dram_noc_transfer_rate(weights_tile_size, arch);
+    const float noc_mcast_rate_gbps = get_mcast_many_l1_linked_noc_transfer_rate(weight_data_bytes, arch, l1_alignment);
+    const float noc_dram_rate_gbps = get_all_dram_noc_transfer_rate(weights_tile_size, arch, l1_alignment);
 
     // Weight transfer involves both DRAM read and multicast (sequential operations)
     // Convert to cycles: bytes * (1/dram_rate + 1/mcast_rate) * GHz = cycles
@@ -705,6 +718,7 @@ static conv_op_l1_usage predicted_conv2d_l1_usage(
     const std::array<uint32_t, 2> shard_shape = input_tensor_a.shard_spec().value().shape;
     const uint32_t input_channels_padded = shard_shape[1];
     return calculate_L1_usage(
+        *input_tensor_a.device(),
         compute_kernel_config,
         block_config,
         parallelization_config,

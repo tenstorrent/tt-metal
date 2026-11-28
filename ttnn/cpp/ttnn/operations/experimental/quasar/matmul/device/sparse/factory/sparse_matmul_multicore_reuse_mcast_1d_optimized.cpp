@@ -93,9 +93,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+            *device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+            *device, in1_single_tile_size);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
     const auto* const in0_buffer = &a.mesh_buffer();

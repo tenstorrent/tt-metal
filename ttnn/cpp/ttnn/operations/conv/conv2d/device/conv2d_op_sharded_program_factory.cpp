@@ -26,6 +26,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
@@ -345,7 +346,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         input_channels_padded,
         filter_w,
         dilation_w,
-        a.dtype());
+        a.dtype(),
+        device->arch());
     TT_FATAL(
         !coalesce_1d_depthwise_kw_reads || filter_h == 1,
         "Coalesced 1D depthwise reads require filter_h == 1, got {}",
@@ -359,6 +361,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             input_channels_padded,
             filter_w,
             device->arch(),
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment(),
             a.dtype(),
             parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
@@ -667,6 +670,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // populated by the reader kernel.
     const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
+        *device,
         compute_kernel_config,
         block_config,
         parallelization_config,
@@ -1515,6 +1519,7 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
             input_channels_padded,
             filter_w,
             a.device()->arch(),
+            tt::tt_metal::experimental::get_device_properties(*a.device()).node_local_mem_alignment(),
             a.dtype(),
             parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),

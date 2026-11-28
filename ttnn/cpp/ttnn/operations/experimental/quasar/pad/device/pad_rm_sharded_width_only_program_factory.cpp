@@ -6,7 +6,7 @@
 
 #include <filesystem>
 #include <vector>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -94,7 +94,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }
 
-    auto l1_alignment_bytes = hal::get_l1_alignment();
+    auto l1_alignment_bytes =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
     uint32_t padded_stick_step = tt::round_up(padded_stick_bytes, l1_alignment_bytes);
     uint32_t unpadded_stick_step = tt::round_up(unpadded_stick_bytes, l1_alignment_bytes);
 

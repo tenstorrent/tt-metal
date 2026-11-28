@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <vector>
@@ -26,13 +26,12 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::quasar::conv3d {
 
-uint32_t default_c_in_block(uint32_t kernel_vol) {
+uint32_t default_c_in_block(uint32_t kernel_vol, uint32_t l1_alignment) {
     // C_in_block must satisfy: kernel_vol * C_in_block divisible by TILE_WIDTH (weight
     // tile alignment) and C_in_block % l1_alignment == 0 (L1 alignment). The minimum
     // such value gives the smallest circular buffers, keeping large kernels within L1.
     uint32_t tile_align_factor =
         tt::constants::TILE_WIDTH / std::gcd(kernel_vol, static_cast<uint32_t>(tt::constants::TILE_WIDTH));
-    uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     return std::lcm(l1_alignment, tile_align_factor);
 }
 
@@ -188,7 +187,10 @@ Tensor prepare_conv3d_weights(
         // Default to the minimal valid block (same default conv3d uses) rather than a
         // full channel block, so the prepared weight fits in L1 for large kernels and
         // its K-row blocking matches the conv compute's default (issues #42146, #47316).
-        C_in_block = std::min(default_c_in_block(kD * kH * kW), static_cast<uint32_t>(C_in_aligned));
+        C_in_block = std::min(
+            default_c_in_block(
+                kD * kH * kW, tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment()),
+            static_cast<uint32_t>(C_in_aligned));
     }
     uint32_t num_C_in_blocks = C_in_aligned / C_in_block;
     TT_FATAL(num_C_in_blocks * C_in_block == C_in_aligned, "C_in_aligned must be divisible by C_in_block");

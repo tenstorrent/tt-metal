@@ -8,6 +8,7 @@
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tuple>
 #include <utility>
 
@@ -131,6 +132,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and padding=0.
         // We must pass these values to auto-shard to ensure correct halo and reader indices calculation.
         conv_config = determine_conv_config_for_auto_shard(
+            *device,
             conv_config,
             mm_conv,
             batch_size,
@@ -186,12 +188,14 @@ ConvTranspose2dResult conv_transpose2d_L1(
         get_num_cores_channels_from_parallel_config(parallel_config),
         get_num_cores_channels_from_parallel_config(output_parallel_config));
 
+    const auto device_props = tt::tt_metal::experimental::get_device_properties(*device);
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
         false,
         mm_conv,
-        input_tensor_post_tm.memory_config());
+        input_tensor_post_tm.memory_config(),
+        device_props.node_local_mem_alignment());
     uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile_per_core =
@@ -204,7 +208,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
         in_channels_padded,
         kernel_size[1],
         dilation[1],
-        input_tensor_post_tm.dtype());
+        input_tensor_post_tm.dtype(),
+        device_props.arch());
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -663,7 +668,8 @@ public:
             conv_config.output_layout,
             slice_config.num_slices > 1,
             false,  // Matmul based convs should never take the slicing route.
-            std::nullopt);
+            std::nullopt,
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment());
         uint32_t precise_max_halo_bytes =
             sliding_window::calculate_precise_halo_output_elems(slice_halo_config, shard_shape) * input_datum_size;
         auto compute_grid = device->compute_with_storage_grid_size();
@@ -697,6 +703,7 @@ public:
         const uint32_t in_channels_padded = tt::round_up(
             input_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
         conv_op_l1_usage l1_usage = calculate_L1_usage(
+            *device,
             compute_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
@@ -773,6 +780,7 @@ public:
                 output_slice_width);
 
             conv_config = determine_conv_config_for_auto_shard(
+                *device,
                 conv_config,
                 false,
                 batch_size,
@@ -809,7 +817,8 @@ public:
             false,
             compute_grid_size,
             input_layout,
-            BufferType::DRAM));
+            BufferType::DRAM,
+            tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment()));
         return sliced_input_tensor_memory_config;
     }
 

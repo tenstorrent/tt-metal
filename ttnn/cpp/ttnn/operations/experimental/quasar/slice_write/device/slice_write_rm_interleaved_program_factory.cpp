@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
@@ -98,9 +98,10 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     }
 
     using namespace tt::tt_metal::experimental;
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
     auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     uint32_t page_alignment_offset = (output_tensor_start[-1] * input_tensor.element_size()) % src_buffer_alignment;
     uint32_t input_row_size_bytes_offset =
         tt::round_up(input_row_size_bytes + page_alignment_offset, src_buffer_alignment);
@@ -217,12 +218,13 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     uint32_t max_read_size = 4096;
 
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address

@@ -15,7 +15,7 @@
 #include <functional>
 
 #include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -67,7 +67,13 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
     // recreate_mapping_tensor is intentionally ignored (excluded from the program hash); the mapping
     // depends only on the hashed input/output shapes.
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
-                                num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
+                                num_input_pages,
+                                num_output_pages,
+                                input_shape,
+                                output_shape,
+                                tile_shape,
+                                face_shape,
+                                tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment())
                                 .to_device(device);
 
     const uint32_t mapping_page_size = mapping_tensor.logical_shape()[-1];

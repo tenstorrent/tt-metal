@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <vector>
 #include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -78,12 +78,13 @@ get_padded_slice_runtime_args_rm_sharded_output(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
     auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
 
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
@@ -218,12 +219,13 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
         "padded_slice output buffer must be L1 (sharded).");
 
+    const auto props = tt::tt_metal::experimental::get_device_properties(*a.device());
     auto src_buffer_alignment = a.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,
         "padded_slice output row size {} must be aligned to {}",
@@ -238,7 +240,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     // The shard row is wider than the slice row (channels padded to the shard alignment): the reader
     // zero-fills each row's tail from a zeroed scratchpad, which the shared factory's pad-row writer did.
     const bool pad_output_row = output_row_size_bytes > slice_row_size_bytes;
-    const uint32_t l1_alignment = ::hal::get_l1_alignment();
+    const uint32_t l1_alignment = props.node_local_mem_alignment();
 
     const uint32_t output_cb_page_size =
         is_non_aligned ? tt::round_up(output_row_size_bytes, dst_buffer_alignment) : output_row_size_bytes;

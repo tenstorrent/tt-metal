@@ -16,7 +16,7 @@
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -310,14 +310,15 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
 
     uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(cb_data_format);
     // Align to DRAM read alignment.
-    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
+    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, dram_alignment);
 
     log_debug(
         tt::LogOp,
         "stick_nbytes: {}, aligned_stick_nbytes: {}, dram_alignment: {}",
         stick_nbytes,
         aligned_stick_nbytes,
-        hal::get_dram_alignment());
+        dram_alignment);
 
     const bool is_l1_aligned = stick_nbytes == aligned_stick_nbytes;
 

@@ -39,7 +39,8 @@ uint32_t get_input_channels_alignment(
     Layout input_tensor_layout,
     bool sliced_op,
     bool is_mm_conv,
-    const std::optional<MemoryConfig>& input_memory_config);
+    const std::optional<MemoryConfig>& input_memory_config,
+    uint32_t l1_alignment);
 
 CoreCoord get_output_compute_grid_size(
     const CoreCoord& device_compute_grid_size,
@@ -70,7 +71,8 @@ bool should_coalesce_1d_depthwise_conv_reads(
     uint32_t input_channels_padded,
     uint32_t kernel_width,
     uint32_t dilation_w,
-    DataType input_datatype);
+    DataType input_datatype,
+    tt::ARCH arch);
 
 struct SkipMcast {
     bool skip_activation_mcast;
@@ -195,6 +197,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
+    uint32_t l1_alignment,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
     std::optional<uint32_t> act_block_h_override = std::nullopt,
     bool enable_channels_padding = true,
@@ -214,6 +217,7 @@ struct core_count_and_size {
 };
 
 core_count_and_size calculate_L1_usage_for_conv_op(
+    const MeshDevice& device,
     uint32_t batch_size,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -238,6 +242,7 @@ core_count_and_size calculate_L1_usage_for_conv_op(
     const std::optional<ttnn::MemoryConfig>& _halo_input_memory_config = std::nullopt);
 
 Conv2dConfig determine_conv_config_for_auto_shard(
+    const MeshDevice& device,
     const Conv2dConfig& conv_config_,
     bool is_mm_conv,
     uint32_t batch_size,

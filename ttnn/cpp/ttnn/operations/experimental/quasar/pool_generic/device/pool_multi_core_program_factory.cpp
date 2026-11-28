@@ -23,6 +23,7 @@
 #include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -589,7 +590,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         return_indices,
         in_h,
         in_w,
-        output_layout);
+        output_layout,
+        mesh_device->arch());
     // Host-side record of the lane count programmed (TT_LOGGER_LEVEL=Debug), observable without a
     // kernel probe.
     log_debug(
@@ -637,6 +639,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         output_tensors[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
         config_tensor_in_dram,
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).dram_alignment(),
         reader_indices_actual_page_size,
         /*scalar_config_actual_page_size=*/std::nullopt,
         QUASAR_POOL_PRE_TILIZE_TILE_ROWS);

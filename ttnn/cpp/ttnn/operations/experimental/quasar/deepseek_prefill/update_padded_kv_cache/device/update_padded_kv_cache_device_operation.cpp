@@ -982,7 +982,7 @@ UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::create_mesh_workload(
     const tt::tt_metal::WorkloadDescriptor no_workload_descriptor;
     for (const auto& range : tensor_coords.ranges()) {
         auto desc = ProgramFactory::create_descriptor(args, tensor_args, output, range.start_coord());
-        tt::tt_metal::Program program{desc};
+        tt::tt_metal::Program program(*tensor_args.cache.device(), desc);
         auto collected = descriptor_adapter_t::collect_tensor_buffers(tensor_args, output, no_workload_descriptor);
         auto bindings = tt::tt_metal::resolve_bindings(program, desc, collected.buffers, collected.num_input_buffers);
         workload.add_program(range, std::move(program));

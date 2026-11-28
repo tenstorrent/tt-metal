@@ -6,7 +6,7 @@
 #include "typecast_kernel_format.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/memory/buffer/mesh_buffer.hpp>
@@ -69,10 +69,12 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
+        const uint32_t l1_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
         TT_FATAL(
-            (shard_spec.shape[1] * datum_size(act_df)) % hal::get_l1_alignment() == 0,
+            (shard_spec.shape[1] * datum_size(act_df)) % l1_alignment == 0,
             "Shard width should be multiple of {} to satisfy L1 alignment",
-            hal::get_l1_alignment());
+            l1_alignment);
         size_t shard_height = shard_spec.shape[0];
         size_t shard_width = shard_spec.shape[1];
         size_t shard_size_in_bytes = shard_height * shard_width * datum_size(act_df);

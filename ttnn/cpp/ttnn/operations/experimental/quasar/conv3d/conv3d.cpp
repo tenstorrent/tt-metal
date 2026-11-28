@@ -8,7 +8,7 @@
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/common/constants.hpp"
 #include <numeric>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -69,7 +69,8 @@ ttnn::Tensor conv3d(
     // conv compute -- a mismatch is near-zero PCC (#47316) -- and the minimal block keeps large
     // kernels within L1 (#42146).
     const uint32_t default_c_in_block = ttnn::operations::experimental::quasar::conv3d::default_c_in_block(
-        kernel_size_[0] * kernel_size_[1] * kernel_size_[2]);
+        kernel_size_[0] * kernel_size_[1] * kernel_size_[2],
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment());
 
     auto config = config_opt.value_or(ttnn::experimental::prim::qsr::Conv3dConfig(
         tt::tt_metal::DataType::BFLOAT16,                        // weights_dtype

@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 #include <algorithm>
 #include <array>
@@ -32,24 +32,29 @@ using ttnn::operations::experimental::quasar::transpose_op::is_native_transpose_
 // to_memory_config hangs the device moving RM data into or out of a shard wider than the tensor row
 // when the shard row isn't L1 aligned, in L1 and DRAM alike.
 inline void check_stageable_shard_row(
-    const MemoryConfig& mc, uint32_t tensor_width, uint32_t element_size, const char* side) {
+    const MemoryConfig& mc, uint32_t tensor_width, uint32_t element_size, uint32_t l1_alignment, const char* side) {
     if (!mc.shard_spec().has_value()) {
         return;
     }
     const uint32_t shard_width = mc.shard_spec()->shape[1];
     TT_FATAL(
-        shard_width <= tensor_width || (shard_width * element_size) % tt::tt_metal::hal::get_l1_alignment() == 0,
+        shard_width <= tensor_width || (shard_width * element_size) % l1_alignment == 0,
         "Row-major {} shard width {} exceeds the tensor width {} and its row of {} B is not a multiple of the {} B "
         "L1 alignment",
         side,
         shard_width,
         tensor_width,
         shard_width * element_size,
-        tt::tt_metal::hal::get_l1_alignment());
+        l1_alignment);
 }
 
 inline Tensor unshard_for_staging(const Tensor& t) {
-    check_stageable_shard_row(t.memory_config(), t.logical_shape()[-1], t.element_size(), "input");
+    check_stageable_shard_row(
+        t.memory_config(),
+        t.logical_shape()[-1],
+        t.element_size(),
+        tt::tt_metal::experimental::get_device_properties(*t.device()).node_local_mem_alignment(),
+        "input");
     return ttnn::to_memory_config(t, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1), std::nullopt);
 }
 
@@ -60,7 +65,11 @@ inline Tensor reshard_staged_output(
     const MemoryConfig& output_mc,
     const std::optional<MemoryConfig>& normalized_mc = std::nullopt) {
     check_stageable_shard_row(
-        normalized_mc.value_or(output_mc), staged.logical_shape()[-1], staged.element_size(), "output");
+        normalized_mc.value_or(output_mc),
+        staged.logical_shape()[-1],
+        staged.element_size(),
+        tt::tt_metal::experimental::get_device_properties(*staged.device()).node_local_mem_alignment(),
+        "output");
     return ttnn::to_memory_config(staged, output_mc, std::nullopt);
 }
 
@@ -96,8 +105,9 @@ inline Tensor permute_with_subaligned_output(
         if (!mc.has_value() || !mc->is_sharded() || !mc->shard_spec().has_value()) {
             return false;
         }
-        const uint32_t alignment = mc->buffer_type() == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                                         : tt::tt_metal::hal::get_l1_alignment();
+        const auto props = tt::tt_metal::experimental::get_device_properties(*a.device());
+        const uint32_t alignment =
+            mc->buffer_type() == BufferType::DRAM ? props.dram_alignment() : props.node_local_mem_alignment();
         return (mc->shard_spec()->shape[1] * a.element_size()) % alignment != 0;
     };
 
@@ -405,9 +415,10 @@ ttnn::Tensor transpose_impl(
                     input_orientation_hint,
                     OutputTiling::RowMajor,
                     memory_config_arg->buffer_type());
+                const auto props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
                 const uint32_t alignment = memory_config_arg->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                               ? tt::tt_metal::hal::get_dram_alignment()
-                                               : tt::tt_metal::hal::get_l1_alignment();
+                                               ? props.dram_alignment()
+                                               : props.node_local_mem_alignment();
                 const bool subaligned_synth_row = (spec.shape[1] * input_tensor.element_size()) % alignment != 0;
                 auto synthesized_mc = tt::tt_metal::MemoryConfig(
                     memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));

@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -57,6 +57,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     // Keep explicit bool init to match legacy behavior which forced it true
     bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
 
@@ -129,7 +130,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
         // Adjust accordingly to l1 alignment, do it for all archs
         if (keep_l1_aligned) {
-            padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
+            padded_offset_bytes = tt::align(input_unit_size, props.node_local_mem_alignment());
         } else {
             padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
@@ -141,10 +142,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // alignment.
     const bool mx_tiles = tt::tt_metal::is_mx(input.dtype()) || tt::tt_metal::is_mx(output.dtype());
     uint32_t output_page_size =
-        tt::align(output_unit_size, mx_tiles ? hal::get_l1_alignment() : dst_buffer->alignment());
+        tt::align(output_unit_size, mx_tiles ? props.node_local_mem_alignment() : dst_buffer->alignment());
 
-    uint32_t dram_alignment = hal::get_dram_alignment();
-    uint32_t l1_alignment = hal::get_l1_alignment();
+    uint32_t dram_alignment = props.dram_alignment();
+    uint32_t l1_alignment = props.node_local_mem_alignment();
     uint32_t num_trids = 4;
 
     // The scratch DFB is only used by the stick-layout (ROW_MAJOR) reader. Match the legacy
@@ -152,7 +153,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     bool use_scratch = (src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned;
     uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
 
-    uint32_t input_page_size = tt::align(input_unit_size, mx_tiles ? hal::get_l1_alignment() : src_buffer->alignment());
+    uint32_t input_page_size =
+        tt::align(input_unit_size, mx_tiles ? props.node_local_mem_alignment() : src_buffer->alignment());
 
     bool is_tile = (input.layout() == Layout::TILE);
 

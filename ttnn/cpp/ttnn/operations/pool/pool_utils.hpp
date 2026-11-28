@@ -8,6 +8,8 @@
 #include <map>
 #include <optional>
 
+#include <tt-umd/types/arch.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -101,6 +103,9 @@ struct PoolCBSizes {
     // Config tensor L1 CB size (for DRAM config tensors)
     uint32_t config_tensor_l1_size{};
 
+    // DRAM alignment of the op's device, used to align the globally-allocated CB sizes
+    uint32_t dram_alignment{};
+
     // Sum of all locally-allocated (non-tensor-backed) CB sizes
     uint32_t local_cb_total() const;
     // Sum of all globally-allocated (tensor-backed) CB sizes, with alignment
@@ -118,6 +123,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     const DataType& output_dtype,
     const std::array<uint32_t, 2>& output_shard_shape,
     bool config_tensor_in_dram,
+    uint32_t dram_alignment,
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
     std::optional<uint32_t> scalar_config_actual_page_size = std::nullopt,
     uint32_t pre_tilize_tile_rows = 1);
@@ -159,6 +165,7 @@ std::optional<sliding_window::ParallelConfig> determine_valid_parallel_config(
     uint32_t act_block_h_override = 0);
 
 std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_shard(
+    const tt::tt_metal::distributed::MeshDevice& device,
     const DataType& input_dtype,
     const Layout& input_layout,
     CoreCoord compute_grid_size,
@@ -172,7 +179,7 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     bool config_tensor_in_dram,
     uint32_t pre_tilize_tile_rows = 1);
 
-DataType get_index_data_type(uint32_t in_h, uint32_t in_w);
+DataType get_index_data_type(uint32_t in_h, uint32_t in_w, tt::ARCH arch);
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
@@ -185,9 +192,11 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout);
+    const Layout& output_layout,
+    tt::ARCH arch);
 
 pool_op_l1_usage calculate_L1_usage(
+    const tt::tt_metal::distributed::MeshDevice& device,
     DataType input_dtype,
     uint32_t in_h,
     uint32_t in_w,
@@ -223,6 +232,7 @@ struct pool2d_slice_l1_usage {
 
 // Calculate complete L1 usage for a pool2d slice (for DRAM slicing auto-determination)
 pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
+    const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t slice_input_height,
     uint32_t slice_input_width,
     uint32_t slice_output_height,

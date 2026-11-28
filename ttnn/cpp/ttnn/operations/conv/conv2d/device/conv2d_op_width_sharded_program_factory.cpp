@@ -17,6 +17,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
@@ -419,6 +420,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // populated by the reader kernel.
     const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
+        *device,
         compute_kernel_config,
         block_config,
         p_config,

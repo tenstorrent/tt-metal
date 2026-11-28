@@ -11,6 +11,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "convert_to_hwc_program_factory.hpp"
 
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim::qsr {
@@ -52,7 +54,9 @@ tt::tt_metal::TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
     const int HW = shape[3];
 
     // Output needs to be multiple of alignment requirement to guarantee aligned copies
-    const auto alignment_elements = compute_alignment_requirement_in_elements(args.dtype);
+    const auto alignment_elements = compute_alignment_requirement_in_elements(
+        args.dtype,
+        tt::tt_metal::experimental::get_device_properties(*tensor_args.input.device()).node_local_mem_alignment());
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return tt::tt_metal::TensorSpec(

@@ -11,7 +11,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -224,8 +224,10 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     const uint32_t src_stride_bytes = input.mesh_buffer().aligned_page_size();
     const uint32_t dst_stride_bytes = output.mesh_buffer().aligned_page_size();
     const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
     TT_FATAL(
-        begins_bytes % ::hal::get_l1_alignment() == 0,
+        begins_bytes % l1_alignment == 0,
         "qsr::SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
         begins_bytes);
 

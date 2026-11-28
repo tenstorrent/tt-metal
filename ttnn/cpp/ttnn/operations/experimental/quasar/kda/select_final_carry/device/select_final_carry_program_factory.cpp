@@ -9,7 +9,7 @@
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -82,8 +82,8 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     // One scratch page receives each chronology scalar read from DRAM before it carries the derived mode, so it is
     // aligned for both DRAM reads and L1.
-    const uint32_t mode_page_bytes =
-        std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
+    const auto props = tt::tt_metal::experimental::get_device_properties(*mesh);
+    const uint32_t mode_page_bytes = std::max(props.dram_alignment(), props.node_local_mem_alignment());
     const auto state_format = tt::tt_metal::datatype_to_dataformat_converter(in.prefix_final.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         // Two of the reader's eight-packet batches (reader_select_final_carry.cpp).

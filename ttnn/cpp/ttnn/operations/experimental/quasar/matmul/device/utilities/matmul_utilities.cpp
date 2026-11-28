@@ -8,7 +8,7 @@
 #include <set>
 
 #include "tt-metalium/mesh/allocator.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "tt-metalium/utils/work_split.hpp"
@@ -99,12 +99,13 @@ tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_
     }
 }
 
-uint32_t get_interleaved_tile_stride(uint32_t tile_size) {
+uint32_t get_interleaved_tile_stride(const tt::tt_metal::distributed::MeshDevice& device, uint32_t tile_size) {
     // NOC_DRAM_READ_ALIGNMENT_BYTES (noc_parameters.h), which the readers use. Hal::get_read_alignment is not
     // reachable from TTNN (all_gather / concat note the same gap); Quasar is the one architecture whose NOC reads
     // at a finer grain than its DRAM allocation alignment.
     const uint32_t noc_dram_read_alignment =
-        tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR ? 1 : tt::tt_metal::hal::get_dram_alignment();
+        device.arch() == tt::ARCH::QUASAR ? 1
+                                          : tt::tt_metal::experimental::get_device_properties(device).dram_alignment();
     return tt::align(tile_size, noc_dram_read_alignment);
 }
 

@@ -69,6 +69,7 @@ struct ConvertToHWCProgramFactory {
         Tensor& tensor_return_value);
 };
 
-uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype);
+// `l1_alignment_bytes` is the L1 alignment of the device the op runs on.
+uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype, uint32_t l1_alignment_bytes);
 
 }  // namespace ttnn::experimental::prim::qsr
