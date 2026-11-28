@@ -255,6 +255,69 @@ jobs:
           cp "stage2_baseline/${ARCH}/baseline_metadata.json" baseline_metadata.json
           echo "true" > have_baseline.txt
 
+      # The stage 2 read takes no wait, so behind an entry that changes LLK code it is stale: the
+      # warehouse does not have that entry yet. Stage 1 then counts the regressions of the entry in
+      # front against this one. By now that entry's queue run has usually measured, so stage 1 takes
+      # its perf data instead. Stage 2 keeps the read its legs used.
+      - name: Find the queue run at the baseline the stage 2 read missed
+        id: queue_base
+        if: >-
+          ${{ github.event_name == 'merge_group'
+          && hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          WANT=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('expected_commit', ''))")
+          [ -n "$WANT" ] || exit 0
+          # It started before this entry, so its legs end a few minutes before ours; wait up to 5 minutes.
+          # The queue also starts a run that skips everything when it drops an entry, so check each run.
+          for _ in 1 2 3 4 5 6; do
+            RUNNING=false
+            for RUN in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/merge-gate.yaml/runs?head_sha=${WANT}&event=merge_group" \
+                --jq '.workflow_runs[].id'); do
+              LEGS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN}/jobs?per_page=100" \
+                --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .conclusion // \"running\"")
+              if [ -n "$LEGS" ] && ! grep -qvx success <<< "$LEGS"; then
+                echo "Stage 1 compares against queue run ${RUN} at ${WANT}."
+                echo "run_id=${RUN}" >> "$GITHUB_OUTPUT"
+                echo "sha=${WANT}" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              grep -qx running <<< "$LEGS" && RUNNING=true
+            done
+            [ "$RUNNING" = true ] || break
+            sleep 60
+          done
+          echo "::warning::No complete ${ARCH} queue run at ${WANT}; stage 1 keeps the stale baseline."
+
+      - name: Download the perf data of that queue run
+        id: queue_base_download
+        if: steps.queue_base.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ inputs.arch }}-*
+          merge-multiple: true
+          path: queue_base_perf
+          run-id: ${{ steps.queue_base.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Take the perf data of that queue run as the baseline
+        if: steps.queue_base_download.outcome == 'success'
+        env:
+          RUN: ${{ steps.queue_base.outputs.run_id }}
+          SHA: ${{ steps.queue_base.outputs.sha }}
+        run: |
+          if [ -z "$(find queue_base_perf -name '*.csv' -not -name '*.post.csv' -print -quit)" ]; then
+            echo "::warning::Queue run ${RUN} has no perf data; stage 1 keeps the stale baseline."
+            exit 0
+          fi
+          rm -rf baseline_perf
+          mv queue_base_perf baseline_perf
+          echo "{\"commit_sha\": \"${SHA}\", \"run_id\": \"${RUN}\"}" > baseline_metadata.json
+
       - name: Read the baseline from the warehouse
         if: >-
           ${{ inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
@@ -521,7 +584,10 @@ jobs:
           LEGS=$(gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
-          GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
+          # The legs compared against the stage 2 read, also when stage 1 took a queue run instead.
+          META=stage2_baseline/${ARCH}/baseline_metadata.json
+          [ -f "$META" ] || META=baseline_metadata.json
+          GATE_BASE=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('commit_sha', ''))" "$META")
           # Stage 2 decides a stage-1 regression: it exits non-zero when a candidate is a confirmed
           # regression, needs review, or was not re-measured. A clean stage 1 has nothing to re-measure.
           STAGE2_EXIT=0
