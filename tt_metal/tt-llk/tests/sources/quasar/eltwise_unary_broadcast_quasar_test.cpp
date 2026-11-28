@@ -43,6 +43,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Unpack to dest must use the num tiles per unpack parameter in order to unpack multiple tiles per Dest bank
     const std::uint32_t num_tiles_per_unpack = unpack_to_dest ? tiles_in_block : 1;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
+    {
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+    }
     {
         START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
@@ -70,12 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::program_bfd<unp_res>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = unp_res;
 
-        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-        {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-        else
+        if constexpr (!(is_fp32_dest_acc_en && !unpack_to_dest))
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
@@ -192,6 +193,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -211,8 +213,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // of the destination register.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
-
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         if constexpr (unpack_to_dest)
         {
@@ -341,6 +341,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    constexpr std::uint8_t bfd_pack         = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles*/);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math↔pack handshake.
@@ -357,12 +362,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {
