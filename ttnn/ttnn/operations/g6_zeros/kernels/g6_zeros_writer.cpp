@@ -70,22 +70,17 @@ void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
-    const auto output = TensorAccessor(output_args, output_addr, aligned_page_size);
-    ASSERT(output.contiguous_page_stride() == num_banks);
-
     Noc noc;
     CircularBuffer zero_source(cb_zero_source);
-    const uint32_t zero_src_addr = zero_source.get_write_ptr();
-
-    uint32_t max_run_bytes = 0;
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        const uint32_t run_bytes = block_core_slots(block_idx) * aligned_page_size;
-        max_run_bytes = run_bytes > max_run_bytes ? run_bytes : max_run_bytes;
-    }
-    const uint32_t fill_bytes = max_run_bytes < zero_source_bytes ? max_run_bytes : zero_source_bytes;
 
     {
         DeviceZoneScopedN("G6Z-FILL");
+        uint32_t max_run_bytes = 0;
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            const uint32_t run_bytes = block_core_slots(block_idx) * aligned_page_size;
+            max_run_bytes = run_bytes > max_run_bytes ? run_bytes : max_run_bytes;
+        }
+        const uint32_t fill_bytes = max_run_bytes < zero_source_bytes ? max_run_bytes : zero_source_bytes;
         noc.async_write_zeros(zero_source, fill_bytes);
     }
     {
@@ -94,6 +89,9 @@ void kernel_main() {
     }
     {
         DeviceZoneScopedN("G6Z-STORE");
+        const auto output = TensorAccessor(output_args, output_addr, aligned_page_size);
+        ASSERT(output.contiguous_page_stride() == num_banks);
+        const uint32_t zero_src_addr = zero_source.get_write_ptr();
         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             store_bank_run(output, zero_src_addr, block_idx);
         }

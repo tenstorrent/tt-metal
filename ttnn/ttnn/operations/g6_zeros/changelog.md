@@ -1,13 +1,33 @@
-# g6_zeros changelog
+# Changelog: g6_zeros
 
-## Phase 0 (implementer)
+## Phase 0 — Core Implementation
+- **Date**: 2026-11-27
+- **What was done**: initial implementation via the incremental pipeline (planner → implementer → verifier). Regime `bank_run`: one writer kernel (BRISC, NoC1). 104 writer cores (13 per DRAM bank), each streaming one contiguous same-bank slot run from a 16 KiB core-local zero source, with one write barrier.
+- **SUPPORTED at Phase 0**: dtype=[float32], layout=[TILE]. No op-specific axes.
+- **Accuracy achieved**: exact. PCC=1.0, max_abs_err=0.0, rms_err=0.0, max ULP 0, no -0.0 (measured on 2 supported shapes via test_g6_zeros_precision_baseline.py). bf16 p4 and bf8b p1 are also exact past `validate()` (probe_029, `--dev`).
+- **Golden suite at Phase 0**: 13 / 19 cells passing per `verifier_report.json`. The other 6 are `xfail_expected` (bf16 / bf8b → Refinement 1). 0 supported_fail, 0 xpass_drift, 0 xfail_wrong_mode.
+- **Device time**: p1 bf8b 1,102,674 ns (259 GB/s; target ≤ 837,190 ns → Refinement 2), p2 48,693 ns, p3 24,827 ns, p4 1,603 ns.
+- **Issues encountered (verifier fixes)**:
+  - one plan derivation shared by `describe_plan` and dispatch, cross-checked against the buffer;
+  - knobs resolved at call time and included in the host plan-cache key;
+  - all kernel work moved inside named profiler zones (BB-21);
+  - a cache-hit address re-patch test added;
+  - four stale debug/perf test files that targeted superseded APIs removed;
+  - the precision baseline's host memory bounded.
+- **Tests added**: test_g6_zeros.py (acceptance, + cache-hit address case), test_g6_zeros_precision_baseline.py, test_g6_zeros_perf.py (knob sweep harness).
+
+### Implementer build log (Phase 0)
+
+Three builds, in order. The last one, "Rebuild from the bank-major zero-run design", is the current code. The first two were superseded, and their knob names (`Knobs`, `CORE_ORDER`, `WRITER_CORES_PER_BANK`) no longer exist. Their measurements agree with the verifier's re-measurement on the current kernel: bank-affine, one writer per bank, gives about 559.6 µs on p1.
+
+### Phase 0 (implementer)
 
 Built the design's single regime (bank-run zero write): one writer kernel (RISCV_0, NoC1), one
 `cb_zero_source` of `Z` bytes zeroed once per core by NoC loopback, each core's share of one DRAM
 bank written as single-packet writes from that source, one write barrier. No reader or compute
 kernel (the design's kernel set). SUPPORTED: `dtype` float32, `layout` TILE.
 
-### Deviation from the design's Phase 0 knob values (measured)
+#### Deviation from the design's Phase 0 knob values (measured)
 
 The design's Phase 0 values were `num_worker_cores` = full grid (110) with round-robin `c mod B`
 placement and `Z = min(burst, largest run)`. It listed core count, placement and `Z` as perf lamps
@@ -40,13 +60,13 @@ dram_adjacent vs 1112 us at W=110; p2 26.2 vs 49.2 us.
 The design's bank-affine split, bank-major range interface, block schedule and kernel are
 unchanged; only the host knob defaults moved.
 
-### Kernel check for dtypes outside Phase 0
+#### Kernel check for dtypes outside Phase 0
 
 `test_g6_zeros_debug.py::test_dirty_destination_outside_phase0` runs p4 bfloat16 and p1 bfloat8_b
 through the same program past `validate()`, over a poisoned range: every element reads back +0.0.
 Adding those dtypes is a SUPPORTED-only change.
 
-## Rebuild from the full-grid bank-run design (implementer)
+### Rebuild from the full-grid bank-run design (implementer)
 
 Rebuilt against `op_design.md` (`bank_run_write`): bank-major position space, balanced contiguous
 ranges from `ttnn.split_work_to_cores(..., row_wise=True)`, per-core RT `(q_begin, q_count)`,
@@ -65,7 +85,7 @@ describe:
 - `CORE_ORDER`: `row_major` (design Phase 0) or `bank_affine` (each bank's ranges go to the cores
   nearest its NoC1 endpoint, `get_optimal_dram_bank_to_logical_worker_assignment(NOC_1, (0,0))`).
 
-### Deviation from the design's Phase 0 knob values (measured)
+#### Deviation from the design's Phase 0 knob values (measured)
 
 Device kernel duration, ns, Blackhole p150 (8 DRAM banks, 11x10 grid), one fresh run per variant.
 Every variant launches the same 110-core rectangle.
@@ -97,7 +117,7 @@ Every variant launches the same 110-core rectangle.
 Lamps not built: second NoC (`writer_riscs = 2`) — p1/p2/p3 are at the DRAM peak, nothing to gain;
 overlap of the fill with the first writes — the 4 KiB source already makes the fill 8 loopback reads.
 
-### Kernel reach outside Phase 0
+#### Kernel reach outside Phase 0
 
 `test_g6_zeros_bank_run_debug.py` runs the program past `validate()` over a poisoned range: p4
 bfloat16, p1 bfloat8_b (1088 B pages straddle packets), rectangles below the bank count (up to 8
@@ -110,7 +130,7 @@ imports; it is kept as a record. `test_g6_zeros_perf_knobs.py` runs against the 
 the public entry point; its `BANKS_PER_CORE` case (every core walks every bank, the design's rejected
 `page_id_split_bank_coalesced`) was dropped.
 
-## Rebuild from the bank-major zero-run design (implementer)
+### Rebuild from the bank-major zero-run design (implementer)
 
 Built the design's single regime `bank_run` with its Phase 0 values unchanged: one writer kernel
 (BRISC, NoC1), no reader or compute kernel. `writers_per_bank = max(1, min(grid // N, ceil(P / N)))`

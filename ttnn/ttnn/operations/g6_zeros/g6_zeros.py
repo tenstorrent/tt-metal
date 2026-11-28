@@ -17,6 +17,7 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_zeros_program_descriptor import (
     create_program_descriptor,
+    knob_values,
     plan_bank_runs,
     set_output_address,
 )
@@ -115,7 +116,7 @@ def validate(shape, *, dtype, layout, device, memory_config):
 # Host plan cache (BB-07, BB-08)
 # ---------------------------------------------------------------------------
 # One (plan, ProgramDescriptor) per key. A repeat call patches the output address and dispatches;
-# it never rebuilds the descriptor. Every shape- or dtype-dependent value is in the key.
+# it never rebuilds the descriptor. Every shape-, dtype- or knob-dependent value is in the key.
 
 _PLAN_CACHE = {}
 
@@ -126,32 +127,25 @@ def _device_key(device):
 
 
 def _plan_key(shape, dtype, device):
-    return (_device_key(device), tuple(int(d) for d in shape), dtype)
+    return (_device_key(device), tuple(int(d) for d in shape), dtype, knob_values())
 
 
 def _num_banks(device):
     return ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
 
 
-def _plan_for_output(output, device):
-    return plan_bank_runs(
-        output.buffer_num_pages(),
-        _num_banks(device),
-        output.buffer_aligned_page_size(),
-        device.compute_with_storage_grid_size(),
-    )
+def _plan_for(shape, dtype, device):
+    """The one plan derivation, shared by describe_plan() and the dispatch path."""
+    num_pages = int(shape[0]) * int(shape[1]) * -(-int(shape[2]) // 32) * -(-int(shape[3]) // 32)
+    dram_alignment = ttnn.get_dram_alignment()
+    aligned_page_size = -(-ttnn.tile_size(dtype) // dram_alignment) * dram_alignment
+    return plan_bank_runs(num_pages, _num_banks(device), aligned_page_size, device.compute_with_storage_grid_size())
 
 
 def describe_plan(shape, *, dtype, device) -> dict:
     """Report the plan a call with these arguments selects: regime, knobs, and every core's role."""
     key = _plan_key(shape, dtype, device)
-    if key in _PLAN_CACHE:
-        plan = _PLAN_CACHE[key][0]
-    else:
-        num_pages = int(shape[0]) * int(shape[1]) * -(-int(shape[2]) // 32) * -(-int(shape[3]) // 32)
-        dram_alignment = ttnn.get_dram_alignment()
-        aligned_page_size = -(-ttnn.tile_size(dtype) // dram_alignment) * dram_alignment
-        plan = plan_bank_runs(num_pages, _num_banks(device), aligned_page_size, device.compute_with_storage_grid_size())
+    plan = _PLAN_CACHE[key][0] if key in _PLAN_CACHE else _plan_for(shape, dtype, device)
 
     roles = {}
     for x in range(plan.grid[0]):
@@ -189,7 +183,13 @@ def g6_zeros(shape, *, dtype, layout, device, memory_config) -> ttnn.Tensor:
     key = _plan_key(shape, dtype, device)
     cached = _PLAN_CACHE.get(key)
     if cached is None:
-        plan = _plan_for_output(output, device)
+        plan = _plan_for(shape, dtype, device)
+        # The allocator's buffer is the source of truth; a host derivation that disagrees would
+        # plan runs over the wrong pages.
+        assert plan.num_pages == output.buffer_num_pages(), "g6_zeros: host page count disagrees with the buffer"
+        assert (
+            plan.aligned_page_size == output.buffer_aligned_page_size()
+        ), "g6_zeros: host page stride disagrees with the buffer"
         cached = (plan, create_program_descriptor(output, plan))
         _PLAN_CACHE[key] = cached
     program_descriptor = cached[1]

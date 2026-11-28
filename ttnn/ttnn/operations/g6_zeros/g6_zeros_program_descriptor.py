@@ -67,16 +67,30 @@ def bank_slots(num_pages: int, num_banks: int, bank: int) -> int:
     return num_pages // num_banks + (1 if bank < num_pages % num_banks else 0)
 
 
+def knob_values() -> tuple:
+    """The module knobs as they stand now. Part of the host plan-cache key: a turned knob changes the plan."""
+    return (WRITERS_PER_BANK, ZERO_SOURCE_BYTES, ZERO_SOURCE_REGIONS)
+
+
 def plan_bank_runs(
     num_pages: int,
     num_banks: int,
     aligned_page_size: int,
     grid,
     *,
-    writers_per_bank=WRITERS_PER_BANK,
-    zero_source_bytes: int = ZERO_SOURCE_BYTES,
-    zero_source_regions: int = ZERO_SOURCE_REGIONS,
+    writers_per_bank=None,
+    zero_source_bytes=None,
+    zero_source_regions=None,
 ) -> WriterPlan:
+    # Knobs left as None resolve from the module constants at call time, not at import, so the
+    # constants stay the single source even when a harness turns them after import.
+    if writers_per_bank is None:
+        writers_per_bank = WRITERS_PER_BANK
+    if zero_source_bytes is None:
+        zero_source_bytes = ZERO_SOURCE_BYTES
+    if zero_source_regions is None:
+        zero_source_regions = ZERO_SOURCE_REGIONS
+
     grid_cores = grid.x * grid.y
     assert grid_cores >= num_banks, f"g6_zeros: grid of {grid_cores} cores is smaller than {num_banks} DRAM banks"
     dram_alignment = ttnn.get_dram_alignment()

@@ -160,6 +160,26 @@ def test_g6_zeros_new_storage(device, expect_error):
     assert_all_zero_bits(second, shape, dtype)
 
 
+def test_g6_zeros_cache_hit_new_address(device, expect_error):
+    """A repeat call reuses the cached descriptor; its output address must be re-patched.
+
+    The first output stays alive, so the second call lands on a different, poisoned range. A stale
+    address would zero the first buffer again and leave the poison in the second.
+    """
+    shape, dtype = P3
+    require_supported(shape, dtype, device, expect_error)
+    torch.manual_seed(7)
+    first = run_g6_zeros(shape, dtype, device)
+    address = poison_freed_range(shape, dtype, device)
+    assert address != first.buffer_address()
+    second = run_g6_zeros(shape, dtype, device)
+    assert (
+        second.buffer_address() == address
+    ), f"output at {second.buffer_address():#x}, poisoned range at {address:#x}; the case would test nothing"
+    assert_all_zero_bits(second, shape, dtype)
+    assert_all_zero_bits(first, shape, dtype)
+
+
 def test_g6_zeros_program_cache_reuse(device, expect_error):
     """p3, p2, p3 in one process: a repeated shape adds no program-cache entry and still writes zeros."""
     for shape, dtype in (P3, P2):

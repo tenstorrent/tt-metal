@@ -1,0 +1,78 @@
+{
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op[16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op[8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op[32831x1x32x256-dtype=BFLOAT8_B-layout=TILE]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op[1x4x256x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose0-32831x1x32x256-dtype=BFLOAT8_B-layout=TILE]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose1-16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose2-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose3-1x4x256x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose4-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose5-16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose6-1x4x256x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose7-32831x1x32x256-dtype=BFLOAT8_B-layout=TILE]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose8-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose9-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_regression.py::test_dirty_destination[8x12x128x128]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_regression.py::test_dirty_destination[16x12x128x128]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_regression.py::test_repeat": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_regression.py::test_cache_order": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_zeros/test_regression.py::test_new_storage": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  }
+}
