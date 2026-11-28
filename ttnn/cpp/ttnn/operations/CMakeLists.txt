@@ -48,6 +48,10 @@ add_subdirectory(uniform)
 add_subdirectory(grouped_matmul)
 add_subdirectory(fabric_reduce_scatter)
 add_subdirectory(layer_send)
+add_subdirectory(pair_pool)
+add_subdirectory(pack_fp8_rows)
+add_subdirectory(unpack_fp8_rows)
+add_subdirectory(ckv_bfp4_rows)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
 # one target instead of enumerating these op libraries itself. Add/remove
@@ -86,6 +90,10 @@ target_link_libraries(
         TTNN::Ops::GroupedMatmul
         TTNN::Ops::FabricReduceScatter
         TTNN::Ops::LayerSend
+        TTNN::Ops::PairPool
+        TTNN::Ops::PackFp8Rows
+        TTNN::Ops::UnpackFp8Rows
+        TTNN::Ops::CkvBfp4Rows
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -130,4 +138,8 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::GroupedMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::FabricReduceScatter>
         $<TARGET_OBJECTS:TTNN::Ops::LayerSend>
+        $<TARGET_OBJECTS:TTNN::Ops::PairPool>
+        $<TARGET_OBJECTS:TTNN::Ops::PackFp8Rows>
+        $<TARGET_OBJECTS:TTNN::Ops::UnpackFp8Rows>
+        $<TARGET_OBJECTS:TTNN::Ops::CkvBfp4Rows>
 )

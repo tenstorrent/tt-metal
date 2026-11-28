@@ -18,7 +18,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
-#include "../../ckv_bfp4_ttnn/kernels/ckv_round_bfp4.hpp"
+#include "../../../ckv_bfp4_ttnn/kernels/ckv_round_bfp4.hpp"
 
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_params.h"

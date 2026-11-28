@@ -1979,3 +1979,55 @@
   metrics only make sense for a port. The owner decides whether to (a) drop NC.4, (b) re-point it at a prepared
   program that does run on the block path (none in the MoE block: its ops are C++), or (c) port the carried path anyway.
 - No device run, no code change. Report: results/NC.4_layer.md. Known issue DS41-401.
+
+## NC.5 (perf, attempt 1): the low-bit forks to native C++ (pair_pool, pack / unpack_fp8_rows, ckv_bfp4_rows)
+
+- OV-82 (which programs run on the shipped path; checked before any port):
+  - pair_pool: runs. TINY_KERNELS=on (default) -> tt/compressor.py TtCompressor._pool (ratio-2 KV sources 2 / 8 / 14),
+    x [1, 1, S/SP, 1024] fp32 (ATTN_SP32 full rows: 1024 rows at 8192, 640 at 5120). X.10 census lists
+    ttnn.bringup.pair_pool a layer.
+  - pack_fp8_rows: runs. INDEX_K_SERVED=fp8_row192 (default) -> compressor.fp8_rows_tile (the served Blaze index rows).
+  - unpack_fp8_rows: runs. INDEX_K_SOURCE=served (default) -> tt/index_keys._decode; with POS_DYNAMIC=on (default and
+    every packed gate) whole_grid=True and COMMON_VALUE_SLOTS=on -> common_values=True.
+  - ckv_bfp4 (the plain entry): DROPPED. HISTORY_FORMAT=bfp4 packs the history in tt/history_gather._pack, which under
+    POS_DYNAMIC=on (default; page_copy.dyn("hist") true outside fixed-lane chunks) calls ttnn.bringup.ckv_bfp4_rows
+    (_pack_rows, MB.4). The plain ckv_bfp4 program runs only in fixed-lane packed chunks (PACKED=on with
+    PACKED_GLUED=off; every packed gate sets PACKED_GLUED=on) and on the non-default WINDOW_KV_FORMAT=bfp8_* /
+    CKV_FORMAT=bfp4_rows paths (attention.py / compressor.py call sites). The census lines naming ckv_bfp4 (X.10,
+    PB.9X `_pack_fixed`) date from before MB.4. Ported instead: ckv_bfp4_rows, the program the history pack runs.
+  - bfp_round (same fork) runs on the shipped path (tt/indexer.py index query) but the task does not name it: not ported.
+- Expected saving a chunk (before measuring; perf_guide: host-only, the same kernels): device ~0; host ~30-45 us a call
+  (DS41-398; the pair_pool port's own bench: 74.5 -> 41.5 us at 640 x 1024) x ~3 pair_pool + ~4 pack + ~8 unpack + ~8
+  history pack calls a single chunk (layers 0-20 under DECODER_SKIP=decode; KV sources 2 / 8 / 14 / 20) = ~0.7-1.0 ms
+  host a chunk; packed glued 4 x 2k (24 decodes a chunk, PB.9X) ~1.5 ms.
+- Ports (tt_ops_code_gen native_migrate in /scratch/dnijemcevic/native/tt-metal; dnijemcevic/native_gmm fast-forwarded
+  to 8c35cf154d7; each run stacked on the previous port branch; tests.yaml golden = the entry's fork unit test;
+  PATH must hold the checkout's python_env/bin, else "missing tools: clang-tidy"; `run --work-dir <dir>` reads
+  init.json, `run --op` alone does not): pair_pool 27.1 min ported; pack_fp8_rows 28.7 min ported; unpack_fp8_rows
+  first run not_ported in 10 min (its acceptance red on its base: the pack port had moved unpack's kernels and broken
+  the compute kernel's relative include of ckv_round_bfp4.hpp, DS41-402), fixed on the pack branch (513891f1a7d:
+  kernels back in fp8_rows_ttnn/kernels, include root-relative) and rerun with --fresh: 27.6 min ported;
+  ckv_bfp4_rows 22.9 min ported. One entry a run: the tool ports `<pkg>:<op>` only (fp8_rows: two runs).
+- Brought in with `git diff | git apply` (no conflicts) + `cmake --build build --target install`. On top: (1)
+  ckv_bfp4_ttnn/kernels restored from 8c35cf154d7 (the tool moved the whole dir; ckv_bfp4 / bfp_round stay Python and
+  bfp_round runs on the shipped indexer path; rotary_embedding_indexed and unpack's compute include
+  ckv_round_bfp4.hpp from there) with ckv_bfp4.py's KERNELS back to ./kernels, and the C++ op's unused kernel copies
+  (bfp_round_*, ckv_bfp4_reader) dropped; (2) test-only generic/ copies of the three pre-port Python modules with
+  their pre-port kernels (unpack's include fixed for the deeper dir). Model call sites unchanged (same import paths,
+  arguments, return values; index_keys._has_common_values still finds `common_values` in the C++ op's docstring).
+- No setting: the allowed paths exclude tt/settings.py (as NC.1-NC.3); the old routes are reachable for the test only.
+- Gate test tests/native/test_native_lowbit.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads, 76 s): 10
+  cases at the model's calls (pair_pool 1024 / 640 rows; pack 512 / 1024 / 320 / 640 rows; unpack whole-grid +
+  common-values on ND-sharded served rows, history and chunk ranges; ckv_bfp4_rows on an ND-sharded slab, history
+  and tail). Mismatch / repeat / cache growth 0 in every case (gate PASS, first run). Host a warm call native vs
+  Python: pair_pool 24.1 / 73.3 and 20.0 / 60.2 us; pack 30.6-31.9 / 83.6-88.7; unpack 20.4-21.4 / 63.8-64.7;
+  ckv_bfp4_rows 20.0-20.2 / 58.7-62.7. Device equal in every case. Saving a single 8192 chunk (call counts estimated:
+  3 / 4 / 8 / 8) ~1.0 ms host, device 0 (expected 0.7-1.0). Report results/NC.5_layer.md.
+- Cores (rule 18): unchanged (no matmul; the same grids as the Python programs, capped by the model's max_grid).
+- Rule 20, per-chunk values touched: unpack's row_lo / row_hi / batch / out_row0 and ckv_bfp4_rows' src_row0 / n /
+  row0 are common runtime args rewritten on a program-cache hit (0 growth with new values in the test), as the
+  prepared programs' value slots were; pair_pool and pack have none (addresses only). Nothing new on the host.
+- Not run: `orchestrator measure` (ab_mode none), any model load, the fork regression suites (owner: op-level only).
+- Left for later: tests/perf/test_ckv_rows_host.py (a PB.MB4 perf probe, outside this task's paths) reads the removed
+  `_ROWS_PREPARED`; bfp_round (shipped, indexer query) and the plain ckv_bfp4 are still Python prepared programs.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.5 --spec $BRINGUP_SPEC --check`.

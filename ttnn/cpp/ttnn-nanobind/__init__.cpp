@@ -89,6 +89,10 @@
 #include "ttnn/operations/grouped_matmul/grouped_matmul_nanobind.hpp"
 #include "ttnn/operations/fabric_reduce_scatter/fabric_reduce_scatter_nanobind.hpp"
 #include "ttnn/operations/layer_send/layer_send_nanobind.hpp"
+#include "ttnn/operations/pair_pool/pair_pool_nanobind.hpp"
+#include "ttnn/operations/pack_fp8_rows/pack_fp8_rows_nanobind.hpp"
+#include "ttnn/operations/unpack_fp8_rows/unpack_fp8_rows_nanobind.hpp"
+#include "ttnn/operations/ckv_bfp4_rows/ckv_bfp4_rows_nanobind.hpp"
 
 namespace nb = nanobind;
 
@@ -250,6 +254,18 @@ void py_module(nb::module_& mod) {
 
     auto m_layer_send = mod.def_submodule("layer_send", "layer_send operation");
     layer_send::bind_layer_send_operation(m_layer_send);
+
+    auto m_pair_pool = mod.def_submodule("pair_pool", "pair_pool operation");
+    pair_pool::bind_pair_pool_operation(m_pair_pool);
+
+    auto m_pack_fp8_rows = mod.def_submodule("pack_fp8_rows", "pack_fp8_rows operation");
+    pack_fp8_rows::bind_pack_fp8_rows_operation(m_pack_fp8_rows);
+
+    auto m_unpack_fp8_rows = mod.def_submodule("unpack_fp8_rows", "unpack_fp8_rows operation");
+    unpack_fp8_rows::bind_unpack_fp8_rows_operation(m_unpack_fp8_rows);
+
+    auto m_ckv_bfp4_rows = mod.def_submodule("ckv_bfp4_rows", "ckv_bfp4_rows operation");
+    ckv_bfp4_rows::bind_ckv_bfp4_rows_operation(m_ckv_bfp4_rows);
 }
 }  // namespace ttnn::operations
 

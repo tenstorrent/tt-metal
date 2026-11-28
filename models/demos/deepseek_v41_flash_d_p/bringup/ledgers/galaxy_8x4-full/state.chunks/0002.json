@@ -234,6 +234,130 @@
   },
   "waiting": null
  },
+ "NC.4": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a9622ac4-b922-467e-8653-454bcf1b6885"
+  },
+  "attempt": 2,
+  "attempts": 1,
+  "duration_s": 12.7,
+  "history": [
+   {
+    "s": 12.7,
+    "status": "FAIL",
+    "t": "2026-11-28T00:51:42"
+   },
+   {
+    "status": "ABORTED",
+    "t": "2026-11-28T00:55:28",
+    "why": "NC.4 dropped by the overseer: attempt 1 showed with evidence that tail_a2a / fused_head / prepared_tail run only under MOE_BLOCK_SRC=carried and tail_engine needs a latent; the shipped MoE block (block) is already native C++. Nothing to port."
+   },
+   {
+    "attempt": 2,
+    "from": "RUNNING",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-11-28T00:56:04"
+   }
+  ],
+  "last_run": "2026-11-28T00:51:39",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/NC.4.log",
+  "rc": 3,
+  "reason": [
+   "  cmd rc=3 (13s), log: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/NC.4.log",
+   "  units passed: -",
+   "  units remaining: NC.4 (gate NC.4 --continue runs only these)",
+   "  device opens of NC.4 so far: 1 (1 safe-runner processes, 0 resident-runner restarts); runner model loads 0",
+   "  MISSING  native_mismatch_* (need == 0)",
+   "  MISSING  native_repeat_* (need == 0)",
+   "  MISSING  native_cache_growth_* (need == 0)"
+  ],
+  "role": "perf",
+  "stamp": {
+   "reused": [],
+   "units": {
+    "NC.4": "978dc7f8ba7a1cd7"
+   }
+  },
+  "started": "2026-11-28T00:51:23",
+  "status": "TODO",
+  "units": {
+   "NC.4": "FAIL"
+  },
+  "waiting": null
+ },
+ "NC.5": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "47a66074-449e-4f92-b460-efe3e2bf1d77"
+  },
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 3.0,
+  "history": [
+   {
+    "s": 8.1,
+    "status": "FAIL",
+    "t": "2026-11-28T00:57:48"
+   },
+   {
+    "reused": [
+     "NC.5"
+    ],
+    "s": 3.0,
+    "status": "PASS",
+    "t": "2026-11-28T03:06:27"
+   }
+  ],
+  "last_run": "2026-11-28T03:06:24",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/NC.5.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "NC.5"
+   ],
+   "units": {
+    "NC.5": "f8cb86e087a10204"
+   }
+  },
+  "started": "2026-11-28T03:06:21",
+  "status": "PASS",
+  "units": {
+   "NC.5": "PASS"
+  },
+  "waiting": null
+ },
  "PB.8R": {
   "ab_pending": null,
   "agent": {

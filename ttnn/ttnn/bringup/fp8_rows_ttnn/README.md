@@ -1,6 +1,11 @@
 # ttnn.bringup.pack_fp8_rows, ttnn.bringup.unpack_fp8_rows (fp8_rows_ttnn)
 
 ## What it does
+Since NC.5 (2026-11-28) both entries are native C++ ops, `ttnn.pack_fp8_rows` and `ttnn.unpack_fp8_rows`
+(ttnn/cpp/ttnn/operations/{pack,unpack}_fp8_rows; same kernels, cores, options and arguments; program cache: host
+~31 vs ~86 us a pack call, ~21 vs ~64 us an unpack call (whole grid, common values) on the 8x4, bit-identical,
+device equal; models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.5_layer.md). The pre-port Python prepared routes are kept for tests only in `generic/`.
+
 New op (Python ProgramDescriptor; deepseek_v41_flash_d_p P.39, INDEX_K_SERVED=fp8_row192). Packs the outputs of the
 stock per-token fp8 cast into Blaze decode's 192-byte indexer key cache rows:
 

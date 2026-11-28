@@ -1597,3 +1597,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   carried path. My survey had counted the carried path. Attempt 2 aborted (OV-81); NC.4 removed from tasks.yaml, NC.5 deps
   -> NC.3 (validate: valid); the agent's evidence kept (BREADCRUMBS NC.4, DS41-401, results/NC.4_layer.md). Note OV-82 to
   NC.5-NC.7: check every named program runs on the shipped path (defaults + the packed gate switches) before porting.
+- 01:20 heartbeat: NC.5 agent active; RAM used 62 GB; / 68G free.
+- 01:50 heartbeat: NC.5 native_migrate running; RAM used 64 GB; / 67G free.
+- 02:21 heartbeat: NC.5 running (pair_pool ported; pack_fp8_rows final pass); RAM used 64 GB; / 102G free.
+- 02:51 heartbeat: NC.5 running (unpack_fp8_rows rounds); RAM used 64 GB; / 102G free.

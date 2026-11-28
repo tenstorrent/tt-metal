@@ -63,3 +63,20 @@ layout), deepseek_v41_flash_d_p P.39 (INDEX_K_SERVED=fp8_row192, owner 2026-11-0
 - Needed by: deepseek_v41_flash_d_p PB.9X (tt/index_keys.py `_decode`, setting COMMON_VALUE_SLOTS)
 - Files: fp8_rows.py, kernels/unpack_fp8_rows_{reader,writer,compute}.cpp, tests/unit/test_unpack_fp8_rows.py,
   README.md, ../INDEX.md; needs ../prepared_program's common value slots (same date)
+
+### Native C++ ops (2026-11-28, deepseek_v41_flash_d_p NC.5)
+- What: ttnn.bringup.pack_fp8_rows is now ttnn.pack_fp8_rows and ttnn.bringup.unpack_fp8_rows is now
+  ttnn.unpack_fp8_rows, native C++ device ops (ttnn/cpp/ttnn/operations/pack_fp8_rows, .../unpack_fp8_rows; kernels
+  moved to their device/kernels). Same kernels, cores, runtime args, options (whole_grid, common_values) and signatures;
+  program cache keyed without addresses, a hit rewrites the addresses and (unpack) the per-call range values. The
+  docstring still names common_values (deepseek tt/index_keys._has_common_values reads it). The pre-port Python
+  routes kept for tests only in generic/ (with their kernels).
+- Why: OWNER 2026-11-27 C++ port series (bringup/NATIVE_PORT_RULES.md).
+- How: tt_ops_code_gen native_migrate, one run an entry (28.7 / 27.6 min, ported). The pack run moved the package's
+  whole kernels dir, unpack's too, whose relative include of ckv_bfp4_ttnn's ckv_round_bfp4.hpp then broke: put back
+  before the unpack run, the include root-relative (DS41-402).
+- Measured (8x4, tests/native/test_native_lowbit.py, models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.5_layer.md): bit-identical to the Python routes, 0 cache growth on fresh
+  buffers with new ranges; host a call pack 83.6-88.7 -> 30.6-31.9 us, unpack (whole grid, common values) 63.8-64.7
+  -> 20.4-21.4 us; device equal.
+- Files: fp8_rows.py, kernels/ -> ttnn/cpp/ttnn/operations/{pack,unpack}_fp8_rows, generic/ (new, test only),
+  README.md; ../INDEX.md; ttnn/cpp/ttnn-nanobind/__init__.cpp, ttnn/cpp/ttnn/operations/CMakeLists.txt.
