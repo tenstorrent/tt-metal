@@ -28,11 +28,12 @@ class RMSNorm(LightweightModule):
         weight_cache_path: Optional path for caching the tilized weights.
         weight_memory_config: Configuration for the weight memory, default is DRAM_MEMORY_CONFIG.
         weight_dtype: The data type for the tensors, bfp8_b hits >0.999 PCC in the models we tested.
-        model_config: Optional configuration dictionary for the model.
         eps (float): Small value to avoid division by zero in normalization, default is 1e-05.
+        add_unit_offset (bool): Add 1.0 to the weight before caching (the (1 + weight) RMSNorm form), default is False.
 
-    If model_config is provided, it must specify SHARDED_NORM_INPUT_MEMCFG, SHARDED_NORM_PRGM_CFG
-    and SHARDED_NORM_OUTPUT_MEMCFG. If not provided, default configurations will be generated.
+    Sharded program and memory configs are taken per call from the ``norm_config`` argument of
+    ``forward`` (keys ``sharded_program_config``, ``sharded_output_config``, ``output_mem_config`` and
+    ``distributed_output_mem_config``), not from the constructor.
     """
 
     def __init__(
