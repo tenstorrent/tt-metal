@@ -63,7 +63,7 @@ enum class ClearValue : std::uint8_t
 {
     Zero             = 0,
     NegativeInfinity = 1, ///< SrcA only.
-    One              = 2  ///< Written in the bank's implied format (INT8, FP16, TF32 or BF16 encoding).
+    One              = 2  ///< Written in the bank's implied format (INT8, FP16, TF32 or BF16 encoding); experimental.
 };
 
 /** @brief Select which source bank an UNPACR_NOP clear waits for before writing the unpacker's bank. */
@@ -173,8 +173,9 @@ public:
  * Source handoff has no implicit default; select Keep or FlipAndSetDataValid at every call site.
  *
  * @note With FlipAndSetDataValid on unpacker 0, ensure SRCA_SET_Base is zero.
- * @note ClearValue::One on unpacker 0 leaves the hazard of @ref experimental::BothBanksClear armed
- *       until unpacker 0 next clears to Zero or NegativeInfinity.
+ * @note ClearValue::One is experimental: issue it with @ref experimental::clear. On unpacker 0 it leaves
+ *       the hazard of @ref experimental::BothBanksClear armed until unpacker 0 next clears to Zero or
+ *       NegativeInfinity.
  */
 class Clear
 {
@@ -254,9 +255,15 @@ constexpr bool is_valid(const Transfer options)
            is_valid(options.search) && is_valid(options.accumulation);
 }
 
-constexpr bool is_valid(const Clear options)
+// Encodable clears include ClearValue::One, which only experimental::clear issues.
+constexpr bool is_encodable(const Clear options)
 {
     return is_valid(options.value) && is_valid(options.handoff) && is_valid(options.wait) && has_contractual_handoff(options.wait, options.handoff);
+}
+
+constexpr bool is_valid(const Clear options)
+{
+    return is_encodable(options) && options.value != ClearValue::One;
 }
 
 constexpr bool supports(const Engine engine, const Transfer options)
@@ -435,6 +442,15 @@ constexpr std::uint32_t clear_operation(const Engine engine, const Clear options
     return clear_operation(engine, options.value, options.handoff, options.wait, ClearBanks::Current);
 }
 
+// Shared by Unpacker::clear and experimental::clear; accepts ClearValue::One.
+inline constexpr __attribute__((always_inline)) std::uint32_t checked_clear_operation(const Engine engine, const Clear options)
+{
+    validate(engine);
+    validate(options);
+    validate(engine, options);
+    return clear_operation(engine, options);
+}
+
 constexpr std::uint32_t context_counter_increment_operation(const Engine engine)
 {
     return TT_OP_UNPACR(
@@ -479,7 +495,7 @@ constexpr bool is_valid(const Transfer options)
     return detail::is_valid(options);
 }
 
-/** @brief Return whether source-clear options can be encoded on some unpacker. */
+/** @brief Return whether @ref Unpacker::clear accepts the source-clear options on some unpacker. */
 constexpr bool is_valid(const Clear options)
 {
     return detail::is_valid(options);
@@ -667,18 +683,15 @@ constexpr hal::Operation Unpacker::Operations::transfer(const Transfer options) 
 template <Clear Options>
 constexpr hal::Operation Unpacker::Operations::clear() const
 {
+    static_assert(Options.value != ClearValue::One, "UNPACR_NOP clear to One is experimental: use experimental::clear");
     static_assert(is_valid(Options), "invalid UNPACR_NOP source-clear options");
-    detail::validate(engine);
-    detail::validate(engine, Options);
-    return hal::detail::make_operation(detail::clear_operation(engine, Options));
+    return hal::detail::make_operation(detail::checked_clear_operation(engine, Options));
 }
 
 constexpr hal::Operation Unpacker::Operations::clear(const Clear options) const
 {
-    detail::validate(engine);
-    detail::validate(options);
-    detail::validate(engine, options);
-    return hal::detail::make_operation(detail::clear_operation(engine, options));
+    hal::detail::require(options.value != ClearValue::One, "UNPACR_NOP clear to One is experimental: use experimental::clear");
+    return hal::detail::make_operation(detail::checked_clear_operation(engine, options));
 }
 
 constexpr hal::Operation Unpacker::Operations::increment_context_counter() const
@@ -710,6 +723,55 @@ constexpr hal::Operation Unpacker::Operations::flush_row_start_cache(const Cache
  */
 namespace experimental
 {
+/**
+ * @brief Encode a source-bank clear, including ClearValue::One, without issuing it.
+ *
+ * @tparam Options: Clear value, source handoff and wait.
+ * @param unpacker: Unpacker whose source bank is cleared.
+ */
+template <Clear Options>
+[[nodiscard]] constexpr hal::Operation clear_operation(const Unpacker unpacker)
+{
+    static_assert(unpack::detail::is_encodable(Options), "invalid UNPACR_NOP source-clear options");
+    return hal::detail::make_operation(unpack::detail::checked_clear_operation(unpacker.engine, Options));
+}
+
+/**
+ * @brief Encode a runtime-selected source-bank clear, including ClearValue::One, without issuing it.
+ *
+ * @param unpacker: Unpacker whose source bank is cleared.
+ * @param options: Clear value, source handoff and wait.
+ * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
+ */
+[[nodiscard]] inline constexpr __attribute__((always_inline)) hal::Operation clear_operation(const Unpacker unpacker, const Clear options)
+{
+    return hal::detail::make_operation(unpack::detail::checked_clear_operation(unpacker.engine, options));
+}
+
+/**
+ * @brief Issue a source-bank clear, including ClearValue::One.
+ *
+ * @tparam Options: Clear value, source handoff and wait.
+ * @param unpacker: Unpacker whose source bank is cleared.
+ */
+template <Clear Options>
+inline __attribute__((always_inline)) void clear(const Unpacker unpacker)
+{
+    hal::run(clear_operation<Options>(unpacker));
+}
+
+/**
+ * @brief Issue a runtime-selected source-bank clear, including ClearValue::One.
+ *
+ * @param unpacker: Unpacker whose source bank is cleared.
+ * @param options: Clear value, source handoff and wait.
+ * @note Enable LLK assertions to diagnose invalid options; disabled assertions add no runtime check.
+ */
+inline __attribute__((always_inline)) void clear(const Unpacker unpacker, const Clear options)
+{
+    hal::run(clear_operation(unpacker, options));
+}
+
 /**
  * @brief Describe an UNPACR_NOP clear of both banks of the unpacker's source register.
  *

@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "sync.h"
+#include "utils/helpers.h"
 #include "utils/operation.h"
 #include "utils/validate.h"
 
@@ -52,7 +53,7 @@ constexpr bool is_nop(const std::uint32_t instruction)
 
 constexpr bool is_valid_count(const std::uint32_t count)
 {
-    return ckernel::is_valid(count, COUNT_WIDTH);
+    return hal::detail::is_valid(count, COUNT_WIDTH);
 }
 
 /**
@@ -566,12 +567,12 @@ private:
 
     static constexpr bool is_valid_count(const std::uint32_t count)
     {
-        return ckernel::is_valid(count - 1, COUNT_WIDTH);
+        return hal::detail::is_valid(count - 1, COUNT_WIDTH);
     }
 
     static constexpr bool reads_mask_high(const std::uint32_t count, const std::uint32_t mask)
     {
-        return count > MASK_LO_WIDTH || !ckernel::is_valid(mask, MASK_LO_WIDTH);
+        return count > MASK_LO_WIDTH || !hal::detail::is_valid(mask, MASK_LO_WIDTH);
     }
 
 public:
