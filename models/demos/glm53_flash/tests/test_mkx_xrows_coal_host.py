@@ -1133,8 +1133,8 @@ print("PRE_SPLIT_OK")
 
 
 def test_pre_split_set_knobs():
-    """stack_model.set_knobs on the 8x4 launch: GLM53_MHC_PRE_SPLIT on every TP kind (dense_kda, sparse_kda, sparse_dsa)
-    at t 1 / 4 / 16 in any kind order, one "active" line per kind; an explicit 0 keeps every kind off; TP8 / one chip
+    """stack_model.set_knobs on the 8x4 launch, for GLM53_MHC_PRE_SPLIT and GLM53_KDA_VERIFY_RSPLIT. MHC_PRE_SPLIT on
+    every TP kind (dense_kda, sparse_kda, sparse_dsa) at t 1 / 4 / 16 in any kind order, one "active" line per kind; an explicit 0 keeps every kind off; TP8 / one chip
     off; GLM53_STACK_KNOB_SET overrides it per kind without leaking (set_knobs and the galaxy defaults parse the
     variable with galaxy_defaults.knob_set_items); the launch value is read once per process; a foreign value warns
     once and stays off. GLM53_KDA_VERIFY_RSPLIT in the same child: a sparse_dsa GLM53_STACK_KNOB_SET entry for

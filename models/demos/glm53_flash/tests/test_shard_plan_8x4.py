@@ -1376,6 +1376,9 @@ def test_agk_count_is_the_local_select_count(monkeypatch):
                         ("tp_stack.py", "kda_verify_rsplit_lanes_check", 0)):  # fmt: skip
         with open(os.path.join(os.path.dirname(SP.KDIR), name)) as fh:
             assert fh.read().count(f"{fn}(") == n, (name, fn, n)
+    # MkStepB refuses kda_rec_ugroups > 1: its o_proj readers wait for one user group's kda_rec cores
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_dense.py")) as fh:
+        assert "assert self.rec is None or self.rec.ug == 1" in fh.read()
     tree = ast.parse(src)
     kp = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KdaPre")
     body = [n for n in kp.body if isinstance(n, ast.FunctionDef) and n.name == "consumers"]
@@ -1930,6 +1933,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
         ("s:GLM53_KDA_VERIFY_FLAT=-", True, False),
         ("a:GLM53_KDA_VERIFY_PIPE=0;a:GLM53_KDA_VERIFY_FLAT=0", False, False),
         ("a:GLM53_KDA_VERIFY_FLAT=-", True, False),
+        ("a:GLM53_KDA_VERIFY_PIPE=-", False, False),
         ("s:GLM53_KDA_VERIFY_PIPE=1;d:GLM53_KDA_VERIFY_FLAT=1", True, True),
     ):
         for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT", "GLM53_KDA_VERIFY_RSPLIT"):
