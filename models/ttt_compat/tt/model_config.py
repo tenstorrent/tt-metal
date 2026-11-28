@@ -21,6 +21,7 @@ from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
+from models.common.weight_cache import checkpoint_cache_key as _checkpoint_cache_key
 from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
 from models.common.weight_cache import marker_path as _wc_marker_path
 from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
@@ -3411,6 +3412,16 @@ class ModelArgs:
 
         return prefix + layer_prefix + module_map[module_name]
 
+    def checkpoint_cache_key(self):
+        """Content key of the local checkpoint at CKPT_DIR (None for hub ids or when disabled via
+        TT_CHECKPOINT_CACHE_KEY=off). Computed once per ModelArgs; see
+        models/common/weight_cache.py:checkpoint_cache_key."""
+        if not hasattr(self, "_checkpoint_cache_key"):
+            self._checkpoint_cache_key = _checkpoint_cache_key(getattr(self, "CKPT_DIR", None))
+            if self._checkpoint_cache_key:
+                logger.info(f"Checkpoint cache key: {self._checkpoint_cache_key}")
+        return self._checkpoint_cache_key
+
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
         if self.instruct:
@@ -3425,7 +3436,11 @@ class ModelArgs:
             # Caches built before the native-loader fix may contain randomly initialized weights.
             cache_name += "_hf_native"
 
-        return self.model_cache_path / cache_name
+        # Tensorbin names carry no checkpoint identity and as_tensor serves a hit without looking at
+        # the torch weight, so a different/modified checkpoint at the same HF_MODEL path must get
+        # its own directory or it silently loads the previous checkpoint's converted weights.
+        key = self.checkpoint_cache_key()
+        return self.model_cache_path / (f"{cache_name}_ckpt-{key}" if key else cache_name)
 
     # Name of the marker file dropped into a weight-cache directory once every weight for that
     # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS

@@ -21,6 +21,7 @@
     # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/ttt_compat/tests/test_warm_cache_marker.py
+    pytest --timeout 60 models/common/tests/test_weight_cache_checkpoint_key.py
     # CPU-only: the models.tt_transformers import alias for models.ttt_compat.
     pytest --timeout 60 models/ttt_compat/tests/test_import_alias.py
     pytest --timeout 60 models/ttt_compat/tests/test_decode_output_rows.py
