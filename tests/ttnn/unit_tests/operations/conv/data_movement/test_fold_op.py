@@ -384,6 +384,47 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 
+def test_fold_with_transpose_override_memory_config(device):
+    # The interleaved use_transpose_as_fold route must honour override_memory_config and fall back
+    # to the input's placement when none is given. Values must be identical across placements.
+    torch.manual_seed(0)
+    n, c, h, w = 1, 4, 32, 32
+    stride_h, stride_w = 2, 2
+    torch_input = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+
+    output_shape = (n, h // stride_h, w // stride_w, c * stride_h * stride_w)
+
+    def run(override):
+        tt_input = ttnn.from_torch(
+            torch_input,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.fold(
+            tt_input,
+            stride_h,
+            stride_w,
+            use_transpose_as_fold=True,
+            output_shape=output_shape,
+            override_memory_config=override,
+        )
+
+    reference = run(None)
+    assert reference.memory_config().buffer_type == ttnn.BufferType.DRAM
+
+    dram_out = run(ttnn.DRAM_MEMORY_CONFIG)
+    assert dram_out.memory_config().buffer_type == ttnn.BufferType.DRAM
+
+    l1_out = run(ttnn.L1_MEMORY_CONFIG)
+    assert l1_out.memory_config().buffer_type == ttnn.BufferType.L1
+
+    reference_host = ttnn.to_torch(reference)
+    assert torch.equal(reference_host, ttnn.to_torch(dram_out))
+    assert torch.equal(reference_host, ttnn.to_torch(l1_out))
+
+
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w",
     [
