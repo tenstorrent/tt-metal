@@ -29,8 +29,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
+from helpers import toolchain
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
+WHEEL_BUILDER = Path(__file__).resolve().parents[2] / "harness_wheel" / "make_wheel.py"
 # Deliberately below the pytest-timeout budget tests/run_hardware_free.sh passes
 # (--timeout=120): our own timeout has to fire first, because ``_run_fixture``
 # turns it into a failure carrying the child's output, whereas pytest-timeout
@@ -105,8 +107,90 @@ def test_out_of_tree_contract_fixture_passes():
         _assert_the_child_ran_the_fixture(report, result)
 
 
-def _run_fixture(child_temp: str, report: Path) -> subprocess.CompletedProcess:
+def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
+    """The same contract, with the harness built as a wheel and installed by pip.
+
+    ``LLK_HOME`` is a tree of links without the harness's parts and without the
+    toolchain, which is named with ``LLK_SFPI_ROOT``. This catches what the
+    checkout run cannot: a path derived from ``__file__`` that assumes the
+    tt-llk tree, or a file the wheel does not carry.
+    """
+    with tempfile.TemporaryDirectory(prefix="oot-wheel-") as child_temp:
+        built = subprocess.run(
+            [sys.executable, str(WHEEL_BUILDER), "--out-dir", f"{child_temp}/dist"],
+            capture_output=True,
+            text=True,
+        )
+        assert built.returncode == 0, f"wheel build failed:\n{built.stderr}"
+        (wheel,) = (Path(child_temp) / "dist").iterdir()
+        site = Path(child_temp) / "site"
+        # --no-deps: the requirements are this environment's; pip still validates the wheel's metadata and RECORD.
+        installed = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-deps", "--target", site]
+            + [wheel],
+            capture_output=True,
+            text=True,
+        )
+        assert installed.returncode == 0, f"pip install failed:\n{installed.stderr}"
+
+        checkout = FIXTURE_DIR.parents[1]
+        sfpi_root = toolchain.find_sfpi_root(checkout)
+        assert sfpi_root is not None, toolchain.missing_sfpi_message(checkout)
+
+        report = Path(child_temp) / "fixture-report.xml"
+        result = _run_fixture(
+            child_temp,
+            report,
+            harness_site=site,
+            llk_home=_llk_home_without_the_harness(Path(child_temp) / "llk"),
+            sfpi_root=sfpi_root,
+        )
+
+        assert result.returncode == 0, (
+            "The out-of-tree contract fails on the installed harness wheel.\n"
+            f"--- fixture stdout ---\n{result.stdout}\n"
+            f"--- fixture stderr ---\n{result.stderr}"
+        )
+
+        _assert_the_child_ran_the_fixture(report, result)
+
+
+def _llk_home_without_the_harness(root: Path) -> Path:
+    """An ``LLK_HOME`` of links to this checkout without ``tests/python_tests``, ``tests/helpers``, ``tests/sfpi``
+    and ``tools``, as deep under ``root`` as tt-llk is in tt-metal: the compile reaches tt-metal by relative path.
+    """
+    checkout = FIXTURE_DIR.parents[1]
+    llk_home = root / "tt_metal" / "tt-llk"
+    (llk_home / "tests").mkdir(parents=True)
+    links = {
+        llk_home: (checkout, ("tests", "tools")),
+        llk_home / "tests": (checkout / "tests", ("python_tests", "helpers", "sfpi")),
+        llk_home.parent: (checkout.parent, (checkout.name,)),
+        root: (checkout.parents[1], (checkout.parent.name,)),
+    }
+    for directory, (source, left_out) in links.items():
+        for entry in source.iterdir():
+            if entry.name not in left_out:
+                (directory / entry.name).symlink_to(entry)
+    return llk_home
+
+
+def _run_fixture(
+    child_temp: str,
+    report: Path,
+    harness_site: Path | None = None,
+    llk_home: Path | None = None,
+    sfpi_root: Path | None = None,
+) -> subprocess.CompletedProcess:
     env = dict(os.environ)
+    if llk_home is not None:
+        env["LLK_HOME"] = str(llk_home)
+    if sfpi_root is not None:
+        env[toolchain.SFPI_ROOT_ENV] = str(sfpi_root)
+    # Where the fixture takes the harness from: the checkout unless a test names an installed copy.
+    env.pop("LLK_HARNESS_SITE", None)
+    if harness_site is not None:
+        env["LLK_HARNESS_SITE"] = str(harness_site)
     # The fixture resolves LLK_HOME itself; keep whatever CI set, and drop
     # outer-run pytest state that would otherwise leak into the child.
     # PYTEST_ADDOPTS matters as much as the xdist pair: pytest splices it
@@ -140,6 +224,11 @@ def _run_fixture(child_temp: str, report: Path) -> subprocess.CompletedProcess:
         str(report),
         ".",
     ]
+    if harness_site is not None:
+        # Only the pytest plugin the wheel requires, and no PYTHONPATH that could bring the checkout's harness back.
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        env.pop("PYTHONPATH", None)
+        argv += ["-p", "xdist.plugin"]
 
     # start_new_session so the whole process group can be killed on timeout:
     # the child fans compiles out across a ThreadPoolExecutor, and killing only

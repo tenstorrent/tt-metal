@@ -1,0 +1,243 @@
+name: "LLK harness release"
+
+# Publishes the tt-llk Python test harness as a wheel when its VERSION file changes on main
+# (tt_metal/tt-llk/docs/tests/getting_started.md, "Releasing the harness"). The wheel goes to ghcr.io as a private
+# package of this repository; its visibility and readers are package settings an organisation admin sets once.
+# A pull request builds and verifies the wheel and publishes nothing, and so does a manual run unless it asks to
+# publish: on main that is the release of the VERSION file (for one that failed after its merge), on any other
+# branch a development build under a tag of its own, which never moves `latest`.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - tt_metal/tt-llk/tests/python_tests/tt_llk_harness/VERSION
+  pull_request:
+    paths:
+      - .github/workflows/llk-harness-release.yaml
+      - tt_metal/tt-llk/tests/harness_wheel/**
+      - tt_metal/tt-llk/tests/python_tests/tt_llk_harness/VERSION
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the wheel: the release of VERSION on main, a development build on any other branch"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# One release at a time, never cancelled. A push to main and a manual run on main share a group; a pull request
+# (refs/pull/...) or a run on another branch cannot be in it.
+concurrency:
+  group: llk-harness-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+  VERSION_FILE: tt_metal/tt-llk/tests/python_tests/tt_llk_harness/VERSION
+
+jobs:
+  build-and-verify:
+    name: "Build and verify"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      release: ${{ steps.wheel.outputs.release }}
+      version: ${{ steps.wheel.outputs.version }}
+      wheel: ${{ steps.wheel.outputs.wheel }}
+      sha256: ${{ steps.wheel.outputs.sha256 }}
+    steps:
+      # The whole tree: the fixture the wheel is verified with compiles against tt-metal's hw headers.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      # The Python of the LLK image, which the harness and its pinned requirements are run on.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - name: Find the version before this push
+        id: before
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # The file as it was before the push; the new version must be greater. A commit that cannot be fetched
+          # stops the release: only the file being absent from that commit makes this the first one.
+          git fetch --quiet --depth=1 origin "$BEFORE"
+          if [ -n "$(git ls-tree --name-only "$BEFORE" -- "$VERSION_FILE")" ]; then
+            echo "version=$(git show "$BEFORE:$VERSION_FILE")" >> "$GITHUB_OUTPUT"
+          else
+            echo "No ${VERSION_FILE} at ${BEFORE}: this is the first release."
+          fi
+      - name: Install SFPI
+        shell: bash
+        run: ./${{ env.LLK_PATH }}/tests/install_sfpi.sh
+      - name: Build the wheel
+        id: wheel
+        shell: bash
+        env:
+          # A release: the push of VERSION to main, or a manual run on main that publishes.
+          RELEASE: >-
+            ${{ github.event_name == 'push' ||
+                (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
+          BEFORE_VERSION: ${{ steps.before.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          options=(--out-dir dist)
+          if [ "$RELEASE" = "true" ]; then
+            options+=(--release)
+            if [ -n "$BEFORE_VERSION" ]; then
+              options+=(--after "$BEFORE_VERSION")
+            fi
+          fi
+          # Sets the step's version, wheel and sha256 outputs.
+          python3 "$LLK_PATH/tests/harness_wheel/make_wheel.py" "${options[@]}"
+      - name: Verify the wheel in a new environment
+        shell: bash
+        run: ./${{ env.LLK_PATH }}/tests/harness_wheel/verify_wheel.sh dist/*.whl
+      # The publish job's push and a suite's pull, to a directory instead of the registry: no credentials, and it
+      # runs on pull requests.
+      - name: Install ORAS
+        uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+      - name: Rehearse the push and the pull
+        shell: bash
+        env:
+          WHEEL: ${{ steps.wheel.outputs.wheel }}
+        run: |
+          set -euo pipefail
+          cp "$LLK_PATH/tests/requirements.txt" dist/requirements.txt
+          (cd dist && oras push --oci-layout ../rehearsal:release,latest \
+            --artifact-type application/vnd.tenstorrent.tt-llk-harness.v1 \
+            "$WHEEL:application/zip" requirements.txt:text/plain)
+          oras pull --oci-layout rehearsal:latest --output pulled
+          cmp "dist/$WHEEL" "pulled/$WHEEL"
+          cmp dist/requirements.txt pulled/requirements.txt
+
+  publish:
+    name: "Publish"
+    needs: build-and-verify
+    if: >-
+      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The one place a publish can be held: the environment's branch rule decides whether branches other than main
+    # may publish their development builds, and its reviewers whether a publish waits for an approval.
+    environment: llk-harness-release
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PACKAGE: ghcr.io/${{ github.repository }}/tt-llk-harness
+      RELEASE: ${{ needs.build-and-verify.outputs.release }}
+      VERSION: ${{ needs.build-and-verify.outputs.version }}
+      WHEEL: ${{ needs.build-and-verify.outputs.wheel }}
+    steps:
+      - name: Checkout tt-llk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            tt_metal/tt-llk
+          sparse-checkout-cone-mode: true
+      # The Python the verified wheel was built with, so the two builds are the same by construction.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      # Built again rather than handed over as an Actions artifact, which any GitHub account could download: the
+      # same commit gives the same bytes, so the digest says this is the wheel that was verified.
+      - name: Build the verified wheel again
+        shell: bash
+        env:
+          VERIFIED_SHA256: ${{ needs.build-and-verify.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          options=(--out-dir dist)
+          if [ "$RELEASE" = "true" ]; then
+            options+=(--release)
+          fi
+          python3 "$LLK_PATH/tests/harness_wheel/make_wheel.py" "${options[@]}"
+          echo "$VERIFIED_SHA256  dist/$WHEEL" | sha256sum --check
+          cp "$LLK_PATH/tests/requirements.txt" dist/requirements.txt
+          # A release is tagged by its number. A development build is X.Y.Z+<commit time>.g<commit>; a tag cannot
+          # hold a "+", and with "-" in its place it cannot be a release's tag either.
+          echo "TAG=${VERSION/+/-}" >> "$GITHUB_ENV"
+      - name: Install ORAS
+        uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+      # Before anything is uploaded, and by status code: an answer that is neither "it is there" nor "it is not"
+      # stops the release, with the answer printed.
+      - name: Check the package and the version before publishing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A package that exists must not be public: a wheel pushed to it would be out before the check after.
+          name="${GITHUB_REPOSITORY#*/}%2Ftt-llk-harness"
+          status=$(curl -sS -o package.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}")
+          case "$status" in
+            # Nothing to look up in a package that does not exist: it has no version to replace.
+            404) echo "No tt-llk-harness package yet: this publish creates it."; exit 0 ;;
+            200) [ "$(jq -r .visibility package.json)" != public ] ||
+              { echo "::error::The tt-llk-harness package is public. Set it to private in its settings."; exit 1; } ;;
+            *) echo "::error::Could not read the package (HTTP $status): $(cat package.json)"; exit 1 ;;
+          esac
+          # A version is never replaced: suites pin one and must keep getting the same bytes for it.
+          token=$(curl -fsS -u "$GITHUB_ACTOR:$GH_TOKEN" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${GITHUB_REPOSITORY}/tt-llk-harness:pull" | jq -r .token)
+          status=$(curl -sS -o manifest.json -w '%{http_code}' -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/${GITHUB_REPOSITORY}/tt-llk-harness/manifests/${TAG}")
+          case "$status" in
+            404) echo "$PACKAGE:$TAG is not published yet." ;;
+            200) echo "::error::$PACKAGE:$TAG is already published. Raise the VERSION file."; exit 1 ;;
+            *) echo "::error::Could not look up $PACKAGE:$TAG (HTTP $status): $(cat manifest.json)"; exit 1 ;;
+          esac
+      - name: Publish the wheel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # Only a release is the newest version a suite gets by asking for `latest`.
+          tags="$TAG"
+          if [ "$RELEASE" = "true" ]; then
+            tags="$TAG,latest"
+          fi
+          cd dist
+          oras push "$PACKAGE:$tags" \
+            --artifact-type application/vnd.tenstorrent.tt-llk-harness.v1 \
+            --annotation "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            "$WHEEL:application/zip" \
+            requirements.txt:text/plain
+          echo "Published \`$WHEEL\` as \`$PACKAGE:$TAG\`." >> "$GITHUB_STEP_SUMMARY"
+      - name: Check that the package is not public
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="${GITHUB_REPOSITORY#*/}%2Ftt-llk-harness"
+          if ! visibility=$(gh api "orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}" --jq .visibility); then
+            echo "::warning::Could not read the visibility of the package. Check in its settings that it is private."
+            exit 0
+          fi
+          echo "Package visibility: $visibility"
+          if [ "$visibility" = "public" ]; then
+            echo "::error::The tt-llk-harness package is public. Set it to private or internal in the package settings."
+            exit 1
+          fi

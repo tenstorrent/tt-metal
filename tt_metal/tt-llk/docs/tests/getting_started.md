@@ -448,7 +448,17 @@ void run_kernel(RUNTIME_PARAMETERS params){
 1. `cd` yourself to `./tt-llk/tests`
 2. run `./setup_external_testing_env.sh`
 
-This will install all the necessary headers for your platform alongside latest [`SFPI`](https://github.com/tenstorrent/sfpi), version.
+This will install all the necessary headers for your platform alongside the [`SFPI`](https://github.com/tenstorrent/sfpi) release this tree pins.
+
+### The SFPI toolchain
+
+SFPI is the compiler and the SFPU headers every test variant is built with. It is installed apart from the harness, because it is released far more often than the harness changes: the harness neither carries nor pins it.
+
+- `tests/install_sfpi.sh [--dest DIR]` installs the release this tree pins (`tests/sfpi-version`, which is tt-metal's `sfpi-version`). `setup_testing_env.sh` sets up pre-commit and then runs it. The default destination is `tests/sfpi`.
+- The harness takes the toolchain from `$LLK_SFPI_ROOT` when that is set, and from nowhere else then. Otherwise it looks in `$LLK_HOME/tests/sfpi` and then in `/opt/tenstorrent/sfpi`, where the SFPI deb and rpm packages install. The root is the directory that holds `compiler/` and `include/`.
+- It reads the release from the compiler (`riscv-tt-elf-g++ --version`), logs it when a session starts, and refuses one older than `MIN_SFPI_VERSION` in `helpers/toolchain.py`. There is no upper limit.
+- A release other than the one `$LLK_HOME/tests/sfpi-version` pins is a warning, and an error with `LLK_SFPI_STRICT=1`. A `--compile-consumer` run reports the same way when the ELFs it is about to run were built with another release.
+- SFPI is built for Linux only: x86_64 (Debian and Fedora families) and aarch64 (Debian family).
 
 ## Invoking pytest
 `cd` yourself to one of the paths:
@@ -553,6 +563,8 @@ External suites import from **`tt_llk_harness`** and from nowhere else. Everythi
 | `tt_llk_harness.goldens`, `tt_llk_harness.params` | Catalogues that grow with the LLKs under test. Both spellings work — `params.DEST_INDEX` and `from tt_llk_harness.params import DEST_INDEX` — so an in-tree test can be lifted into an external suite without rewriting its parameter references. Adding an entry is not breaking; removing or renaming one is. |
 | Anything else under `helpers` | Implementation. No promises. |
 
+API 1.1 adds `MathOperation`, `ApproximationMode` and `StimuliSpec` to `__all__`; a suite that uses them calls `require_version(1, 1)`.
+
 `tt_llk_harness.require_version(major, minor)` fails fast and legibly instead of surfacing as an `AttributeError` mid-run. Compatible means *same major, minor no older than requested* — a newer major is a rejection, not an upgrade, since a major bump only happens for a breaking change that has completed its deprecation period. `HARNESS_API_VERSION` is kept honest mechanically: `tests/out_of_tree/` pins the exported surface *per version*, so a surface that grows has nowhere to be recorded except under a version that does not exist yet — additions need a new minor entry, a removal that has completed its deprecation needs a new major one. Editing an existing entry in place is still possible, and is the thing to look for in review.
 
 This is enforced, not just documented: `tests/out_of_tree/` is a consumer that uses only the facade, and it runs in the PR pipeline via `tests/hardware_free/harness/test_out_of_tree_contract.py`. A change that breaks external suites fails there, in the PR that makes it, rather than during a later tt-metal uplift. If a real consumer needs something the facade lacks, add it to `__all__` — do not reach into `helpers`. The fixture's driver uses the letter-named Wormhole/Blackhole LLK headers, so what CI exercises is the contract on those two architectures; Quasar uses semantic header names and would need its own driver, as the in-tree suite already does.
@@ -584,6 +596,94 @@ An external pytest suite should:
 
 3. Point `TestConfig` at an out-of-tree C++ driver with an **absolute** `test_name`. Relative names still mean `tests/<name>` inside tt-llk. Absolute paths are quote-included; artefacts are stored under `/tmp/tt-llk-build/sources/<basename>/` so the harness never `mkdir`s through the `.cpp` file.
 
-The C++ driver must follow the usual `LLK_TRISC_UNPACK` / `MATH` / `PACK` + `run_kernel()` contract and call the underscored LLK APIs. Reuse the existing venv/SFPI under `tests/.venv` — do not invent a second toolchain.
+The C++ driver must follow the usual `LLK_TRISC_UNPACK` / `MATH` / `PACK` + `run_kernel()` contract and call the underscored LLK APIs. Reuse the existing venv (`tests/.venv`) and build with the SFPI release the LLK tree pins (see [The SFPI toolchain](#the-sfpi-toolchain)); do not introduce a second compiler.
 
 In-tree tests are unchanged: `conftest.py` still re-exports the arch skip markers (`from conftest import skip_for_wormhole`).
+
+### Installing the harness as a wheel
+
+An external suite does not need a tt-llk checkout on `sys.path`: the harness is also released as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`. Releases are kept as a package of this repository on ghcr.io, `ghcr.io/tenstorrent/tt-metal/tt-llk-harness`, one tag per version and `latest` for the newest. The package is private: there is no public package of the harness. GitHub Packages has no Python registry, so pip cannot install the harness by name; a release is downloaded and its wheel installed as a file.
+
+The steps below are the whole setup on a machine that has no tt-metal checkout. They need the [ORAS](https://oras.land) CLI and a GitHub account that may read the package.
+
+1. Log in to the registry once, then download a release into the current directory:
+   ```bash
+   gh auth refresh -s read:packages          # once: lets the token of the GitHub CLI read packages
+   gh auth token | oras login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+   oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:0.0.1
+   ```
+   This leaves `tt_llk_harness-0.0.1-py3-none-any.whl` and `requirements.txt`. A suite names the version it was written against; `latest` is for trying the newest. In a workflow of another repository, the job needs `packages: read`, logs in with its own `GITHUB_TOKEN`, and the package has to list that repository under "Manage Actions access" in its settings.
+
+   To see which versions there are, list the tags; the newest release is also `latest`:
+   ```bash
+   oras repo tags ghcr.io/tenstorrent/tt-metal/tt-llk-harness
+   ```
+   A tag that is three numbers is a release. A tag such as `0.0.1-202611251036.g821e363e4ea0` is a development build somebody published from a branch (see [Releasing the harness](#releasing-the-harness)): pull it the same way, by that tag. Its wheel is `tt_llk_harness-0.0.1+202611251036.g821e363e4ea0-py3-none-any.whl`, and the `pip install` line below takes it unchanged. The summary of the workflow run that published a wheel names its tag.
+
+2. Install it into the suite's environment:
+   ```bash
+   pip install -c requirements.txt tt_llk_harness-*.whl
+   ```
+   The wheel requires what the harness needs (torch, tt-exalens, pytest, pytest-xdist, ...), unpinned. `requirements.txt` is tt-llk's own test environment, the versions the harness is tested with; as constraints (`-c`) it pins what the wheel pulls in and installs nothing else of that environment. It also names the package index the CPU build of torch comes from. The wheel carries the same file as `tt_llk_harness/requirements.txt`.
+
+3. In the suite's rootdir `conftest.py`, load the plugin and state the API the suite was written against:
+   ```python
+   pytest_plugins = ["tt_llk_harness.plugin"]
+
+   import tt_llk_harness
+   tt_llk_harness.require_version(1, 1)
+   ```
+
+4. Run the suite with `LLK_HOME` set, as described [below](#what-the-wheel-holds), and the separately installed toolchain named by `LLK_SFPI_ROOT` (see [The SFPI toolchain](#the-sfpi-toolchain); it can be left out when the toolchain is at `$LLK_HOME/tests/sfpi` or `/opt/tenstorrent/sfpi`):
+   ```bash
+   LLK_HOME=<tree with the LLKs> LLK_SFPI_ROOT=<SFPI root> CHIP_ARCH=wormhole pytest --compile-producer -n 8 .
+   LLK_HOME=<tree with the LLKs> LLK_SFPI_ROOT=<SFPI root> pytest --compile-consumer .
+   ```
+
+To build a wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py --out-dir dist` in tt-llk (it needs only git and the Python standard library); `tests/requirements.txt` is the constraints file to install it with. Such a build is not a release and says so in its version, `X.Y.Z+<commit time>.g<commit>`: it orders after the release `X.Y.Z` and names the commit it was built from (`pip show tt-llk-harness`). `tests/harness_wheel/verify_wheel.sh <wheel>` checks a wheel the way the release does.
+
+#### Versions
+
+There are two numbers, and they move apart.
+
+- The **wheel version**, `MAJOR.MINOR.PATCH`, is in `tests/python_tests/tt_llk_harness/VERSION` and is `tt_llk_harness.__version__`. It names a release: it is what a suite pins when it downloads, and raising it is what publishes. The first release is `0.0.1`.
+- The **API version**, `HARNESS_API_VERSION` in `tt_llk_harness/__init__.py`, is what `require_version` checks. It moves only when `__all__` does, as described under [The supported surface](#the-supported-surface), and `tests/out_of_tree/` pins the exported surface per API version. It was 1.0 before there was a wheel, which is why it is not the wheel's number.
+
+A release that changes the API version says so in its pull request; a suite pins the wheel version and keeps `require_version(MAJOR, MINOR)` in its conftest.
+
+#### Releasing the harness
+
+A release is a pull request that raises the number in `VERSION`. When it merges, the **LLK harness release** workflow (`.github/workflows/llk-harness-release.yaml`) builds the wheel of that commit, named by the number alone, verifies it (`verify_wheel.sh`: a new environment with only what the wheel requires, then the `tests/out_of_tree/` fixture on the installed copy for Wormhole and Blackhole) and publishes it under that version.
+
+- Not every change to the harness is a release. `helpers` changes with the LLKs most days; raise the version when a suite outside this repository needs what changed.
+- A version is published once. The workflow refuses a number that is not greater than the one before it, and refuses to replace a version the package already has, so a suite that pins a version keeps getting the same bytes.
+- What gates a release is the pull request's own checks and the verification above, not the nightly e2e tests on silicon.
+
+The workflow can also be run by hand (Actions, **LLK harness release**, "Run workflow", or `gh workflow run llk-harness-release.yaml --ref <branch> [-f publish=true]`):
+
+| Run | What it does |
+| --- | --- |
+| any branch, `publish` off (the default) | builds and verifies the wheel of that branch, and publishes nothing |
+| `main`, `publish` on | the release of the number `VERSION` has on `main`, exactly as the merge would have made it. This is how a release that failed after the merge is run again once the cause is fixed: no version number is spent. A number that is published already is still refused. |
+| another branch, `publish` on | a development build, for trying a wheel, or the publish path itself, before a merge. Its version is `X.Y.Z+<commit time>.g<commit>` and its tag is that with `-` for the `+` (a tag cannot hold one): `oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:0.0.1-202611251200.g0123456789ab`. It never moves `latest` and never takes a release's tag. |
+
+Two things are set up once, by an organisation admin. The `llk-harness-release` environment, which the publish job names, decides which branches may publish: with deployments from `main` only, development builds from other branches are refused there; required reviewers make every publish wait for an approval. And the package's settings decide its visibility (private) and who may read it: teams, and the repositories whose workflows download it. A package a workflow of this repository creates starts **public**, so an admin has to set it to private once, right after the first publish creates it. The publish job refuses to push to a package it finds public, and fails if it finds it public after the push, so until then nothing more is published.
+
+#### What the wheel holds
+
+| | |
+| --- | --- |
+| `tt_llk_harness` | the supported interface, as above |
+| `helpers` | the implementation: build and run of a variant, stimuli generation, golden generators, packing and unpacking of L1 data, comparison, the pytest plugin |
+| `ttsim_error` | imported by `helpers` |
+| `tt_llk_harness/llk_home/` | in tt-llk layout: `tests/helpers/` (the firmware sources, linker scripts and headers every variant is built with), `tools/include/perf_counters/`, the perf split cost tables, and `tools/python/tt_llk_perf`, which the pytest plugin puts on `sys.path` (it is not installed as a top-level package: the ttnn wheel owns that name) |
+
+It holds no LLK, kernel, test driver or toolchain. With an installed harness, step 1 above loses its `sys.path` line and the suite supplies those:
+
+- `LLK_HOME` must be set: there is no checkout to infer it from. The harness expects the LLK trees there; a suite that keeps these elsewhere puts a directory of links together and points `LLK_HOME` at it.
+- The toolchain is installed separately, and the wheel does not say which release: that is the pin of the LLK tree (`sfpi-version` in tt-metal). Install that release and set `LLK_SFPI_ROOT` to it, unless it is at `$LLK_HOME/tests/sfpi` or `/opt/tenstorrent/sfpi` already; see [The SFPI toolchain](#the-sfpi-toolchain).
+- The harness builds every variant with its own helper tree (`trisc.cpp`, the linker scripts, `counters.h`, ...), not `$LLK_HOME/tests/helpers`, so the firmware and the Python that parses and generates against it are always one commit. A suite replaces single files with `TestConfig.add_helpers_tree`, as in step 2: a header under `include/`, a source under `src/`, a linker script under `ld/` (its own memory map, for instance). The perf counter headers come from `$LLK_HOME/tools/include` when it has them, for the firmware and for `tt_llk_perf` alike, and from the wheel otherwise.
+- `helpers` is a top-level package of the wheel. In site-packages it sits behind the suite's rootdir on `sys.path`, so the suite must not have a `helpers` package or `helpers.py` of its own there: `import tt_llk_harness` fails with a message naming the shadowing one (a `helpers/` directory without `__init__.py`, like a helpers tree, is fine).
+- Register the suite's LLK headers, helpers tree and drivers as in steps 2 and 3.
+
+`tests/hardware_free/harness/test_out_of_tree_contract.py` builds the wheel, installs it with pip and runs the `tests/out_of_tree/` fixture on the installed copy in the PR pipeline, with an `LLK_HOME` of links that has no `tests/python_tests`, `tests/helpers`, `tests/sfpi` or `tools`, and the toolchain named by `LLK_SFPI_ROOT`. A harness module that only works from a checkout (a path derived from `__file__`, a data file the wheel does not list) fails there. A module that reads a tt-llk file outside `helpers` goes through `helpers.harness_files.harness_files_root()` and lists the file in `LLK_HOME_FILES` of `make_wheel.py`.

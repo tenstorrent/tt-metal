@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from helpers import harness_files
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import COMPRESSED_META, LOOP_FACTOR, TILE_COUNT
 from helpers.utils import run_shell_command
@@ -40,6 +41,7 @@ SEARCH_DIR_STATE = (
     "EXTRA_INCLUDE_APPEND",
     "EXTRA_SRC_INCLUDE_PREPEND",
     "EXTRA_SRC_INCLUDE_APPEND",
+    "EXTRA_LINKER_SCRIPT_DIRS",
 )
 
 DRIVER = "sources/eltwise_unary_datacopy_test.cpp"
@@ -185,6 +187,43 @@ def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_t
         ids.append(variant_id())
 
     assert len(set(ids)) == len(ids), f"variant ids collided: {ids}"
+
+
+def test_a_helpers_tree_replaces_the_linker_scripts_it_has(
+    isolated_search_dirs, tmp_path, monkeypatch
+):
+    """A suite's own memory map; the rest stay the harness's. Absolute: the link runs in ``$LLK_HOME/tests``."""
+    (tmp_path / "helpers/ld").mkdir(parents=True)
+    (tmp_path / "helpers/ld/brisc.ld").touch()
+    monkeypatch.chdir(tmp_path)
+    TestConfig.add_helpers_tree("helpers")
+
+    assert TestConfig.linker_script("brisc.ld") == tmp_path / "helpers/ld/brisc.ld"
+    assert (
+        TestConfig.linker_script("sections.ld")
+        == TestConfig.LINKER_SCRIPTS / "sections.ld"
+    )
+
+
+def test_a_checkout_harness_builds_with_the_helpers_of_llk_home(tmp_path):
+    """The SFPU report tool runs one harness checkout on two trees; each side's device code must be its own."""
+    assert not harness_files.harness_is_installed()
+    assert harness_files.build_helpers_tree(tmp_path) == tmp_path / "tests/helpers"
+
+
+def test_linker_script_dirs_change_the_variant_id(isolated_search_dirs, tmp_path):
+    """The same headers and sources with and without the tree's ``ld/`` link differently.
+
+    CONSUME mode finds its ELF by the id, so the two must not share one.
+    """
+    TestConfig.add_include_dirs(tmp_path / "include")
+    TestConfig.add_src_include_dirs(tmp_path / "src")
+    without_linker_scripts = variant_id()
+
+    clear_search_dirs(False)
+    TestConfig.add_helpers_tree(tmp_path)
+
+    assert variant_id() != without_linker_scripts
 
 
 @_IN_TREE_REGIMES

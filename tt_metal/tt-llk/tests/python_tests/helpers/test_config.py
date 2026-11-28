@@ -36,6 +36,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
+from . import toolchain
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
@@ -72,6 +73,11 @@ from .golden_generators import (
     ProxyMode,
     dummy_golden_generator,
     get_golden_proxied,
+)
+from .harness_files import (
+    build_helpers_tree,
+    harness_files_root,
+    harness_is_installed,
 )
 from .llk_params import (
     DestAccumulation,
@@ -162,6 +168,8 @@ class TestConfig:
     # Sources directories
     LLK_ROOT: ClassVar[Path]
     TESTS_WORKING_DIR: ClassVar[Path]
+    # Root of the SFPI toolchain (compiler/, include/); see helpers/toolchain.py for where it is looked for.
+    SFPI_ROOT: ClassVar[Path]
     TOOL_PATH: ClassVar[Path]
 
     HELPERS: ClassVar[Path]
@@ -187,6 +195,8 @@ class TestConfig:
     EXTRA_INCLUDE_APPEND: ClassVar[List[str]] = []
     # Extra -I dirs for #include <foo.cpp> (tests/helpers/src style).
     EXTRA_SRC_INCLUDE_PREPEND: ClassVar[List[str]] = []
+    # ``<tree>/ld`` of the trees from add_helpers_tree(), first wins; see linker_script().
+    EXTRA_LINKER_SCRIPT_DIRS: ClassVar[List[Path]] = []
     EXTRA_SRC_INCLUDE_APPEND: ClassVar[List[str]] = []
     # Truncated sha256 in _safe_artefact_key — on-disk name only, not a variant id.
     ARTEFACT_KEY_HASH_CHARS: ClassVar[int] = 12
@@ -466,11 +476,14 @@ class TestConfig:
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
-        TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
+        # None found is not an error here: a session that never compiles needs no toolchain (require_toolchain()).
+        TestConfig.SFPI_ROOT = toolchain.session_sfpi_root(TestConfig.LLK_ROOT)
+        TestConfig.TOOL_PATH = TestConfig.SFPI_ROOT / "compiler/bin"
 
-        TestConfig.HELPERS = TestConfig.TESTS_WORKING_DIR / "helpers"
-        TestConfig.RISCV_SOURCES = TestConfig.TESTS_WORKING_DIR / "helpers/src"
-        TestConfig.LINKER_SCRIPTS = TestConfig.TESTS_WORKING_DIR / "helpers/ld"
+        # LLK_HOME's from a checkout, the wheel's own when installed (build_helpers_tree).
+        TestConfig.HELPERS = build_helpers_tree(TestConfig.LLK_ROOT)
+        TestConfig.RISCV_SOURCES = TestConfig.HELPERS / "src"
+        TestConfig.LINKER_SCRIPTS = TestConfig.HELPERS / "ld"
 
         # Toolchain paths
         TestConfig.GXX = str((TestConfig.TOOL_PATH / "riscv-tt-elf-g++").absolute())
@@ -659,9 +672,14 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
+        # An installed harness compiles its own helper headers, not LLK_HOME's copy, and falls back to its perf
+        # counter headers when LLK_HOME has none.
+        harness = harness_files_root()
+        installed = harness_is_installed()
         TestConfig.INCLUDES = (
-            [
-                "-Isfpi/include",
+            [f"-I{harness}/tests/helpers/include"] * installed
+            + [
+                TestConfig.sfpi_include_flag(),
                 # Relative to tests/ (compile cwd), not pytest's cwd.
                 *[
                     f"-I{p}"
@@ -681,6 +699,7 @@ class TestConfig:
                 # TODO: remove this after kernels get moved into Metal experimental (#52837)
                 "-I../../../ttnn/cpp/ttnn/operations/experimental",
             ]
+            + [f"-I{harness}/tools/include"] * installed
         )
         TestConfig._apply_extra_includes()
 
@@ -891,20 +910,39 @@ class TestConfig:
 
     @staticmethod
     def add_helpers_tree(*trees, prepend: bool = True) -> None:
-        """Add a ``tests/helpers``-layout tree: ``<tree>/include`` + ``<tree>/src``.
+        """Add a ``tests/helpers``-layout tree: ``<tree>/include`` + ``<tree>/src`` + ``<tree>/ld``.
 
         Shorthand for ``add_include_dirs(<tree>/include)`` plus
-        ``add_src_include_dirs(<tree>/src)``. For one variant only, pass
-        ``helpers_trees=[...]`` to the constructor.
+        ``add_src_include_dirs(<tree>/src)``; with ``prepend`` (the default) a
+        linker script the tree has under ``ld/`` also replaces the harness's of
+        that name. For one variant only, pass ``helpers_trees=[...]`` to the
+        constructor (headers and sources only).
         """
         includes = []
         sources = []
+        linker_scripts = []
         for tree in trees:
             tree = Path(tree)
             includes.append(tree / "include")
             sources.append(tree / "src")
+            # Absolute, as _as_include_flags makes the other two: the link runs in $LLK_HOME/tests.
+            linker_scripts.append((tree / "ld").expanduser().resolve())
         TestConfig.add_include_dirs(*includes, prepend=prepend)
         TestConfig.add_src_include_dirs(*sources, prepend=prepend)
+        if prepend:
+            TestConfig.EXTRA_LINKER_SCRIPT_DIRS = linker_scripts + [
+                directory
+                for directory in TestConfig.EXTRA_LINKER_SCRIPT_DIRS
+                if directory not in linker_scripts
+            ]
+
+    @staticmethod
+    def linker_script(name: str) -> Path:
+        """``name`` from the first add_helpers_tree() tree that has it under ``ld/``, else the harness's own."""
+        for directory in TestConfig.EXTRA_LINKER_SCRIPT_DIRS:
+            if (directory / name).is_file():
+                return directory / name
+        return TestConfig.LINKER_SCRIPTS / name
 
     @staticmethod
     def setup_build(
@@ -924,6 +962,44 @@ class TestConfig:
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             else (MailboxesCoverage if with_coverage else Mailboxes)
         )
+
+    @staticmethod
+    def sfpi_include_flag() -> str:
+        """``-I`` of the SFPI headers, relative to the compile directory for the in-tree toolchain.
+
+        The in-tree spelling stays as it is because the flag is hashed into
+        every variant id.
+        """
+        if TestConfig.SFPI_ROOT == toolchain.in_tree_sfpi_root(TestConfig.LLK_ROOT):
+            return "-Isfpi/include"
+        return f"-I{TestConfig.SFPI_ROOT}/include"
+
+    @staticmethod
+    def require_toolchain() -> None:
+        """Fail with the places looked in when there is no SFPI compiler; called where compiling starts."""
+        if not Path(TestConfig.GXX).is_file():
+            raise RuntimeError(toolchain.missing_sfpi_message(TestConfig.LLK_ROOT))
+
+    @staticmethod
+    def check_toolchain() -> None:
+        """Once per session, on the controller: the SFPI release is one the harness builds with.
+
+        Also says so when it is not the release ``LLK_HOME`` pins or, when
+        consuming, not the release the ELFs were built with: consuming never
+        rebuilds, so ELFs of an earlier toolchain would otherwise run unnoticed.
+        """
+        if not Path(TestConfig.GXX).is_file():
+            return
+        version = toolchain.check_sfpi(TestConfig.SFPI_ROOT, TestConfig.LLK_ROOT)
+        logger.info("SFPI {} at {}", version, TestConfig.SFPI_ROOT)
+        built_with = TestConfig.ARTEFACTS_DIR / "sfpi.version"
+        if TestConfig.BUILD_MODE != BuildMode.CONSUME:
+            built_with.write_text(f"{version}\n")
+        elif built_with.is_file() and built_with.read_text().strip() != str(version):
+            toolchain.report_sfpi_drift(
+                f"The ELFs in {TestConfig.ARTEFACTS_DIR} were built with SFPI {built_with.read_text().strip()}, "
+                f"not with the installed {version}; run the compile producer again to rebuild them."
+            )
 
     @staticmethod
     def setup_mode(
@@ -1436,6 +1512,13 @@ class TestConfig:
             "<<src-append>>",
             *src_include_append,
         ]
+        # Which linker scripts a variant links with. Fenced only when a tree is registered, so the ids of
+        # every variant that has none stay as they were.
+        if TestConfig.EXTRA_LINKER_SCRIPT_DIRS:
+            search_dirs += [
+                "<<linker-scripts>>",
+                *map(str, TestConfig.EXTRA_LINKER_SCRIPT_DIRS),
+            ]
 
         # Process-wide build switches live outside ``self.__dict__``, and CONSUME
         # mode never rebuilds an ELF, so ``variant_id`` must key them explicitly.
@@ -1502,8 +1585,8 @@ class TestConfig:
                 NON_COVERAGE_OPTIONS_COMPILE,
             )
 
-        MEMORY_LAYOUT_LD_SCRIPT = (
-            f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
+        MEMORY_LAYOUT_LD_SCRIPT = str(
+            TestConfig.linker_script(f"memory.{TestConfig.ARCH.value}.ld")
         )
         include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
         OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
@@ -1524,8 +1607,8 @@ class TestConfig:
             OPTIONS_COMPILE += (
                 "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
             )
-            MEMORY_LAYOUT_LD_SCRIPT = (
-                f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
+            MEMORY_LAYOUT_LD_SCRIPT = str(
+                TestConfig.linker_script(f"memory.{TestConfig.ARCH.value}.debug.ld")
             )
 
         if self.profiler_build == ProfilerBuild.Yes:
@@ -1615,8 +1698,8 @@ class TestConfig:
                     perf_cnt_flag,
                     [
                         f"-T{local_memory_layout_ld}",
-                        f'-T{TestConfig.LINKER_SCRIPTS / "brisc.ld"}',
-                        f'-T{TestConfig.LINKER_SCRIPTS / "sections.ld"}',
+                        f'-T{TestConfig.linker_script("brisc.ld")}',
+                        f'-T{TestConfig.linker_script("sections.ld")}',
                         "-o",
                         shared_elf_dir / "brisc.elf",
                         TestConfig.RISCV_SOURCES / "brisc.cpp",
@@ -1892,6 +1975,7 @@ class TestConfig:
         if TestConfig.INFRA_TESTING:
             return
 
+        TestConfig.require_toolchain()
         self.build_shared_artefacts()
 
         # Fast path: if build is already complete, skip entirely
@@ -2005,8 +2089,8 @@ class TestConfig:
                     coverage_args,
                     [
                         f"-T{local_memory_layout_ld}",
-                        f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
-                        f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
+                        f"-T{TestConfig.linker_script(f'{name}.ld')}",
+                        f"-T{TestConfig.linker_script('sections.ld')}",
                     ],
                     (
                         [f"{CODE_SHIFT_FLAG}{TestConfig.CODE_SHIFT}"]

@@ -44,6 +44,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
+from helpers.harness_files import harness_files_root
 from helpers.target_config import is_ttsim
 from ttsim_error import parse_ttsim_error
 
@@ -71,12 +72,8 @@ if _SHOULD_RUN_SIMULATOR and is_ttsim(_SIMULATOR_PATH):
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
 # tt_llk_perf lives in tools/python, outside the test tree, so it goes on sys.path before the helpers import it.
-# LLK_HOME wins when set, matching init_llk_home() further down.
-_TT_LLK_TOOLS_PYTHON = str(
-    Path(os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3])
-    / "tools"
-    / "python"
-)
+# The harness's own copy, not LLK_HOME's: the two are one commit.
+_TT_LLK_TOOLS_PYTHON = str(harness_files_root() / "tools" / "python")
 if _TT_LLK_TOOLS_PYTHON not in sys.path:
     sys.path.insert(0, _TT_LLK_TOOLS_PYTHON)
 
@@ -525,6 +522,13 @@ def pytest_configure(config):
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
 
+    # The controller alone: one compiler run and one report per session, before xdist starts its workers.
+    if worker_id == "master" and not config.option.collectonly:
+        try:
+            TestConfig.check_toolchain()
+        except RuntimeError as error:
+            raise pytest.UsageError(str(error)) from error
+
     TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
@@ -827,7 +831,7 @@ def _module_costs():
         if TestConfig.SPEED_OF_LIGHT
         else "perf_split_costs.json"
     )
-    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
+    table = json.loads((harness_files_root() / "tests" / costs_file).read_text())
     return costs_file, table.get(TestConfig.CHIP_ARCH.value)
 
 

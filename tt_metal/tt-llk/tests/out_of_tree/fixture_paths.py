@@ -27,6 +27,17 @@ def llk_python_tests() -> Path:
     return llk_home() / "tests" / "python_tests"
 
 
+def harness_python_root() -> Path:
+    """Directory that holds the harness packages (``tt_llk_harness``, ``helpers``).
+
+    ``tests/python_tests`` of the checkout, or, when ``LLK_HARNESS_SITE`` names
+    one, the directory the harness wheel was installed into. The second
+    is how the same contract is checked against the wheel.
+    """
+    site = os.environ.get("LLK_HARNESS_SITE")
+    return Path(site).resolve() if site else llk_python_tests()
+
+
 def cpp_source(name: str) -> str:
     """Absolute driver path, so it is never resolved from ``tests/sources/``."""
     path = FIXTURE_ROOT / "sources" / name
