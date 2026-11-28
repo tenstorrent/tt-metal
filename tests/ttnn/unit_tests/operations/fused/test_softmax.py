@@ -407,6 +407,122 @@ def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
         ttnn.scale_mask_softmax_in_place(input_tensor, 1.0, attention_mask_t, program_config=program_config)
 
 
+def _offset_shard_grid(start, grid_size, ranges):
+    """A grid_size block of cores at `start`, as one range or one range per row; the buffer places shards range by
+    range, so the two give different shard orders under COL_MAJOR."""
+    x0, y0 = start
+    rows = [(y0, y0 + grid_size[1] - 1)] if ranges == "one" else [(y, y) for y in range(y0, y0 + grid_size[1])]
+    return ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(x0, ya), ttnn.CoreCoord(x0 + grid_size[0] - 1, yb)) for ya, yb in rows}
+    )
+
+
+def _assert_every_shard_matches(expected, actual, num_shards):
+    """Each shard's rows must be finite and match, so a shard left with its input or scaled wrongly fails."""
+    expected = expected.float().reshape(num_shards, -1, expected.shape[-1])
+    actual = actual.float().reshape(num_shards, -1, actual.shape[-1])
+    for shard in range(num_shards):
+        assert torch.isfinite(actual[shard]).all(), f"shard {shard} has non-finite values"
+        assert_with_pcc(expected[shard], actual[shard], 0.999)
+        max_error = (actual[shard] - expected[shard]).abs().max()
+        assert max_error < 3e-2, f"shard {shard}: max abs error {max_error}"
+
+
+# Shard grids at and away from core (0, 0). Each core holds one batch, so a kernel on the wrong core or a mask from
+# the wrong batch shows up in that batch's rows.
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "ranges": ["one", "per_row"],
+            "masked": [False, True],
+            "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+            "start": [(0, 0), (1, 0), (0, 1)],
+        },
+        # With a mask a batch read from the wrong shard shows up; one range under COL_MAJOR checks the orientation,
+        # per_row under COL_MAJOR the range-by-range order
+        keep=lambda ranges, masked, orientation, start: masked,
+    )
+)
+def test_softmax_sharded_offset_grid(device, ranges, masked, orientation, start):
+    torch.manual_seed(0)
+    grid_size = (2, 2)
+    batch_size, h, w = grid_size[0] * grid_size[1], 32, 256
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_offset_shard_grid(start, grid_size, ranges), [h, w], orientation),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size, subblock_w=4, block_h=h // 32, block_w=w // 32
+    )
+
+    torch_input_tensor = torch_random((batch_size, 1, h, w), -10, 10, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    if masked:
+        attention_mask = torch_random((batch_size, 1, 1, w), -10, 0, dtype=torch.bfloat16)
+        attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.scale_mask_softmax_in_place(
+            input_tensor, 0.5, attention_mask_t, program_config=program_config
+        )
+        torch_output_tensor = torch.softmax(torch_input_tensor.float() * 0.5 + attention_mask.float(), dim=-1)
+    else:
+        output_tensor = ttnn.softmax_in_place(input_tensor, program_config=program_config)
+        torch_output_tensor = torch.softmax(torch_input_tensor.float(), dim=-1)
+
+    _assert_every_shard_matches(torch_output_tensor, ttnn.to_torch(output_tensor), batch_size)
+
+
+# The other mask paths on offset grids, each run twice on fresh values to check that the cached program is reused
+# and still correct: a causal mask in DRAM and one resident on the input's grid (two tile rows per shard), and a
+# [B, 1, 1, W] mask with two cores per batch, where the mask moves to the next batch every second core.
+@pytest.mark.parametrize("mask", ["causal_interleaved", "causal_sharded", "two_cores_per_batch"])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("start", [(1, 0), (0, 1)])
+def test_softmax_sharded_offset_grid_mask_paths(device, start, orientation, mask):
+    torch.manual_seed(0)
+    grid_size = (2, 2)
+    batch, heads, h = (2, 2, 32) if mask == "two_cores_per_batch" else (4, 1, 64)
+    w = 256
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_offset_shard_grid(start, grid_size, "one"), [h, w], orientation),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size, subblock_w=4, block_h=h // 32, block_w=w // 32
+    )
+    mask_shape = (batch, 1, 1, w) if mask == "two_cores_per_batch" else (batch, 1, h, w)
+    mask_memory_config = memory_config if mask == "causal_sharded" else ttnn.DRAM_MEMORY_CONFIG
+
+    entries = []
+    for _ in range(2):
+        torch_input_tensor = torch_random((batch, heads, h, w), -10, 10, dtype=torch.bfloat16)
+        attention_mask = torch_random(mask_shape, -10, 0, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        attention_mask_t = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mask_memory_config,
+        )
+        output_tensor = ttnn.scale_mask_softmax_in_place(
+            input_tensor,
+            0.5,
+            attention_mask_t,
+            program_config=program_config,
+            is_causal_mask=mask != "two_cores_per_batch",
+        )
+        torch_output_tensor = torch.softmax(torch_input_tensor.float() * 0.5 + attention_mask.float(), dim=-1)
+        _assert_every_shard_matches(torch_output_tensor, ttnn.to_torch(output_tensor), batch * heads)
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0], f"second call built a new program: cache entries {entries}"
+
+
 @pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [24, 32, 64])
@@ -1550,6 +1666,28 @@ def _sharded_softmax_case(device, case):
         expected = torch.softmax(x_host * 0.125 + causal, dim=-1)
         return expected, lambda: ttnn.scale_causal_mask_hw_dims_softmax_in_place(x, 0.125, mask, program_config=pc)
 
+    if case == "hw_dims_multi_range":
+        # Six shards on a 2x2 block then a 2x1 row: the shard order differs from row-major over the 4x2 program grid
+        grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0)),
+            }
+        )
+        memory_config = ttnn.MemoryConfig(
+            HS, ttnn.BufferType.L1, ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR)
+        )
+        x_host = ((torch.arange(192 * 64).reshape(1, 1, 192, 64) * 7 + 3) % 33 - 16) / 8
+        # Every row's mask differs, so a shard given another shard's mask rows shows up
+        mask_host = -(((torch.arange(192 * 64).reshape(1, 1, 192, 64) * 5 + 1) % 17) / 2)
+        x = put(x_host, memory_config)
+        mask = put(mask_host, ttnn.DRAM_MEMORY_CONFIG)
+        pc = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(4, 2), subblock_w=2, block_h=1, block_w=2
+        )
+        expected = torch.softmax(x_host * 0.125 + mask_host, dim=-1)
+        return expected, lambda: ttnn.scale_causal_mask_hw_dims_softmax_in_place(x, 0.125, mask, program_config=pc)
+
     if case in ("batch_per_shard", "batches_per_shard"):
         cores = 4 if case == "batch_per_shard" else 2
         shard, end = [128 // cores, 64], (cores - 1, 0)
@@ -1606,7 +1744,6 @@ def _sharded_softmax_case(device, case):
     "case, error",
     [
         ("row_major_causal_mask", "A causal mask needs TILE layout"),
-        ("hw_dims_offset_grid", "on the first 2 cores of the program grid"),
         ("batches_per_shard", "each input shard must lie within one batch"),
         ("width_shards", "every shard must hold whole rows"),
         ("block_shards", "every shard must hold whole rows"),
@@ -1624,6 +1761,8 @@ def test_sharded_softmax_rejects_unsupported_geometry(device, expect_error, case
     [
         "row_major_mask",
         "hw_dims_origin_grid",
+        "hw_dims_offset_grid",
+        "hw_dims_multi_range",
         "batch_per_shard",
         "height_shards",
         "full_width_shard",

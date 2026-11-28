@@ -376,24 +376,6 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     shard_width,
                     input_shape[-1]);
 
-                if (attributes.is_scale_causal_mask_hw_dims_softmax && a.is_sharded()) {
-                    // The reader's mask cursor advances once per core of the program grid, in row-major order.
-                    const auto& shard_grid = a.shard_spec()->grid;
-                    const auto grid_w = program_config.compute_with_storage_grid_size.x;
-                    const auto num_shards = shard_grid.num_cores();
-                    bool shards_lead_grid = true;
-                    for (uint32_t i = 0; i < num_shards && shards_lead_grid; i++) {
-                        shards_lead_grid = shard_grid.contains(CoreCoord{i % grid_w, i / grid_w});
-                    }
-                    TT_FATAL(
-                        shards_lead_grid,
-                        "Scale causal mask HW dims softmax needs its {} shards on the first {} cores of the program "
-                        "grid in row-major order, starting at (0, 0); got shard grid {}",
-                        num_shards,
-                        num_shards,
-                        shard_grid);
-                }
-
                 if (tensors_args.mask.has_value()) {
                     const auto& mask = tensors_args.mask.value();
                     TT_FATAL(
