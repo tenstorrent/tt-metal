@@ -14,11 +14,12 @@ usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, PCIe read/write, NOC, DIDT).
+Run the deployment test suite (Ethernet, DRAM, DRAM ACT, PCIe read/write, NOC, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
-An iteration is a board reset followed by one run of the Ethernet, DRAM and PCIe tests.
+An iteration is a board reset followed by one run of the Ethernet, DRAM, DRAM ACT and PCIe tests.
+The DRAM ACT test takes about 10.3 minutes per iteration.
 After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once.
 
 Optional:
@@ -270,7 +271,7 @@ run_test() {
 }
 
 # run_tests: runs one round of every per-iteration test (NOC and DIDT run once, separately, after all iterations).
-# Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
+# Sets last_eth_ok, last_dram_ok, last_dram_act_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
 	failures=0
@@ -281,6 +282,10 @@ run_tests() {
 
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
+
+	# Boot-dependent fault: run every iteration.
+	run_test 'DRAM ACT test' env STRESS_OUT_DIR="$LOGDIR" $PYTHON -m pytest tests/dram/test_dram_act_patterns.py::test_dram_act_c3_screen -s -q -p no:randomly &&
+		last_dram_act_ok=1 || last_dram_act_ok=0
 
 	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
@@ -307,7 +312,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), NOC, DIDT (once, after all iterations)')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, DRAM ACT, PCIe read, PCIe write (per iteration), NOC, DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
@@ -316,6 +321,7 @@ reset_failures=0
 iterations_run=0
 eth_pass=0
 dram_pass=0
+dram_act_pass=0
 pcie_read_pass=0
 pcie_write_pass=0
 
@@ -335,6 +341,7 @@ do
 	then
 		last_eth_ok=0
 		last_dram_ok=0
+		last_dram_act_ok=0
 		last_pcie_read_ok=0
 		last_pcie_write_ok=0
 		iteration_failures=$((iteration_failures + 1))
@@ -349,6 +356,7 @@ do
 	iterations_run=$((iterations_run + 1))
 	eth_pass=$((eth_pass + last_eth_ok))
 	dram_pass=$((dram_pass + last_dram_ok))
+	dram_act_pass=$((dram_act_pass + last_dram_act_ok))
 	pcie_read_pass=$((pcie_read_pass + last_pcie_read_ok))
 	pcie_write_pass=$((pcie_write_pass + last_pcie_write_ok))
 	if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$iteration_failures" -gt 0 ]
@@ -404,6 +412,7 @@ emit "$RULE_LIGHT"
 emit "$(printf '%-20s %s' 'Board resets:'     "$((iterations_run - reset_failures))/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'DRAM ACT test:'   "$dram_act_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'NOC tests:'       "$([ "$noc_ok" -eq 1 ] && echo passed || echo failed)")"

@@ -40,6 +40,13 @@ ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
         param1));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
+
+#ifndef ARCH_QUASAR
+// Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
 ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -52,11 +59,7 @@ ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
         param1));
 }
 
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
-
 ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

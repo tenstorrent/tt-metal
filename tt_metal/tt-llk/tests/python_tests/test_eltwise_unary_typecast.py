@@ -32,7 +32,7 @@ from helpers.llk_params import (
     StableSort,
     Transpose,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -548,7 +548,10 @@ def _uint_to_uint8_wide_range_values(input_format: DataFormat, chunk: int) -> li
         for in_fmt in (DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
         if in_fmt in _ARCH_SUPPORTED_FORMATS
     ],
-    chunk=lambda formats: [0, 1] if formats.input_format == DataFormat.UInt16 else [0],
+    # Selects which stimulus slice the host drives; the kernel is the same for every chunk.
+    chunk=runtime(
+        lambda formats: [0, 1] if formats.input_format == DataFormat.UInt16 else [0]
+    ),
 )
 def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
     formats: InputOutputFormat, chunk: int

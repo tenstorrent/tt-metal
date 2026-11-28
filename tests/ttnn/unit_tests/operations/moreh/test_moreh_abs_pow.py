@@ -72,6 +72,17 @@ def test_moreh_abs_pow_corner_cases(input_shape, fp32_dest_acc_en, provide_outpu
 
 
 @pytest.mark.merge_gate
+@pytest.mark.parametrize("p", [0.0, 1.0, 2.0, 3.0], ids=["p0", "p1", "p2", "p3"])
+def test_moreh_abs_pow_int32_input_rejected(p, device, expect_error):
+    # The kernel computes |x|^p with log/exp on float tiles; an INT32 tile used to
+    # be accepted and came back as all zeros. It must raise instead.
+    torch_input = torch.randint(-10, 10, (32, 32), dtype=torch.int32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "moreh_abs_pow input only supports specific data types"):
+        ttnn.moreh_abs_pow(tt_input, p)
+
+
+@pytest.mark.merge_gate
 def test_moreh_abs_pow_rejects_other_output_dtype(device, expect_error):
     # Every buffer, including the output, uses the input's data format.
     x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

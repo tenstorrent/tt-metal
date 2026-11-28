@@ -240,7 +240,7 @@ def _case_to_device(tensors, device, ref_fp32=False, memory="dram"):
     ]
 
 
-def _host_list_msda(tensors, spatial_shapes, counts, Q, memory_config=None):
+def _host_list_msda(tensors, spatial_shapes, counts, Q, memory_config=None, value_layout="auto"):
     """The host-list path on the given device tensors, the tensor path's exact expectation."""
     value_t, ref_t, off_t, attn_t = tensors
     out = ttnn.experimental.fused_msda_from_offsets(
@@ -252,8 +252,15 @@ def _host_list_msda(tensors, spatial_shapes, counts, Q, memory_config=None):
         reference_mode="pillar",
         memory_config=memory_config,
         num_valid_queries=[min(n, Q) for n in counts],
+        value_layout=value_layout,
     )
     return ttnn.to_torch(out).to(torch.float32)
+
+
+def _head_major_from_packed(value: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """Packed (B, S, H*D) -> head-major (B, H, ceil(S/32), 32*D)."""
+    B, S, HD = value.shape
+    return _head_major_value(value.reshape(B, S, num_heads, HD // num_heads))
 
 
 def _assert_rows_match(reference, expected, got, counts, Q):
@@ -332,9 +339,40 @@ def test_fused_msda_v2_num_valid_queries_tensor_matches_host_list(device, B, Q, 
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("memory", ["dram", "l1"])
 @pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
-def test_fused_msda_v2_num_valid_queries_tensor_follows_counts_in_trace(device, packed):
+@pytest.mark.parametrize("B,Q,H,counts", [SMALL_COUNTS, LARGE_COUNTS], ids=["small", "large"])
+def test_fused_msda_v2_head_major_value_with_num_valid_queries_tensor(device, B, Q, H, counts, packed, memory):
+    """Head-major value under device counts matches packed value under the same counts, bit for bit.
+
+    Spatial cross-attention runs this combination: the counts pick each core's tiles at run
+    time, including counts above Q and a batch with none, and the gather, split between reader
+    and writer on Blackhole, pair-reads head-major value for exactly those rows.
+    """
+    for seed, num_valid in enumerate(counts):
+        tensors, spatial_shapes, reference = _num_valid_queries_case(B, Q, H, seed=seed, packed=packed)
+        packed_value_t, *rest = _case_to_device(tensors, device, memory=memory)
+        head_major_t = _to_device_in(_head_major_from_packed(tensors[0], H), device, memory)
+        counts_t = _counts_tensor(num_valid, device)
+
+        def run(value_t, value_layout):
+            out = ttnn.experimental.fused_msda_from_offsets(
+                value_t,
+                *rest,
+                spatial_shapes,
+                reference_mode="pillar",
+                num_valid_queries_tensor=counts_t,
+                value_layout=value_layout,
+            )
+            return ttnn.to_torch(out).to(torch.float32)
+
+        _assert_rows_match(reference, run(packed_value_t, "auto"), run(head_major_t, "head_major"), num_valid, Q)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("value_layout", ["auto", "head_major"])
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
+def test_fused_msda_v2_num_valid_queries_tensor_follows_counts_in_trace(device, packed, value_layout):
     """A trace captured with one set of counts computes the counts written before each replay.
 
     The first replays raise a count above the captured one, so a trace that kept the captured
@@ -342,14 +380,23 @@ def test_fused_msda_v2_num_valid_queries_tensor_follows_counts_in_trace(device, 
     which the host list cannot express, and must still complete.
     """
     B, Q, H = 2, 300, 8
+
+    def laid_out(host_tensors):
+        value, *rest = host_tensors
+        return (value if value_layout == "auto" else _head_major_from_packed(value, H), *rest)
+
     captured, *replayed = ([40, 129], [300, 129], [17, 288], [1000, 2], [0, 0])
     tensors, spatial_shapes, _ = _num_valid_queries_case(B, Q, H, seed=0, packed=packed)
-    inputs = _case_to_device(tensors, device)
+    inputs = _case_to_device(laid_out(tensors), device)
     counts_t = _counts_tensor(captured, device)
 
     def run():
         return ttnn.experimental.fused_msda_from_offsets(
-            *inputs, spatial_shapes, reference_mode="pillar", num_valid_queries_tensor=counts_t
+            *inputs,
+            spatial_shapes,
+            reference_mode="pillar",
+            num_valid_queries_tensor=counts_t,
+            value_layout=value_layout,
         )
 
     run()  # compile outside the capture
@@ -359,7 +406,7 @@ def test_fused_msda_v2_num_valid_queries_tensor_follows_counts_in_trace(device, 
     try:
         for seed, num_valid in enumerate(replayed, start=1):
             host_tensors, _, reference = _num_valid_queries_case(B, Q, H, seed=seed, packed=packed)
-            for host, dev in zip(host_tensors, inputs):
+            for host, dev in zip(laid_out(host_tensors), inputs):
                 ttnn.copy_host_to_device_tensor(
                     ttnn.from_torch(host.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT), dev
                 )
@@ -368,7 +415,8 @@ def test_fused_msda_v2_num_valid_queries_tensor_follows_counts_in_trace(device, 
             if not any(num_valid):
                 continue
             got = ttnn.to_torch(out).to(torch.float32)
-            _assert_rows_match(reference, _host_list_msda(inputs, spatial_shapes, num_valid, Q), got, num_valid, Q)
+            expected = _host_list_msda(inputs, spatial_shapes, num_valid, Q, value_layout=value_layout)
+            _assert_rows_match(reference, expected, got, num_valid, Q)
     finally:
         ttnn.release_trace(device, trace_id)
 
@@ -1848,3 +1896,265 @@ def test_fused_msda_from_offsets_rejects_unknown_reference_mode(device, expect_e
     ref_t = _to_device(torch.rand(1, 8, 2, 2), device)
     with expect_error(RuntimeError, "reference_mode"):
         ttnn.experimental.fused_msda_from_offsets(value_t, ref_t, off_t, attn_t, shapes, reference_mode="boxes")
+
+
+# ---------------------------------------------------------------------------
+# Head-major value (B, H, ceil(S/32), 32*D)
+# ---------------------------------------------------------------------------
+# Must equal fused_msda_value_layout::HEAD_MAJOR_KEYS_PER_PAGE in
+# fused_msda/device/kernels/msda_value_layout.hpp (the tile height).
+HEAD_MAJOR_KEYS_PER_PAGE = 32
+
+# W = 33 > 32, so every row of level 0 crosses a page boundary and some
+# horizontal corner pairs straddle two pages; S % 32 != 0 leaves a padded last
+# page per head.
+HEAD_MAJOR_SHAPES = [(9, 33), (5, 7)]
+
+
+def _head_major_value(value: torch.Tensor) -> torch.Tensor:
+    """(B, S, H, D) -> (B, H, ceil(S/32), 32*D), the last page of each head zero-padded."""
+    B, S, H, D = value.shape
+    pages = -(-S // HEAD_MAJOR_KEYS_PER_PAGE)
+    hm = torch.zeros(B, H, pages * HEAD_MAJOR_KEYS_PER_PAGE, D, dtype=value.dtype)
+    hm[:, :, :S] = value.permute(0, 2, 1, 3)
+    return hm.reshape(B, H, pages, HEAD_MAJOR_KEYS_PER_PAGE * D)
+
+
+def _value_stick_aligned(head_dim: int, memory: str) -> bool:
+    """Do D-wide sticks sit on legal NoC source addresses in this buffer type?
+
+    Head-major value stores keys back to back, so key k of a page starts at
+    k * D * 2 bytes; the op refuses value whose stick is not a multiple of the
+    buffer's alignment (see test_fused_msda_rejects_unaligned_head_major_stick).
+    """
+    alignment = ttnn.device.get_dram_alignment() if memory == "dram" else ttnn.device.get_l1_alignment()
+    return (head_dim * 2) % alignment == 0
+
+
+def _check_head_major_matches_packed(device, B, Q, H, D, memory):
+    spatial_shapes = HEAD_MAJOR_SHAPES
+    value, loc, attn = _random_case(B, Q, H, 2, 4, D, spatial_shapes, loc_range=(-0.2, 1.2))
+
+    loc_t = _to_device(_pack_locations(loc), device)
+    attn_t = _to_device(_pack_weights(attn), device)
+    packed = ttnn.to_torch(
+        ttnn.experimental.fused_msda(_to_device_in(_pack_value(value), device, memory), loc_t, attn_t, spatial_shapes)
+    ).to(torch.float32)
+    head_major = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            _to_device_in(_head_major_value(value), device, memory),
+            loc_t,
+            attn_t,
+            spatial_shapes,
+            value_layout="head_major",
+        )
+    ).to(torch.float32)
+
+    torch.testing.assert_close(packed, head_major, rtol=0, atol=0)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), head_major)
+
+
+@pytest.mark.parametrize("D", [32, 64])
+# Q = 32 + SPLIT_ROW + 1 leaves a tail block of SPLIT_ROW + 1 rows: the writer
+# gathers, and pair-reads, exactly one row of it.
+@pytest.mark.parametrize(
+    "memory, B, Q, H",
+    [(m, B, Q, H) for m, s in SPLIT_ROW.items() for B, Q, H in [(1, 33, 2), (2, 129, 8), (1, 32 + s + 1, 2)]],
+)
+def test_fused_msda_v1_head_major_value_equivalence(device, B, Q, H, D, memory):
+    """Head-major value must match packed value exactly, pair reads and their fallbacks included.
+
+    Locations spill past [0, 1] so every mix of in- and out-of-bounds corners
+    occurs: a pair is one read only when both corners are in bounds and in the
+    same page; otherwise each in-bounds corner is one read and an out-of-bounds slot is
+    skipped (zeroed off Blackhole).
+    """
+    _check_head_major_matches_packed(device, B, Q, H, D, memory)
+
+
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+@pytest.mark.parametrize("D", [16, 48])
+def test_fused_msda_v1_head_major_value_scatter_path(device, D, memory):
+    """D % 32 != 0 takes the tile-scatter reader, which reads head-major value one corner at a time.
+
+    One head keeps the packed comparison legal at every D: packed value with H > 1
+    needs D*2 to be a multiple of the buffer's alignment. The head-major stick
+    still has to meet that alignment at any H.
+    """
+    if not _value_stick_aligned(D, memory):
+        pytest.skip(f"a {D * 2}-byte stick is not aligned for {memory} on this device")
+    _check_head_major_matches_packed(device, 2, 65, 1, D, memory)
+
+
+def test_fused_msda_rejects_unaligned_head_major_stick(device, expect_error):
+    head_dim = 16
+    if _value_stick_aligned(head_dim, "dram"):
+        pytest.skip(f"this device's {ttnn.device.get_dram_alignment()}-byte DRAM alignment permits head_dim {head_dim}")
+    _, loc_t, attn_t, shapes = _valid_inputs(device, H=1, D=head_dim)
+    value, _, _ = _random_case(1, 8, 1, 2, 4, head_dim, shapes)
+    with expect_error(RuntimeError, "must be a multiple of value's"):
+        ttnn.experimental.fused_msda(
+            _to_device(_head_major_value(value), device), loc_t, attn_t, shapes, value_layout="head_major"
+        )
+
+
+def test_fused_msda_rejects_unknown_value_layout(device, expect_error):
+    value_t, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
+    with expect_error(RuntimeError, 'value_layout must be "auto"'):
+        ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes, value_layout="packed")
+
+
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+def test_fused_msda_v2_head_major_value_equivalence(device, memory):
+    """The V2 entry point takes head-major value too, with the same answer as packed."""
+    spatial_shapes = HEAD_MAJOR_SHAPES
+    value, ref_pts, offsets, attn = _v2_case(2, 65, 8, 2, 4, 32, 4, spatial_shapes)
+
+    def run(value_t, value_layout):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                value_t,
+                _to_device(ref_pts, device),
+                _to_device(_pack_locations(offsets), device),
+                _to_device(_pack_weights(attn), device),
+                spatial_shapes,
+                reference_mode="pillar",
+                value_layout=value_layout,
+            )
+        ).to(torch.float32)
+
+    packed = run(_to_device_in(_pack_value(value), device, memory), "auto")
+    head_major = run(_to_device_in(_head_major_value(value), device, memory), "head_major")
+    torch.testing.assert_close(packed, head_major, rtol=0, atol=0)
+
+
+def test_fused_msda_untilize_and_split_heads_feeds_fused_msda(device):
+    """value_proj's tiled output -> untilize_and_split_heads -> op must equal the packed ROW_MAJOR path exactly."""
+    spatial_shapes = HEAD_MAJOR_SHAPES
+    B, Q, H, D = 2, 65, 8, 32
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, 2, 4, D, 4, spatial_shapes)
+    tiled = ttnn.from_torch(_pack_value(value).to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+
+    def run(value_t, value_layout):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                value_t,
+                _to_device(ref_pts, device),
+                _to_device(_pack_locations(offsets), device),
+                _to_device(_pack_weights(attn), device),
+                spatial_shapes,
+                reference_mode="pillar",
+                value_layout=value_layout,
+            )
+        ).to(torch.float32)
+
+    packed = run(ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG), "auto")
+    head_major = run(
+        ttnn.experimental.untilize_and_split_heads(tiled, H, memory_config=ttnn.L1_MEMORY_CONFIG), "head_major"
+    )
+    torch.testing.assert_close(packed, head_major, rtol=0, atol=0)
+
+
+def test_fused_msda_rejects_head_major_value_with_wrong_page_count(device, expect_error):
+    _, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
+    # S = 36 needs ceil(36/32) = 2 pages per head, not 3.
+    bad = _to_device(torch.randn(1, 2, 3, 32 * 32), device)
+    with expect_error(RuntimeError, "is not head-major"):
+        ttnn.experimental.fused_msda(bad, loc_t, attn_t, shapes, value_layout="head_major")
+
+
+def test_fused_msda_rejects_padded_head_major_value(device, expect_error):
+    """Page ids come from value's logical shape, so padding in its buffer misplaces every page after it."""
+    _, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
+    # S = 36: two pages per head, viewed over a buffer that holds three.
+    backing = _to_device(torch.randn(1, 2, 3, 32 * 32), device)
+    padded = ttnn.reshape(backing, ttnn.Shape([1, 2, 2, 32 * 32]), ttnn.Shape([1, 2, 3, 32 * 32]))
+    assert list(padded.shape) == [1, 2, 2, 1024] and list(padded.padded_shape) == [1, 2, 3, 1024]
+    with expect_error(RuntimeError, "must equal its logical shape"):
+        ttnn.experimental.fused_msda(padded, loc_t, attn_t, shapes, value_layout="head_major")
+
+
+def test_fused_msda_l1_check_takes_tiled_head_major_value(device):
+    """The fit check sees value before the op lays it out row-major, so tile padding must not reject it."""
+    spatial_shapes = [(6, 5), (3, 2)]  # S = 36: two pages per head, tile-padded to 32
+    value, ref_pts, offsets, attn = _v2_case(1, 8, 2, 2, 4, 32, 4, spatial_shapes)
+    head_major = ttnn.from_torch(_head_major_value(value).to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    assert list(head_major.padded_shape) != list(head_major.shape)
+    fits = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+        head_major,
+        _to_device(ref_pts, device),
+        _to_device(_pack_locations(offsets), device),
+        _to_device(_pack_weights(attn), device),
+        spatial_shapes,
+        reference_mode="pillar",
+        value_layout="head_major",
+    )
+    assert isinstance(fits, bool)
+
+
+def test_fused_msda_head_major_value_needs_value_layout(device, expect_error):
+    """Without value_layout="head_major" the op reads rank-4 value as canonical (B, S, H, D) and rejects the key count."""
+    _, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
+    value, _, _ = _random_case(1, 8, 2, 2, 4, 32, shapes)
+    with expect_error(RuntimeError, 'pass value_layout="head_major"'):
+        ttnn.experimental.fused_msda(_to_device(_head_major_value(value), device), loc_t, attn_t, shapes)
+
+
+def test_fused_msda_head_major_layout_rejects_packed_value(device, expect_error):
+    value, _, _ = _random_case(1, 8, 2, 2, 4, 32, [(6, 5), (3, 2)])
+    _, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
+    with expect_error(RuntimeError, "is not head-major"):
+        ttnn.experimental.fused_msda(
+            _to_device(_pack_value(value), device), loc_t, attn_t, shapes, value_layout="head_major"
+        )
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+def test_fused_msda_untilize_and_split_heads_repeated_calls_hit_program_cache(device, memory):
+    """untilize_and_split_heads and the op each reuse one program across calls whose buffers sit at different addresses.
+
+    The model calls both once per layer on fresh buffers, so a stale address
+    binding on a cache hit would only show from the second layer on. Within a
+    round both tensors of the a/b pair stay alive, so consecutive calls of each
+    op alternate between two addresses (asserted) and every cache hit rebinds.
+    """
+    spatial_shapes = HEAD_MAJOR_SHAPES
+    B, Q, H, D = 2, 65, 8, 32
+    memory_config = ttnn.L1_MEMORY_CONFIG if memory == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    value_a, ref_pts, offsets, attn = _v2_case(B, Q, H, 2, 4, D, 4, spatial_shapes, seed=1)
+    value_b = _bf16(torch.randn_like(value_a))
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar")
+    ref_t = _to_device(ref_pts, device)
+    off_t = _to_device(_pack_locations(offsets), device)
+    attn_t = _to_device(_pack_weights(attn), device)
+
+    def tiled(value):
+        return ttnn.from_torch(
+            _pack_value(value).to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+        )
+
+    entries_before = device.num_program_cache_entries()
+    outputs = {}
+    for i in range(8):
+        tiled_a, tiled_b = tiled(value_a), tiled(value_b)
+        hm_a = ttnn.experimental.untilize_and_split_heads(tiled_a, H, memory_config=memory_config)
+        hm_b = ttnn.experimental.untilize_and_split_heads(tiled_b, H, memory_config=memory_config)
+        assert tiled_a.buffer_address() != tiled_b.buffer_address()
+        assert hm_a.buffer_address() != hm_b.buffer_address()
+        for key, hm in (("a", hm_a), ("b", hm_b)):
+            out = ttnn.to_torch(
+                ttnn.experimental.fused_msda_from_offsets(
+                    hm, ref_t, off_t, attn_t, spatial_shapes, reference_mode="pillar", value_layout="head_major"
+                )
+            ).to(torch.float32)
+            if key not in outputs:
+                outputs[key] = out
+            else:
+                torch.testing.assert_close(out, outputs[key], rtol=0, atol=0)
+        for t in (hm_a, tiled_a, hm_b, tiled_b):
+            ttnn.deallocate(t)
+    _assert_close(_msda_reference(value_a, loc, attn, spatial_shapes), outputs["a"])
+    _assert_close(_msda_reference(value_b, loc, attn, spatial_shapes), outputs["b"])
+    # One program for untilize_and_split_heads, one for the op.
+    assert device.num_program_cache_entries() - entries_before == 2

@@ -1,47 +1,73 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Per-phase math-thread cycles of the SFPU block_max8 and full/partial cycles of its FPU (GMPOOL) variant."""
+"""Paired performance coverage for SFPU and FPU block_max8."""
 
 import pytest
-import torch
-from helpers.llk_params import PerfRunType
-from helpers.perf.core import PerfConfig
-from tt_llk_harness import (
-    ELEMENTS_PER_TILE,
-    DataFormat,
-    StimuliConfig,
-    blackhole_only,
-    input_output_formats,
-    params,
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+from test_block_max8 import (
+    DST_INDICES,
+    PERF_FPU_PATTERNS,
+    PERF_SFPU_PATTERNS,
+    PERF_VALID_COUNTS,
+    _run_block_max8,
 )
+from tt_llk_harness import blackhole_only
 
-LOOP_FACTOR = 64
+LOOP_FACTOR = 32
 
 
 @pytest.mark.perf
 @blackhole_only
-def test_perf_block_max8(perf_report):
-    """Report cycles per call: divide each zone by LOOP_FACTOR.
+@pytest.mark.parametrize("dst_index", DST_INDICES)
+@pytest.mark.parametrize("valid", PERF_VALID_COUNTS)
+@pytest.mark.parametrize("pattern", PERF_SFPU_PATTERNS)
+@pytest.mark.parametrize("run_types", [ALL_PERF_RUN_TYPES])
+@pytest.mark.parametrize("loop_factor", [LOOP_FACTOR])
+@pytest.mark.parametrize("is_perf", [True])
+def test_perf_block_max8(
+    perf_report, dst_index, valid, pattern, run_types, loop_factor, is_perf
+):
+    _run_block_max8(
+        "sources/block_max8_test.cpp",
+        dst_index,
+        valid,
+        pattern,
+        negative_zero_result=-1.0,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
 
-    SFPU zones: DISPATCH, FULL_TILE, PARTIAL_TILE, MASK, REDUCE, COMPACT.
-    FPU zones: FPU_FULL_TILE, FPU_PARTIAL_TILE.
-    """
-    formats = input_output_formats([DataFormat.Float16_b])[0]
-    src = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
-    PerfConfig(
-        "sources/block_max8_perf.cpp",
-        formats,
-        run_types=[PerfRunType.MATH_ISOLATE],
-        # Compile-time, so the kernel reads no runtime parameters (required under speed-of-light).
-        templates=[params.TILE_COUNT(1), params.LOOP_FACTOR(LOOP_FACTOR)],
-        variant_stimuli=StimuliConfig(
-            src,
-            formats.input_format,
-            src,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
-        ),
-    ).run(perf_report, run_count=4)
+
+@pytest.mark.perf
+@blackhole_only
+@pytest.mark.parametrize("dst_index", DST_INDICES)
+@pytest.mark.parametrize("valid", PERF_VALID_COUNTS)
+@pytest.mark.parametrize("pattern", PERF_FPU_PATTERNS)
+@pytest.mark.parametrize("fpu_calls", [1, 3])
+@pytest.mark.parametrize("run_types", [ALL_PERF_RUN_TYPES])
+@pytest.mark.parametrize("loop_factor", [LOOP_FACTOR])
+@pytest.mark.parametrize("is_perf", [True])
+def test_perf_block_max8_fpu(
+    perf_report,
+    dst_index,
+    valid,
+    pattern,
+    fpu_calls,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_block_max8(
+        "sources/block_max8_fpu_test.cpp",
+        dst_index,
+        valid,
+        pattern,
+        negative_zero_result=0.0,
+        fpu_calls=fpu_calls,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )

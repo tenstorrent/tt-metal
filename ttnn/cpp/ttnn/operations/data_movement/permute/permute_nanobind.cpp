@@ -45,8 +45,15 @@ void bind_permute(nb::module_& mod) {
                  - ROW_MAJOR
                * - BFLOAT8_B
                  - TILE
+               * - ``ttnn.MX_DTYPES`` (Quasar only)
+                 - TILE
 
             ``BFLOAT8_B`` is supported for interleaved tensors of rank 4 or less.
+
+            MX tensors are supported for any rank. Swapping N and C of a rank-4 tensor, and the identity permutation,
+            run natively. Every other permutation, including rank > 4, requires interleaved input and output (sharded MX
+            tensors are rejected; convert with ``ttnn.to_memory_config`` first); it is done in BFLOAT16 (staged in DRAM)
+            and the result is converted back to the input's MX format.
 
             ``BFLOAT16`` input values must not be NaN when ``dims`` moves the last dimension.
 

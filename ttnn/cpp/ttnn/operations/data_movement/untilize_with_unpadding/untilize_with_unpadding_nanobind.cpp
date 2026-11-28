@@ -31,7 +31,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
             sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores. It needs an interleaved input.
 
         Returns:
-            ttnn.Tensor: the output tensor, in ROW_MAJOR layout with the input's dtype. A ``BFLOAT8_B`` input gives a ``BFLOAT16`` output.
+            ttnn.Tensor: the output tensor, in ROW_MAJOR layout with the input's dtype. A ``BFLOAT8_B`` or MX input gives a ``BFLOAT16`` output.
 
         Note:
             Supported dtypes and layouts:
@@ -41,7 +41,9 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8, INT8
+                 - TILE
+               * - ``ttnn.MX_DTYPES`` (Quasar only)
                  - TILE
 
             ``BFLOAT16`` input values must not be NaN.

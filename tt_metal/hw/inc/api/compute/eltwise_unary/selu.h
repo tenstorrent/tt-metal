@@ -41,6 +41,13 @@ ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
         alpha));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
+
+#ifndef ARCH_QUASAR
+// Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
     PACK(SFPU_UNARY_CALL(
@@ -54,11 +61,7 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
         alpha));
 }
 
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
-
 ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

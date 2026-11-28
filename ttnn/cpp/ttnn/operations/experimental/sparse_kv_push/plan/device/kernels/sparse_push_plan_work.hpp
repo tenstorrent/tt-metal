@@ -7,10 +7,16 @@
 #include <algorithm>
 #include <cstdint>
 
+#if defined(COMPILE_FOR_TRISC)
+#include "api/compute/common.h"
+#else
 #include "api/dataflow/dataflow_api.h"
+#endif
+#include "ttnn/cpp/ttnn/kernel_lib/local_semaphore.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
-// The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); BRISC and NCRISC each run half.
+// The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); the kWorkers RISC-Vs of a core each run
+// a share. Built for the data movement kernel and for the TRISC kernel (sparse_push_plan_trisc.cpp).
 namespace sparse_push_plan {
 
 constexpr uint32_t kSentinel = 0xFFFFFFFFu;
@@ -34,19 +40,11 @@ enum Progress : uint32_t {
     kRewritten,
 };
 
-inline void fence() { asm volatile("fence" ::: "memory"); }
+// The core's workers hand each other L1 data through local semaphores: plain L1 words, so the TRISCs can use them too.
+using local_semaphore::post;
+using local_semaphore::wait_at_least;
 
-// The core's two workers hand each other L1 data through local semaphores.
-inline void wait_at_least(uint32_t sem_addr, uint32_t v) {
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v);
-}
-
-inline void post(uint32_t sem_addr, uint32_t v) {
-    fence();  // the worker's L1 writes land before the semaphore says they did
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v);
-}
-
-// Barrier of the core's two workers: report `progress`, then wait until every worker has reported it.
+// Barrier of the core's workers: report `progress`, then wait until every worker has reported it.
 template <typename DoneSem>
 inline void sync_workers(DoneSem&& done_sem, uint32_t worker, uint32_t progress) {
     post(done_sem(worker), progress);
@@ -79,7 +77,22 @@ inline void bucket(
     for (uint32_t to = 0; to < kWorkers; ++to) {
         bucket_end[to] = first + to * bucket_cap;
     }
-    for (uint32_t i = begin; i < end; ++i) {
+    // Rows loaded four at a time, so their L1 loads issue back to back.
+    uint32_t i = begin;
+    for (; i + 4 <= end; i += 4) {
+        uint32_t row[4];
+#pragma GCC unroll 4
+        for (uint32_t u = 0; u < 4; ++u) {
+            row[u] = idx[i + u];
+        }
+#pragma GCC unroll 4
+        for (uint32_t u = 0; u < 4; ++u) {
+            if (row[u] < max_rows) {
+                *bucket_end[word_owner(row[u] / kRowsPerWord)]++ = row[u];
+            }
+        }
+    }
+    for (; i < end; ++i) {
         const uint32_t row = idx[i];
         if (row < max_rows) {
             *bucket_end[word_owner(row / kRowsPerWord)]++ = row;
@@ -91,7 +104,7 @@ inline void bucket(
     }
 }
 
-// Sets the bits of every row the two workers handed this worker, and flags their chunks dirty (one byte per chunk,
+// Sets the bits of every row the workers handed this worker, and flags their chunks dirty (one byte per chunk,
 // so concurrent writers need no atomics). Returns the largest row + 1 (0 = none).
 inline uint32_t scatter(
     const uint32_t* buckets,
@@ -100,34 +113,45 @@ inline uint32_t scatter(
     uint32_t* bitmap,
     uint8_t* dirty_chunks,
     uint32_t worker) {
-    // Top-k rows come mostly ascending, so runs of indices share a word and a chunk: keep the current word's bits
-    // in a register and store once per run (L1 stores are the scatter's bottleneck).
+    // kScatterLanes rows per iteration with their bitmap loads issued back to back. Lanes hitting the same
+    // word fold the earlier lanes' bits in, and the stores go in lane order, so the last store of a word holds them
+    // all.
+    constexpr uint32_t kScatterLanes = 4;
     uint32_t row_end = 0;
-    uint32_t word = kSentinel, mask = 0, chunk = kSentinel;
     for (uint32_t from = 0; from < kWorkers; ++from) {
         const uint32_t* rows = buckets + (from * kWorkers + worker) * bucket_cap;
         const uint32_t count = bucketed[from * kWorkers + worker];
-        for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t row = rows[i];
-            const uint32_t row_word = row / kRowsPerWord;
-            if (row_word != word) {
-                if (word != kSentinel) {
-                    bitmap[word] |= mask;
-                }
-                word = row_word;
-                mask = 0;
-                const uint32_t row_chunk = row / kChunkRows;
-                if (row_chunk != chunk) {
-                    dirty_chunks[row_chunk] = 1;
-                    chunk = row_chunk;
-                }
+        uint32_t i = 0;
+        for (; i + kScatterLanes <= count; i += kScatterLanes) {
+            uint32_t w[kScatterLanes], m[kScatterLanes], v[kScatterLanes];
+#pragma GCC unroll 4
+            for (uint32_t u = 0; u < kScatterLanes; ++u) {
+                const uint32_t row = rows[i + u];
+                w[u] = row / kRowsPerWord;
+                m[u] = 1u << (row % kRowsPerWord);
+                row_end = std::max(row_end, row + 1);
             }
-            mask |= 1u << (row % kRowsPerWord);
+#pragma GCC unroll 4
+            for (uint32_t u = 0; u < kScatterLanes; ++u) {
+                v[u] = bitmap[w[u]];
+            }
+#pragma GCC unroll 4
+            for (uint32_t u = 0; u < kScatterLanes; ++u) {
+                uint32_t bits = v[u] | m[u];
+#pragma GCC unroll 4
+                for (uint32_t j = 0; j < u; ++j) {
+                    bits |= w[j] == w[u] ? m[j] : 0u;
+                }
+                bitmap[w[u]] = bits;
+                dirty_chunks[w[u] / kChunkWords] = 1;
+            }
+        }
+        for (; i < count; ++i) {
+            const uint32_t row = rows[i];
+            bitmap[row / kRowsPerWord] |= 1u << (row % kRowsPerWord);
+            dirty_chunks[row / kChunkRows] = 1;
             row_end = std::max(row_end, row + 1);
         }
-    }
-    if (word != kSentinel) {
-        bitmap[word] |= mask;
     }
     return row_end;
 }
@@ -191,8 +215,8 @@ inline void list_copies(
 }
 
 // As a reducer: ORs the received copies of each of this core's chunks into its bitmap. Split by word rather than by
-// chunk, so a chunk every core touched is not left to one worker. Unrolled for 16-word chunks over two workers (worker
-// w takes words w, w + 2, ..., w + 14): it reads each copy's list entry once, where a per-word loop re-walks the list.
+// chunk, so a chunk every core touched is not left to one worker: worker w takes words w, w + kWorkers, ... of each
+// chunk, and reads each copy's list entry once.
 template <uint32_t cores>
 inline void or_copies(
     const uint32_t* scratch,
@@ -202,22 +226,24 @@ inline void or_copies(
     uint32_t core_idx,
     uint32_t* bitmap,
     uint32_t worker) {
-    static_assert(kChunkWords == 16 && kWorkers == 2, "worker w takes words w, w + 2, ..., w + 14");
+    constexpr uint32_t kMaxWords = (kChunkWords + kWorkers - 1) / kWorkers;
+    const uint32_t words = (kChunkWords - worker + kWorkers - 1) / kWorkers;  // this worker's words of a chunk
     for (uint32_t my_chunk = 0; my_chunk < my_chunks; ++my_chunk) {
         const uint32_t count = copies[my_chunk];
         const uint16_t* list = lists + my_chunk * cores;
         const uint32_t* first_word = scratch + my_chunk * cores * kChunkWords + worker;
-        uint32_t acc[kChunkWords / kWorkers] = {};
+        uint32_t acc[kMaxWords] = {};
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t* copy = first_word + list[i] * kChunkWords;
-#pragma GCC unroll 8
-            for (uint32_t k = 0; k < kChunkWords / kWorkers; ++k) {
-                acc[k] |= copy[k * kWorkers];
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kMaxWords; ++k) {
+                if (k < words) {
+                    acc[k] |= copy[k * kWorkers];
+                }
             }
         }
         uint32_t* dst = bitmap + (core_idx + my_chunk * cores) * kChunkWords + worker;
-#pragma GCC unroll 8
-        for (uint32_t k = 0; k < kChunkWords / kWorkers; ++k) {
+        for (uint32_t k = 0; k < words; ++k) {
             dst[k * kWorkers] = acc[k];
         }
     }
@@ -302,8 +328,39 @@ inline void rewrite(
     const uint16_t* __restrict__ word_ranks,
     const uint32_t* __restrict__ range_offsets,
     const uint32_t* __restrict__ run_bases) {
-#pragma GCC unroll 2  // tuning knob
-    for (uint32_t i = begin; i < end; ++i) {
+    // kRewriteLanes indices per iteration, branch-free, so their independent L1 loads issue back to back
+    // instead of each stalling the in-order core in turn.
+    constexpr uint32_t kRewriteLanes = 4;
+    auto page_of = [&](uint32_t row, uint32_t valid_row, uint32_t ro, uint32_t wr, uint32_t bits, uint32_t rb) {
+        const uint32_t rank = ro + wr + __builtin_popcount(bits & ((1u << (valid_row % kRowsPerWord)) - 1u));
+        const uint32_t page = sparse_push::compact_page<pages_per_packet, banks>(rb, rank);
+        return page | (static_cast<uint32_t>(row < max_rows) - 1u);  // the sentinel past the cache
+    };
+    uint32_t i = begin;
+    for (; i + kRewriteLanes <= end; i += kRewriteLanes) {
+        uint32_t row[kRewriteLanes], r[kRewriteLanes], ro[kRewriteLanes], wr[kRewriteLanes], bits[kRewriteLanes],
+            rb[kRewriteLanes];
+#pragma GCC unroll 4
+        for (uint32_t u = 0; u < kRewriteLanes; ++u) {
+            row[u] = idx[i + u];
+        }
+#pragma GCC unroll 4
+        for (uint32_t u = 0; u < kRewriteLanes; ++u) {
+            r[u] = row[u] < max_rows ? row[u] : 0u;
+            const uint32_t block = r[u] / stripe_chunk;
+            const uint32_t word = r[u] / kRowsPerWord;
+            const uint32_t owner = block % num_devices;
+            ro[u] = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner];
+            wr[u] = word_ranks[word];
+            bits[u] = bitmap[word];
+            rb[u] = run_bases[owner];
+        }
+#pragma GCC unroll 4
+        for (uint32_t u = 0; u < kRewriteLanes; ++u) {
+            idx[i + u] = page_of(row[u], r[u], ro[u], wr[u], bits[u], rb[u]);
+        }
+    }
+    for (; i < end; ++i) {
         const uint32_t row = idx[i];
         if (row >= max_rows) {
             idx[i] = kSentinel;
