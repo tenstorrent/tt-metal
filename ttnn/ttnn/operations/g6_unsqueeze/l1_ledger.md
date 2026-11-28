@@ -13,13 +13,16 @@ unit dims (extent 1), `in_tile_row` (only row 0), new axis (extent 1).
 Implementation note (implementer): `CircularBufferConfig` requires `total_size` to be a whole
 number of pages, so each staging CB is declared with `page_size = 64 B` (the read-alignment unit;
 the CB is private scratch with no push/pop, so the page size only sizes the allocation). The byte
-capacity is unchanged: `buffer_depth·block_w_tiles·halves_per_risc·face_bytes + 64`. With
+capacity is unchanged: `buffer_depth·block_w_tiles·halves_per_risc·entry_bytes + 64`, where `entry_bytes` follows the
+`WRITE_SHAPE` knob (Refinement 2): `face` 1024 B (production default, unchanged), `segment` 256 B,
+`tile` 2048 B (face 2h of a staged 4096 B tile image; forces `halves_per_risc = 2`). With
 `HALVES_PER_RISC = 2` only `cb_face_stage_half0` exists and holds both halves of each tile
 (`halves_per_risc` faces per tile); the per-CB L1 share then is the whole budget.
 
 Capacity vs live set: capacity equals the live set (+64 B alignment slack) in both regimes; a face
 (1024 B) is staged per tile half because the output write is a whole face (2 transactions per tile);
-the 16 B-segment alternative (perf lamp) would shrink a page to 32·16 B = 512 B.
+the 16 B-segment alternative (`WRITE_SHAPE="segment"`, a live knob) shrinks it to 32·16 B = 512 B
+per tile but measured 2.2–2.5x slower (see the Refinement 2 note below).
 
 ### Symbol table
 
@@ -57,3 +60,22 @@ Totals per call (p1): DRAM read 2048 B, DRAM write 32768 B, NoC cross-core 0 B, 
 > measurement, as its reason. Folded into the output-write-shape perf refinement in
 > `op_requirements.md` (Refinement 2), which must measure it and either build it or record the
 > measured reason it loses.
+>
+> **Refinement 2 (measured, settles it):** all three output write shapes are built behind
+> `WRITE_SHAPE` and measured on device (`--profile`, DEVICE KERNEL DURATION, median of 3 fresh runs;
+> shapes above the 32-tile floor, 110 cores, `resident`):
+>
+> | variant | W=14080 (440 tiles, 4/core) | W=112640 (3520 tiles, 32/core) |
+> |---|---|---|
+> | (a) `segment`, 16×16 B stateful one-packet, halves on 2 RISCs | 9263 ns | 70349 ns |
+> | (a) `segment`, halves on 1 RISC | 13687 ns | 98596 ns |
+> | **(b) `face`, 2×1024 B, halves on 2 RISCs (kept)** | **4193 ns** | **28642 ns** |
+> | (b) `face`, halves on 1 RISC | 8051 ns | 56544 ns |
+> | (c) `tile`, 1×4096 B, both halves on 1 RISC | 13225 ns | 97407 ns |
+>
+> (a) with plain `noc_async_write` instead of the stateful API: 9219–9589 ns / 69263–70254 ns, the
+> same as stateful. Issue cost does not bind it. The 16 B DRAM write transactions do: they carry
+> 4x fewer bytes and still take 2.2–2.5x longer. (c) writes 2x the bytes of (b) from one RISC and is
+> ~2x slower than (b) on one RISC. At these shapes the op is bound by output-write DRAM bytes once
+> each transaction is at least a face. (b) is the fastest of the three and stays the default.
+> Cheapest-traffic line, measured: 8192 B (segment) loses to 32768 B (face) on p1's transfer shape.

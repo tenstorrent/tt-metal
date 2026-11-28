@@ -8,8 +8,8 @@ Topology (op_design.md, Blocking Model): `w_tile` split across cores (contiguous
 core, `split_work_to_cores(row_wise=True)` over the
 most-square single-rectangle core pool from `_core_pool`), `tile_half` split across the two data-movement RISCs of
 each core (HALVES_PER_RISC = 1). No compute kernel, no cross-core traffic. Each RISC owns a private
-staging CB (`cb_face_stage_half{h}`) sized `buffer_depth * block_w_tiles * halves_per_risc` faces
-+ 64 B alignment slack.
+staging CB (`cb_face_stage_half{h}`) sized `buffer_depth * block_w_tiles * halves_per_risc` entries
+(entry size set by WRITE_SHAPE) + 64 B alignment slack.
 """
 
 from __future__ import annotations
@@ -26,6 +26,12 @@ L1_BUDGET_BYTES = 1347776  # L1 left to the op per core by the model (BB-05)
 MAX_CORES = None  # None = whole compute grid
 MAX_BLOCK_W_TILES = None  # None = only the L1 cap bounds the block
 HALVES_PER_RISC = 1  # 1: half 0 on the reader-config RISC, half 1 on the writer-config RISC; 2: one RISC
+# Output write transfer shape (Refinement 2): "segment" 16 x 16 B column-0 writes per half (stateful
+# one-packet issue), "face" one 1024 B face per half, "tile" one 4096 B tile per tile (forces
+# HALVES_PER_RISC = 2). Kernel-side enum: WRITE_SHAPE_{SEGMENT,FACE,TILE} in g6_unsqueeze_face_move.hpp.
+WRITE_SHAPE = "face"
+WRITE_SHAPES = {"segment": 0, "face": 1, "tile": 2}
+WRITE_ALIGN_BYTES = 16  # BH NoC write alignment: the "segment" staging row stride
 
 TILE_W = 32
 FACE_W = 16
@@ -58,21 +64,27 @@ G6UnsqueezePlan = namedtuple(
         "halves_per_risc",
         "core_assignments",  # [(CoreCoord, start_tile, core_w_tiles)]
         "tensor_w_tiles",
-        "face_bytes",
+        "entry_bytes",  # staging bytes per (tile, half) entry, set by the write shape
+        "write_shape",
         "placement",  # "rect WxH" (one core range) or "row-wise" (num_cores_to_corerangeset fallback)
     ],
 )
 
 
-def _face_bytes(tensor):
-    return FACE_W * FACE_W * tensor.element_size()
+def _entry_bytes(tensor, write_shape):
+    """Staging bytes per (tile, half): mirrors FaceMover::entry_bytes in the kernel."""
+    face_row_bytes = FACE_W * tensor.element_size()
+    if write_shape == "tile":
+        return 2 * FACE_W * face_row_bytes  # face 2h at 2048 h of the staged tile image
+    row_bytes = WRITE_ALIGN_BYTES if write_shape == "segment" else face_row_bytes
+    return FACE_W * row_bytes
 
 
-def _block_cap(buffer_depth, halves_per_risc, face_bytes):
+def _block_cap(buffer_depth, halves_per_risc, entry_bytes):
     """Largest block (tiles) whose staging fits the per-instance share of the L1 budget."""
     num_instances = HALVES_PER_TILE // halves_per_risc
     per_cb_bytes = L1_BUDGET_BYTES // num_instances - READ_ALIGN_SLACK_BYTES
-    cap = per_cb_bytes // (buffer_depth * halves_per_risc * face_bytes)
+    cap = per_cb_bytes // (buffer_depth * halves_per_risc * entry_bytes)
     if MAX_BLOCK_W_TILES is not None:
         cap = min(cap, MAX_BLOCK_W_TILES)
     if cap < 1:
@@ -111,10 +123,13 @@ def _core_pool(num_cores, grid):
 
 
 def select_plan(input_tensor) -> G6UnsqueezePlan:
-    halves_per_risc = HALVES_PER_RISC
+    write_shape = WRITE_SHAPE
+    if write_shape not in WRITE_SHAPES:
+        raise ValueError(f"g6_unsqueeze: WRITE_SHAPE must be one of {list(WRITE_SHAPES)}, got {write_shape!r}")
+    halves_per_risc = 2 if write_shape == "tile" else HALVES_PER_RISC
     if halves_per_risc not in (1, 2):
         raise ValueError(f"g6_unsqueeze: HALVES_PER_RISC must be 1 or 2, got {halves_per_risc}")
-    face_bytes = _face_bytes(input_tensor)
+    entry_bytes = _entry_bytes(input_tensor, write_shape)
     tensor_w_tiles = (int(input_tensor.shape[-1]) + TILE_W - 1) // TILE_W
 
     grid = input_tensor.device().compute_with_storage_grid_size()
@@ -125,12 +140,12 @@ def select_plan(input_tensor) -> G6UnsqueezePlan:
     (n_used, all_cores, group_1, group_2, tiles_1, tiles_2) = ttnn.split_work_to_cores(core_pool, tensor_w_tiles, True)
     core_w_tiles_max = max(tiles_1, tiles_2)
 
-    cap1 = _block_cap(1, halves_per_risc, face_bytes)
+    cap1 = _block_cap(1, halves_per_risc, entry_bytes)
     if core_w_tiles_max <= cap1:
         regime, buffer_depth, block_w_tiles = "resident", 1, core_w_tiles_max
     else:
         regime, buffer_depth = "streaming", 2
-        block_w_tiles = _block_cap(2, halves_per_risc, face_bytes)
+        block_w_tiles = _block_cap(2, halves_per_risc, entry_bytes)
 
     assignments = []
     start = 0
@@ -152,7 +167,8 @@ def select_plan(input_tensor) -> G6UnsqueezePlan:
         halves_per_risc=halves_per_risc,
         core_assignments=assignments,
         tensor_w_tiles=tensor_w_tiles,
-        face_bytes=face_bytes,
+        entry_bytes=entry_bytes,
+        write_shape=write_shape,
         placement=placement,
     )
 
@@ -162,7 +178,7 @@ def describe_plan(plan) -> str:
     lines = [
         f"g6_unsqueeze plan: regime={plan.regime} cores={plan.num_cores} tiles={plan.tensor_w_tiles} "
         f"core_w_tiles_max={plan.core_w_tiles_max} block_w_tiles={plan.block_w_tiles} "
-        f"buffer_depth={plan.buffer_depth} halves_per_risc={plan.halves_per_risc}",
+        f"buffer_depth={plan.buffer_depth} halves_per_risc={plan.halves_per_risc} write_shape={plan.write_shape}",
         f"  placement={plan.placement} core_ranges={len(plan.core_ranges.ranges())}",
     ]
     for core, start, n in plan.core_assignments:
@@ -182,8 +198,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan=None) -> ttnn.Pr
     out_tile_bytes = output_tensor.buffer_page_size()
     assert in_tile_bytes == out_tile_bytes, "input and output tiles must match"
 
-    stage_faces = plan.buffer_depth * plan.block_w_tiles * plan.halves_per_risc
-    stage_total_bytes = stage_faces * plan.face_bytes + READ_ALIGN_SLACK_BYTES
+    stage_entries = plan.buffer_depth * plan.block_w_tiles * plan.halves_per_risc
+    stage_total_bytes = stage_entries * plan.entry_bytes + READ_ALIGN_SLACK_BYTES
 
     accessor_ct = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     accessor_ct = list(accessor_ct) + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -217,6 +233,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan=None) -> ttnn.Pr
             elem_bytes,
             in_tile_bytes,
             READ_ALIGN_SLACK_BYTES,
+            WRITE_SHAPES[plan.write_shape],
         ] + accessor_ct
         rt_args = ttnn.RuntimeArgs()
         for core, start, n in plan.core_assignments:
@@ -266,6 +283,7 @@ def _cache_key(input_tensor):
         MAX_CORES,
         MAX_BLOCK_W_TILES,
         HALVES_PER_RISC,
+        WRITE_SHAPE,
     )
 
 

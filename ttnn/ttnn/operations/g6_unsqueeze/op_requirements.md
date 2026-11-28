@@ -123,7 +123,7 @@ Full golden suite after the fix:
 - With `EVAL_CAPTURE_L1=0`: 20/20.
 
 Unit tests 59/59. The op and kernels are unchanged.
-### [ ] Refinement 2 — Output write transfer shape on p1
+### [x] Refinement 2 — Output write transfer shape on p1
 
 **Type**: perf
 
@@ -157,6 +157,23 @@ Unit tests 59/59. The op and kernels are unchanged.
 - Golden suite green and bit-exact (special values, poisoned padding, trace).
 - No regression on the guard set: p2, forced `streaming`, ragged W (e.g. `(1, 500)`, `(1, 17)`), and
   `HALVES_PER_RISC=2`.
+
+**Outcome**: all three transfer shapes are built behind a new `WRITE_SHAPE` knob (`segment` / `face` /
+`tile`, one source of truth in the program descriptor). Each one is bit-exact on the guard set: p1, p2,
+`(1,500)`, `(1,17)`, forced streaming with a ragged last block, and both `HALVES_PER_RISC` values.
+p1 itself (16 tiles) is below the >32-tile perf floor, so the variants were measured on W=14080
+(4 tiles/core) and W=112640 (32/core), median of 3 runs:
+- (b) face, 2 RISCs: **4193 / 28642 ns**
+- (a) segment, stateful: 9263 / 70349 ns (plain `noc_async_write`: 9219–9589 / 69263–70254 ns, the same)
+- (c) tile: 13225 / 97407 ns (face on 1 RISC: 8051 / 56544 ns)
+
+(b) wins and stays the default, so p1's transfer shape is unchanged and already the fastest measured.
+p1's device-ns does not move, and `l1_ledger.md` records why. Bottleneck: output-write DRAM traffic.
+Sub-face (16 B) transactions cost more than their bytes save, and above one face, bytes dominate
+(tile = 2x face on 1 RISC). What I would try next is a 2-RISC split of the column segments for
+32 B-aligned (two 16 B segments) writes, or a DRAM-bank-aware issue order. I did not try them here:
+16 B writes measured 2.2x worse, so any sub-face shape is unlikely to win. Golden 20/20
+(`EVAL_CAPTURE_L1=0`), unit tests green.
 
 ### [ ] Refinement 3 — Per-kernel fixed cost on p1 (issue path, args, image)
 

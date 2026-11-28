@@ -9,10 +9,19 @@
 // and goes to output face 2h column 0 (byte offset 2048*h, a 1024 B face).
 //
 // Per block (block_w_tiles tiles x halves_per_risc halves):
-//   load_face_rows_block        64 B DRAM reads -> row 0 of each staged face, ONE read barrier
-//   scatter_row_to_column_block in place, face[16*r] = face[r], r = 1..15 (32-bit RISC stores)
-//   store_column_faces_block    1024 B DRAM writes, no per-block barrier
+//   load_face_rows_block        64 B DRAM reads -> row 0 of each staging entry, ONE read barrier
+//   scatter_row_to_column_block in place, entry[row_words*r] = entry[r], r = 15..1 (32-bit RISC stores)
+//   store_column_faces_block    DRAM writes in the WRITE_SHAPE transfer shape, no per-block barrier
 // One write barrier at kernel end.
+//
+// WRITE_SHAPE (host knob, Refinement 2) picks the output transfer shape; only the staging stride and
+// the write loop change:
+//   WRITE_SHAPE_SEGMENT  entry = 16 rows x 16 B (256 B); 16 x 16 B column-0 writes per half, issued
+//                        with the stateful one-packet write (state set once per half)
+//   WRITE_SHAPE_FACE     entry = 16 rows x 64 B (1024 B face); one 1024 B write per half
+//   WRITE_SHAPE_TILE     entry = 2048 B (face 2h sits at 2048 h of a 4096 B tile image); needs
+//                        halves_per_risc == 2; one 4096 B whole-tile write per tile
+// Only column 0 of output faces 0/2 is logical; whatever else a wider write carries is padding.
 //
 // Helper deviation (raw NoC + raw RISC stores), as recorded in op_design.md "Helpers considered
 // and rejected": no kernel_lib helper moves a tile ROW into a tile COLUMN
@@ -33,6 +42,10 @@ namespace g6_unsqueeze {
 constexpr uint32_t TILE_W = 32;
 constexpr uint32_t FACE_W = 16;
 
+constexpr uint32_t WRITE_SHAPE_SEGMENT = 0;
+constexpr uint32_t WRITE_SHAPE_FACE = 1;
+constexpr uint32_t WRITE_SHAPE_TILE = 2;
+
 template <
     uint32_t half_begin,
     uint32_t halves_per_risc,
@@ -41,6 +54,7 @@ template <
     uint32_t logical_w,
     uint32_t elem_bytes,
     uint32_t read_align_bytes,
+    uint32_t write_shape,
     typename InAccessor,
     typename OutAccessor>
 struct FaceMover {
@@ -48,9 +62,20 @@ struct FaceMover {
     static constexpr uint32_t face_bytes = FACE_W * face_row_bytes;          // 1024 B (fp32)
     static constexpr uint32_t in_half_stride = face_bytes;                   // input face h at 1024*h
     static constexpr uint32_t out_half_stride = 2 * face_bytes;              // output face 2h at 2048*h
-    static constexpr uint32_t slot_faces = block_w_tiles * halves_per_risc;  // faces per staging slot
-    static constexpr uint32_t slot_bytes = slot_faces * face_bytes;
+    static constexpr uint32_t write_align = 16;                              // BH L1/DRAM NoC write alignment
+    // Staging row stride: one aligned column-0 segment (SEGMENT) or a whole face row (FACE/TILE).
+    static constexpr uint32_t row_bytes = write_shape == WRITE_SHAPE_SEGMENT ? write_align : face_row_bytes;
+    static constexpr uint32_t row_words = row_bytes / elem_bytes;
+    // Bytes per staged (tile, half) entry. TILE stages the output-tile image: face 2h at out_half_stride*h.
+    static constexpr uint32_t entry_bytes = write_shape == WRITE_SHAPE_TILE ? out_half_stride : FACE_W * row_bytes;
+    static constexpr uint32_t slot_entries = block_w_tiles * halves_per_risc;  // entries per staging slot
+    static constexpr uint32_t slot_bytes = slot_entries * entry_bytes;
     static constexpr uint32_t read_align = read_align_bytes;  // BH DRAM read alignment (host READ_ALIGN_SLACK_BYTES)
+    static_assert(write_shape <= WRITE_SHAPE_TILE, "unknown write shape");
+    static_assert(
+        write_shape != WRITE_SHAPE_TILE || (halves_per_risc == 2 && half_begin == 0),
+        "whole-tile writes need both halves on one RISC");
+    static_assert(entry_bytes % read_align == 0, "every entry's row 0 must be a 64 B-aligned read landing");
     static_assert((read_align & (read_align - 1)) == 0, "read alignment must be a power of two");
     static_assert(elem_bytes == 4, "scatter moves 32-bit words (float32 only)");
 
@@ -84,7 +109,7 @@ struct FaceMover {
                 }
                 noc_async_read(
                     in.get_noc_addr(tile, half * in_half_stride),
-                    base + (j * halves_per_risc + k) * face_bytes,
+                    base + (j * halves_per_risc + k) * entry_bytes,
                     face_row_bytes);
             }
         }
@@ -94,10 +119,11 @@ struct FaceMover {
         const uint32_t base = slot_addr(block_idx);
         const uint32_t extent = block_extent(block_idx);
         for (uint32_t f = 0; f < extent * halves_per_risc; ++f) {
-            volatile tt_l1_ptr uint32_t* face = dataflow_kernel_lib::addr_to_l1_ptr(base + f * face_bytes);
-            // Reads row-0 words 1..15, writes words 16*r (r >= 1): disjoint, word 0 already in place.
-            for (uint32_t r = 1; r < FACE_W; ++r) {
-                face[r * FACE_W] = face[r];
+            volatile tt_l1_ptr uint32_t* entry = dataflow_kernel_lib::addr_to_l1_ptr(base + f * entry_bytes);
+            // Row-0 word r -> word row_words*r. Descending r: when row_words < FACE_W the targets overlap
+            // row 0 (word 4 <- word 1), and word r is overwritten only at step r/row_words, after it was read.
+            for (uint32_t r = FACE_W - 1; r >= 1; --r) {
+                entry[r * row_words] = entry[r];
             }
         }
     }
@@ -108,15 +134,28 @@ struct FaceMover {
         const uint32_t extent = block_extent(block_idx);
         for (uint32_t j = 0; j < extent; ++j) {
             const uint32_t tile = tile0 + j;
+            if constexpr (write_shape == WRITE_SHAPE_TILE) {
+                // Half 0 is always logical for an assigned tile; half 1 (if padding) rides along.
+                noc_async_write(base + j * halves_per_risc * entry_bytes, out.get_noc_addr(tile), 2 * out_half_stride);
+                continue;
+            }
             for (uint32_t k = 0; k < halves_per_risc; ++k) {
                 const uint32_t half = half_begin + k;
                 if (!half_is_logical(tile, half)) {
                     continue;
                 }
-                noc_async_write(
-                    base + (j * halves_per_risc + k) * face_bytes,
-                    out.get_noc_addr(tile, half * out_half_stride),
-                    face_bytes);
+                const uint32_t src = base + (j * halves_per_risc + k) * entry_bytes;
+                const uint64_t dst = out.get_noc_addr(tile, half * out_half_stride);
+                if constexpr (write_shape == WRITE_SHAPE_FACE) {
+                    noc_async_write(src, dst, face_bytes);
+                } else {
+                    // One state per half (all 16 segments go to the same bank), then 16 issues.
+                    noc_async_write_one_packet_set_state(dst, row_bytes);
+                    for (uint32_t r = 0; r < FACE_W; ++r) {
+                        noc_async_write_one_packet_with_state(
+                            src + r * row_bytes, static_cast<uint32_t>(dst) + r * face_row_bytes);
+                    }
+                }
             }
         }
     }
@@ -166,7 +205,8 @@ struct FaceMover {
 
 // Shared kernel_main body. CT args (in order):
 //   0 half_begin, 1 halves_per_risc, 2 block_w_tiles, 3 buffer_depth, 4 logical_w, 5 cb_face_stage,
-//   6 elem_bytes, 7 tile_bytes, 8 read_align_bytes, then TensorAccessorArgs(input), TensorAccessorArgs(output).
+//   6 elem_bytes, 7 tile_bytes, 8 read_align_bytes, 9 write_shape, then TensorAccessorArgs(input),
+//   TensorAccessorArgs(output).
 // RT args: 0 input addr, 1 output addr, 2 start_tile, 3 core_w_tiles.
 inline void kernel_body() {
     constexpr uint32_t half_begin = get_compile_time_arg_val(0);
@@ -178,7 +218,8 @@ inline void kernel_body() {
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t read_align_bytes = get_compile_time_arg_val(8);
-    constexpr auto in_args = TensorAccessorArgs<9>();
+    constexpr uint32_t write_shape = get_compile_time_arg_val(9);
+    constexpr auto in_args = TensorAccessorArgs<10>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
@@ -197,6 +238,7 @@ inline void kernel_body() {
         logical_w,
         elem_bytes,
         read_align_bytes,
+        write_shape,
         decltype(in),
         decltype(out)>;
     // The CB carries read_align bytes of slack so the 64 B-aligned landing fits.

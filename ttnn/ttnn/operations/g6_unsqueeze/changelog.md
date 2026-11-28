@@ -68,3 +68,37 @@
   - Before the fix: 0/20, all setup errors.
 - Issues encountered: the harness precompile crash; it also affected the Phase 0 harness golden run.
 - Tests added: none (unit 59/59).
+
+## Refinement 2 — Output write transfer shape on p1
+- Date: 2026-11-28
+- What was done: Added the `WRITE_SHAPE` knob (`g6_unsqueeze_program_descriptor.py`, CT arg 9 →
+  `FaceMover<write_shape>`). It has three values:
+  - `segment`: 256 B staging entries with a 16 B row stride and a descending in-place scatter; 16 × 16 B
+    column-0 writes per half, using `noc_async_write_one_packet_set_state` once per half and `_with_state`
+    per segment.
+  - `face`: the existing 1024 B face write (default, unchanged path).
+  - `tile`: 2048 B entries that form a 4096 B output-tile image, written with one 4096 B write per tile.
+    This value forces `halves_per_risc = 2`.
+
+  `_block_cap` and the CB size derive from the plan's `entry_bytes`, which mirrors the kernel's
+  `entry_bytes`. `describe_plan()` reports `write_shape`. Measured on device (shapes above the 32-tile
+  floor; p1 is 16 tiles), median of 3 runs:
+
+  | variant | W=14080 | W=112640 |
+  |---|---|---|
+  | face, 2 RISCs | 4193 ns | 28642 ns |
+  | face, 1 RISC | 8051 ns | 56544 ns |
+  | segment, 2 RISCs | 9263 ns | 70349 ns |
+  | segment, 1 RISC | 13687 ns | 98596 ns |
+  | tile | 13225 ns | 97407 ns |
+
+  A plain (non-stateful) segment write measured the same as the stateful one. Face stays the default,
+  so p1 is unchanged and already on the fastest measured shape. The numbers are recorded in
+  `l1_ledger.md`.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0) for every write shape on p1, p2, (1,500),
+  (1,17), forced streaming (1,1000), and (1,112640).
+- Golden test progress: 20/20 passing (`EVAL_CAPTURE_L1=0`)
+- Issues encountered: For a sub-face row stride, the in-place scatter targets overlap row 0
+  (word 4 ← word 1). The scatter now runs r = 15..1, which is safe for every stride.
+- Tests added: `test_g6_unsqueeze_knobs.py::test_write_shape` (36 cases);
+  `test_g6_unsqueeze_perf_write_shape.py` (perf lamp under `--profile`, 10 cases).
