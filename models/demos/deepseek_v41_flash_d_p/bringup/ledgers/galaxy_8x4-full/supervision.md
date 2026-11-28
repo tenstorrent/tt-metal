@@ -738,3 +738,6 @@
 - 06:25 orchestrator resume --until MB.NCL (tmux orch_mb).
 - 06:20 heartbeat (model_bringup): MB.NC agent active; RAM used 69 GB; / 99G free.
 - 06:40 MB.NC gate PASS -> d80256ef4f7, then STOPPED on a false path violation ('n/ttnn/...': renames in porcelain -z mis-parsed). FRAMEWORK F311 41cbc32e001 (porcelain_paths; selftest; 60 passed). The 15 kernel deletions the gate commit left staged committed as a487116c323 (moved copies present; batching has the same). Resume -> MB.NCL.
+- 06:50 MB.NCL PASS -> 315bf76b5ab (the one end check on model_bringup). 5120 ladder vs MB.9 steady tok/s: +5.2 / +6.3 / +1.5 / +3.0 / +6.4 / +4.3 / -1.4 % at 51200 / 131072 / 139264 / 262144 / 524288 / 786432 / 1024000; device ms flat (-0.1..-0.7); cold no-rebuild 0 builds; determinism 0.
+- 06:50 heartbeat: idle by design (MB.NCL done; FIX.42 held for the owner). Resident runner stopped (RAM freed). Heartbeat cron stopped.
+- 07:16 OWNER: the machine must not idle on a non-decision. FIX.42 (wq_b / wo_b C++ bank probe) was already owner-agreed (plan step 4, batching supervision 18:35): switching to batching to run it.
