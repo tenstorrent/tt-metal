@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, tiles_in_block);
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {
@@ -101,7 +101,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
+                    // copy_block unpacks one tile per call.
+                    for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+                    {
+                        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block + tile /*l1_tile_idx*/, tensor_shape_A);
+                    }
                 }
             }
         }

@@ -36,14 +36,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT                  = params.TILE_CNT;
+    const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                       = params.buffer_A;
     const Operand& buffer_B                       = params.buffer_B;
 #endif
-    // acc_to_dest folds num_tiles_per_accum input tiles into one dest tile; unpack them in one call.
-    const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
-
     {
         START_PERF_MEASURE("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
@@ -54,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-        _llk_unpack_binary_operands_init_(bfd_a, bfd_b, tensor_shape, num_tiles_per_accum);
+        _llk_unpack_binary_operands_init_(bfd_a, bfd_b, tensor_shape, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {
@@ -70,10 +68,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                // Accumulation cases unpack two tiles per MOP, exercising per-tile counter resets.
-                for (std::uint32_t i = 0; i < TILE_CNT; i += num_tiles_per_accum)
+                // add_tiles / mul_tiles unpack one tile per call, acc_to_dest included.
+                const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    _llk_unpack_binary_operands_(i, i, tensor_shape);
+                    for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; dest_idx++)
+                    {
+                        for (std::uint32_t tile = 0; tile < num_tiles_per_accum; tile++)
+                        {
+                            const std::uint32_t i = block * INPUT_NUM_TILES_IN_BLOCK + dest_idx * num_tiles_per_accum + tile;
+                            _llk_unpack_binary_operands_(i, i, tensor_shape);
+                        }
+                    }
                 }
             }
         }
