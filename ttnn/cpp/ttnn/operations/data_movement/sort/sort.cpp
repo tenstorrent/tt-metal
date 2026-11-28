@@ -17,6 +17,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
+#include <bit>
+#include <limits>
 #include <numeric>
 
 namespace ttnn::operations::data_movement {
@@ -41,12 +43,23 @@ uint32_t next_power_of_two(uint32_t n) {
     return power;
 }
 
+// Pad sentinel outranks every real value; FLOAT32 uses a max-magnitude NaN, UINT16 uses 0/65535, else ±inf.
+// A real value equal to it (uint16 0/65535, fp32 0x7FFFFFFF/0xFFFFFFFF) can still tie and leak on unstable SingleCore.
+float sort_pad_value(DataType dtype, bool descending) {
+    switch (dtype) {
+        case DataType::UINT16: return descending ? 0.0f : 65535.0f;
+        case DataType::FLOAT32:
+            return descending ? std::bit_cast<float>(0xFFFFFFFFU) : std::bit_cast<float>(0x7FFFFFFFU);
+        default: return descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+    }
+}
+
 // pre_sort_transform_tensor
 //
 // Prepares the input tensor for the sort device op:
 //   1. Transpose so the sort dimension becomes the last dimension.
 //   2. Reshape to 4D.
-//   3. For TILE layout: fill implicit tile-row padding with ±inf.
+//   3. For TILE layout: fill implicit tile-row padding with the sort sentinel.
 //      For ROW_MAJOR layout: pad the H dimension so that
 //      combined_h (shape[0]*shape[1]*shape[2]) is a multiple of TILE_HEIGHT.
 //   4. Pad the last dimension to the next power-of-two ≥ 2×TILE_WIDTH so the
@@ -67,26 +80,10 @@ Tensor pre_sort_transform_tensor(
     Tensor padded_tensor = transformed_tensor;
     const bool is_row_major = (transformed_tensor.layout() == Layout::ROW_MAJOR);
 
-    // UINT16 cannot represent ±inf.  Use UINT16_MAX (65535) as the sentinel for ascending
-    // (sorts past all real values) and 0 for descending (sorts after all real values).
-    // For all other dtypes use ±inf as before.
-    //
-    // Known limitation: 0 and 65535 are valid UINT16 values, so these sentinels
-    // can collide with real input data.  If the input contains 65535 (ascending)
-    // or 0 (descending) and the last dimension needs W-padding to the next power
-    // of two, a padded element with the same sentinel value could sort into the
-    // sliced result, producing an index that points outside the original
-    // sort dimension.  In practice the primary use case (position indices
-    // bounded well below 65535) is not affected, but full-range UINT16 inputs
-    // may see incorrect indices for tied values at the boundary.
-    const bool is_uint16_input = (input_tensor.dtype() == DataType::UINT16);
-    const float pad_ascending = is_uint16_input ? 65535.0f : std::numeric_limits<float>::infinity();
-    const float pad_descending = is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
-    const float pad_fill = descending ? pad_descending : pad_ascending;
+    const float pad_fill = sort_pad_value(input_tensor.dtype(), descending);
 
     if (!is_row_major) {
-        // TILE layout: fill the implicit tile-row padding so the bitonic sort
-        // ignores it (pads with ±inf or UINT16 sentinel).
+        // TILE layout: fill the implicit tile-row padding with the sentinel so the bitonic sort ignores it.
         padded_tensor = ttnn::fill_implicit_tile_padding(transformed_tensor, pad_fill);
     } else {
         // ROW_MAJOR: the kernel processes rows in groups of TILE_HEIGHT (32).

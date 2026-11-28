@@ -269,16 +269,20 @@ def test_sort_uint16_pad_value_ties_index_correctness(descending, pad_value, dev
     assert_equal(input.reshape(-1)[indices], values)
 
 
-# Same padding ties on the SingleCore factory: n=1000 pads to 1024 on any grid. This factory still
-# leaks padding indices; strict, so the fix shows up as XPASS(strict) and the marker gets removed.
-@pytest.mark.xfail(strict=True, reason="Padding indices leak on the SingleCore factory #60262")
+# Same padding ties on the SingleCore factory: n=1000 pads to 1024 on any grid. fp32 now pads with a
+# max-magnitude NaN that no real ±inf can tie, so only uint16 (0 / 65535 sentinels) still leaks.
+_singlecore_uint16_xfail = pytest.mark.xfail(
+    strict=True, reason="uint16 0 / 65535 sentinel ties leak on the SingleCore factory (#60262)"
+)
+
+
 @pytest.mark.parametrize(
     "ttnn_dtype, descending, pad_value",
     [
         (ttnn.float32, True, float("-inf")),
         (ttnn.float32, False, float("inf")),
-        (ttnn.uint16, True, 0),
-        (ttnn.uint16, False, 65535),
+        pytest.param(ttnn.uint16, True, 0, marks=_singlecore_uint16_xfail),
+        pytest.param(ttnn.uint16, False, 65535, marks=_singlecore_uint16_xfail),
     ],
     ids=["fp32_desc_neg_inf", "fp32_asc_pos_inf", "uint16_desc_pad_0", "uint16_asc_pad_65535"],
 )
@@ -349,12 +353,7 @@ def test_sort_pad_value_ties_index_range_every_factory(n, ttnn_dtype, descending
     _assert_unstable_sort_invariants(input, ttnn_values, ttnn_indices, descending)
 
 
-# fp32 NaN leaks padding indices on every factory, with either stability. The SFPU orders values by sign
-# and magnitude, so +NaN sorts above the +inf padding (ascending) and -NaN below the -inf padding
-# (descending). The NaN never ties with the padding, so the index-aware comparator never fires: the NaN
-# lands past the cut, and the slice back to n drops it and keeps a padding element instead.
-# (bfloat16 NaN reaches the comparator as ±inf, so it only leaks where ±inf does.)
-@pytest.mark.xfail(reason="fp32 NaN sorts past the ±inf padding on every factory #60613")
+# fp32 NaN stays in range on every factory: padding with the max-magnitude NaN outranks any real NaN, so no NaN sorts past the padding.
 @pytest.mark.parametrize("stable", [False, True], ids=["unstable", "stable"])
 @pytest.mark.parametrize(
     "descending, nan_bits",
