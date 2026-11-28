@@ -54,6 +54,34 @@ def test_view_buffer_unique_id_after_root_force_deallocated(device, expect_error
         assert trace_allocation_tracker.acknowledge_corruptible(reshaped_tensor) is None
 
 
+def test_experimental_view_last_dim_change_rejected(device, expect_error):
+    rm_input = ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, r"The last dimension can not change in view"):
+        ttnn.experimental.view(rm_input, [1, 1, 16, 64])
+
+    tile_input = ttnn.from_torch(
+        torch.rand((1, 1, 64, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, r"The last dimension can not change in view"):
+        ttnn.experimental.view(tile_input, [1, 1, 32, 64])
+
+
+def test_experimental_view_valid_still_matches(device):
+    torch.manual_seed(0)
+    x = torch.rand((2, 1, 16, 32), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.view(tt_input, [2, 16, 32])
+    assert_equal(x.reshape(2, 16, 32), ttnn.to_torch(out))
+
+
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
