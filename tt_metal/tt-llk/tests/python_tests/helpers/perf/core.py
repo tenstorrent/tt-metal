@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
+import json
 import os
 import re
 import shutil
@@ -45,6 +46,8 @@ from .schema import (
 from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 
 CODE_SHIFTS = [int(s) for s in os.environ.get("LLK_CODE_SHIFTS", "").split()]
+# Compile pass only: record each test's compile key and sweep here instead of compiling.
+COVER_MAP = os.environ.get("LLK_PERF_COVER_MAP")
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
@@ -1014,6 +1017,23 @@ class PerfConfig(TestConfig):
         finally:
             TestConfig.CODE_SHIFT = LLK_CODE_SHIFT
 
+    def _record_compile_key(self):
+        sweep = PerfConfig._build_sweep_frame(
+            {},
+            self.formats_config,
+            self.unpack_to_dest,
+            self.dest_acc,
+            self.passed_templates,
+            self.passed_runtimes,
+        ).iloc[0]
+        row = {
+            "nodeid": os.environ["PYTEST_CURRENT_TEST"].rsplit(" ", 1)[0],
+            "variant": f"{self.test_name}/{self.variant_id}",
+            "sweep": {k: str(v) for k, v in sweep.items()},
+        }
+        with open(Path(COVER_MAP) / f"map.{os.getpid()}.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+
     def _run_at_position(self, perf_report: PerfReport, run_count, first, last):
         results = []
         counter_results_list = []
@@ -1033,6 +1053,9 @@ class PerfConfig(TestConfig):
                     self.templates = templates
                     self.runtimes = runtimes
                 self.generate_variant_hash()
+                if COVER_MAP:
+                    self._record_compile_key()
+                    continue
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
