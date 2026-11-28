@@ -390,7 +390,7 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
     // One reduce_block_max_row per block folds block_tiles k-tiles into DEST[b] in one call, the 1.0
     // scaler resident in srcB across the block_tiles GMPOOL-MAX ops -- killing the per-reduce_tile
     // math-thread dispatch overhead that bound the pool. block_tiles is compile-time -> template arg.
-    reduce_block_max_row_init<block_tiles>(out_cb);
+    reduce_block_max_row_init<block_tiles>(acc_cb, scaler_cb, out_cb);
     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
         out.reserve_back(blocks_per_unit);
         tile_regs_acquire();
@@ -478,7 +478,6 @@ void kernel_main() {
     constexpr uint32_t schedule_group_rows = get_named_compile_time_arg_val("schedule_group_rows");
     constexpr uint32_t schedule_max_bands = get_named_compile_time_arg_val("schedule_max_bands");
     constexpr uint32_t schedule_ring_size = get_named_compile_time_arg_val("schedule_ring_size");
-    constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
     constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
     // Banded schedule: this core owns a (group-phase x band) rectangle. groups stream in num_groups phases
     // (group = row_group0 + p*group_stride); each walks num_bands k-bands (band = band0 + j). One cell ==
@@ -487,9 +486,7 @@ void kernel_main() {
     constexpr uint32_t group_stride = schedule_group_rows;
     constexpr uint32_t num_groups = schedule_groups;
     const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
-        core_id,
-        group_stride,
-        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+        core_id, group_stride, {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols});
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
@@ -546,8 +543,7 @@ void kernel_main() {
     const uint32_t band_iters = stream_heads ? max_bands : num_bands;
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         auto ring_schedule = indexer_ring_schedule::
-            for_lane<shard_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols, schedule_rotate>(
-                band0);
+            for_lane<shard_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols>(band0);
         const uint32_t group = row_group0 + phase * group_stride;
         for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
             uint32_t band = band_i;

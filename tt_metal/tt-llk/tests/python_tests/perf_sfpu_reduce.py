@@ -10,6 +10,7 @@ from test_sfpu_reduce import (
     SFPU_REDUCE_PERF_SWEEP,
     _run_sfpu_reduce,
     _sfpu_reduce_config_kwargs,
+    use_int32_twos_complement,
 )
 
 
@@ -27,7 +28,7 @@ def test_perf_sfpu_reduce(
     formats,
     dest_acc,
     mathop,
-    reduce_pool,
+    pool_type,
     input_dimensions,
     run_types,
     loop_factor,
@@ -40,13 +41,14 @@ def test_perf_sfpu_reduce(
             formats,
             dest_acc,
             mathop,
-            reduce_pool,
+            pool_type,
             input_dimensions,
             tile_count,
             src_A=None,
             src_B=None,
             is_perf=is_perf,
             loop_factor=loop_factor,
+            twos_complement=use_int32_twos_complement(formats, pool_type, mathop),
         ),
         is_perf=is_perf,
         perf_report=perf_report,

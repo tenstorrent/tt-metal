@@ -539,6 +539,7 @@ Transformer
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_ring_sdpa
    ttnn.transformer.sparse_sdpa
    ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
@@ -643,6 +644,7 @@ Generic
    :template: function.rst
 
    ttnn.generic_op
+   ttnn.experimental.generic_op
 
 KV Cache
 ========

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device_fixture.hpp"
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <cstdint>
 #include <string>
 #include <vector>

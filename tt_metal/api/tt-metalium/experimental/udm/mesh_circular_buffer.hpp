@@ -6,7 +6,7 @@
 
 #include <tt-metalium/experimental/udm/types.hpp>
 #include <tt-metalium/experimental/udm/mesh_program.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

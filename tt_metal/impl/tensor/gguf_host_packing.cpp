@@ -21,8 +21,8 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/gguf.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 
 #include "tt_metal/hw/inc/experimental/gguf_page.h"
 

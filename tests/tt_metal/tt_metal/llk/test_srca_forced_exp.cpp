@@ -13,10 +13,10 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "llk_device_fixture.hpp"
 

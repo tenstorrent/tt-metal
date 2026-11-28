@@ -70,12 +70,18 @@ comparison.
 - The schema version is `PERF_TEST_SCHEMAS[<module>]["version"]` in
   `helpers/perf/test_schemas.py`, not a CSV column. Bump it once per PR,
   relative to main, when the module's columns change. Rows from different
-  versions are not comparable.
+  versions are not comparable, except across a rename recorded in `aliases` or
+  `test_name_aliases`, which the comparer maps (`perf-test`, "Renames";
+  `perf-regression-check`, "Interpreting results").
 - A `tile_cnt` accounting change makes rows incomparable without a version
   bump. When `tile_cnt` counts both operand tiles of a two-operand kernel,
   per-tile `MATH_ISOLATE` is about half a result tile; that halving is not a
   speedup. Do not shrink `TILE_CNT` to restore an older number: it is also the
   unpack loop bound and the stand-in dvalid count.
+- `tile_cnt` means different counts in different modules. Check what a module
+  counts before renaming an axis to it: the strided column reduce's
+  `max_tiles_per_iter` became `tile_cnt` only because it is exactly the input
+  tile count that `TILE_COUNT(tile_cnt_A)` carries.
 - At 16-bit, `dest_acc=Yes` can double the Dest handshakes relative to
   `dest_acc=No`, so a `dest_acc` delta mixes a datapath change with twice the
   section-done traffic.
@@ -83,6 +89,50 @@ comparison.
   schema version, and report kind.
 - A comparison with few or no matched points is inconclusive
   (`perf-regression-check`, "Interpreting results").
+
+### `tile_cnt` per module
+
+`tile_cnt` is the `TILE_COUNT` runtime value, the divisor of the `.post.csv`
+normalization (`loop_factor * tile_cnt`). Each test sets it; there is no
+shared formula. Read it from the `TILE_COUNT(...)` call of the test the perf
+module runs (`test_*.py`, or the perf module itself where it passes
+`TILE_COUNT` directly). `rt`, `ct`, `kt` are the tile-grid dims of the output
+rows, output columns and the contraction.
+
+`perf_fused`, `perf_fused_quasar`, `perf_sfpu_sdpa_fw`,
+`perf_custom_mm_reuse_dest_srcb` and `perf_sdpa_custom_mm_reuse_dest_srcb`
+have no `tile_cnt` column in their schema. `postprocess_tile_loop` fills a
+missing `tile_cnt` with 1, so their `TILE_LOOP` rows are divided by
+`loop_factor` alone.
+
+Differences that matter when comparing architectures:
+
+- The same matmul name carries three formulas: WH/BH `perf_matmul` and Quasar
+  count `rt * ct * kt`, `perf_math_matmul` multiplies by `num_blocks`, and
+  `perf_matmul_custom` counts only the output tiles `rt * ct`. A per-tile
+  cycle count from one is not comparable with another.
+- Binary SFPU kernels count operand tiles, not result tiles, so per-tile
+  cycles are about half a result tile.
+- `tile_cnt` is not always operand A: `perf_sdpa_weighted_reduce` counts the
+  qk operand tiles and `perf_rmsnorm_clear_product_tile` the output tiles.
+- With `acc_to_dest`, `num_tiles_in_block` is the output-based value (WH/BH
+  computes it from the accumulated output dimensions; the Quasar eltwise
+  binary test also passes the output value unsuffixed), so
+  `num_blocks * num_tiles_in_block` is half of `tile_cnt`. The per-block
+  `input_num_tiles_in_block` column, `num_tiles_in_block * 2` there, is the one
+  that matches: `num_blocks * input_num_tiles_in_block == tile_cnt`.
+- `input_tile_cnt` is only a retired alias of `tile_cnt`; the columns that
+  exist are `tile_cnt` and, on a few modules, `output_tile_cnt`.
+- `_llk_pack_` covers a different amount of work per call on each
+  architecture. WH/BH `pack_test.cpp` calls it once per tile inside the
+  `NUM_TILES_IN_BLOCK` loop, so it packs one tile per call. Quasar
+  `pack_quasar_test.cpp` programs the pack MOP for `tiles_in_block` tiles in
+  `_llk_pack_init_` and calls `_llk_pack_` once per block. `tile_cnt` is the
+  total tile count on both sides, so the per-tile normalization is
+  consistent, but the instruction-level work and call overhead per
+  `_llk_pack_` call are not: read pack deltas across architectures per tile,
+  not per call. On Quasar the `num_tiles_in_block` column of `perf_pack_quasar`
+  records the tiles per `_llk_pack_` call.
 
 ## Where reports land
 

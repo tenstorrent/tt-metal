@@ -8,9 +8,10 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import parametrize
-from helpers.perf.blaze import execute_llk
+from helpers.perf.blaze import compile_only, execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    ADDRMOD_CALLER_SCOPED,
     DEST_INDEX,
     DEST_SYNC,
     NUM_BLOCKS,
@@ -25,11 +26,13 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
     block_layout=[(1, 0), (3, 1), (4, 0)],
     dest_acc=list(DestAccumulation),
     dest_sync=list(DestSync),
+    addrmod_caller_scoped=[False, True],
 )
 def test_eltwise_mul_scalar_block(
     block_layout,
     dest_acc,
     dest_sync,
+    addrmod_caller_scoped,
     *,
     is_perf=False,
     perf_report=None,
@@ -59,7 +62,10 @@ def test_eltwise_mul_scalar_block(
         test_config_kwargs=dict(
             test_name="sources/eltwise_mul_scalar_block_test.cpp",
             formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
-            templates=[DEST_SYNC(dest_sync)],
+            templates=[
+                DEST_SYNC(dest_sync),
+                compile_only(ADDRMOD_CALLER_SCOPED(addrmod_caller_scoped)),
+            ],
             runtimes=[
                 TILE_COUNT(len(scalars) * block_size),
                 NUM_BLOCKS(len(scalars)),

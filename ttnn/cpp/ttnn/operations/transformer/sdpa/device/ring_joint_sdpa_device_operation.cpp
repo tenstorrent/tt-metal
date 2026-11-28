@@ -12,8 +12,8 @@
 #include <limits>
 #include <variant>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -1512,6 +1512,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool dynamic_local_n) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -1602,7 +1603,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "ring_mla cluster_axis=None requires the persistent gathered-KV buffer to be replicated across the "
             "complete mesh");
 
-        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+        const auto fabric_config = tt::tt_fabric::GetFabricConfig(mesh_device);
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),

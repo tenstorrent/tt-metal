@@ -5,11 +5,14 @@
 #pragma once
 
 #include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 
@@ -68,6 +71,25 @@ struct PerDeviceRuntimeArgs {
     uint64_t owner = 0;
     std::vector<std::unique_ptr<PerDeviceRuntimeArgsField>> fields;  // stable while others are added
     uint64_t generation = 0;                                         // bumps when a field is added or removed
+    // The fields of each runtime-arg slot (a kernel's unique args on a core, or its common args when core is nullopt),
+    // sorted by first_word, so finding a field and checking it for overlaps is a hash lookup and a binary search
+    // rather than a scan of every field. Kept in sync with `fields`; snapshots carry no index.
+    struct SlotKey {
+        uint32_t kernel = 0;
+        std::optional<CoreCoord> core;
+        bool operator==(const SlotKey&) const = default;
+    };
+    struct SlotKeyHash {
+        size_t operator()(const SlotKey& key) const noexcept {
+            uint64_t h = static_cast<uint64_t>(key.kernel) << 32;
+            if (key.core.has_value()) {
+                h ^= ((static_cast<uint64_t>(key.core->x) << 16) ^ key.core->y ^ (uint64_t{1} << 31)) *
+                     0x9E3779B97F4A7C15ull;
+            }
+            return std::hash<uint64_t>{}(h);
+        }
+    };
+    std::unordered_map<SlotKey, std::vector<PerDeviceRuntimeArgsField*>, SlotKeyHash> fields_by_slot;
     // The fields resolved against the last command sequence enqueued (see resolve_per_device_runtime_args).
     struct ResolvedCache {
         uint64_t assembly_id = 0;
@@ -96,6 +118,7 @@ struct PerDeviceRuntimeArgs {
         std::vector<uint32_t> snapshot;  // the packed region when the images were last brought up to date
         std::vector<uint8_t> in_field;   // per region word: a field covers it
         std::vector<uint32_t> images;    // [device][words]
+        uint64_t rebuilds = 0;           // times the images were rebuilt rather than updated by delta (tests)
     };
     mutable DeviceImages device_images;
 };
@@ -173,6 +196,21 @@ private:
     std::optional<FinalizedMetadata> finalized_metadata_;
     // Per-device runtime args per program range (see PerDeviceRuntimeArgs); empty for almost every workload.
     std::unordered_map<MeshCoordinateRange, PerDeviceRuntimeArgs> per_device_runtime_args_;
+    using DeviceSpecificRuntimeArgs = tt::tt_metal::detail::ProgramImpl::DeviceSpecificRuntimeArgs;
+    // The runtime args of each installed program range's Program that differ per device.
+    std::unordered_map<MeshCoordinateRange, std::vector<DeviceSpecificRuntimeArgs>> device_specific_runtime_args_;
+    // Sets the runtime args of `program` that differ per device on each device of `program_range`.
+    // precondition: `program` is compiled.
+    void install_device_specific_runtime_args(
+        const MeshCoordinateRange& program_range, Program& program, MeshDevice& mesh_device);
+    // Sets the words of `run` on each device of `program_range`.
+    void set_device_specific_runtime_args(
+        const MeshCoordinateRange& program_range, const DeviceSpecificRuntimeArgs& run);
+    // Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to
+    // `per_device`, then sets the Program's runtime args that differ per device again.
+    // Every place that applies drops calls this, so a drop never removes the runtime args that differ per device.
+    void apply_run_arg_drops(
+        const MeshCoordinateRange& program_range, PerDeviceRuntimeArgs& per_device, Program& program);
     PerDeviceRuntimeArgsField& per_device_runtime_args_field(
         const MeshCoordinateRange& program_range,
         KernelHandle kernel,
@@ -180,6 +218,18 @@ private:
         uint32_t first_word,
         uint32_t num_words,
         bool metal2 = false);
+    // The program at `program_range` (checked to allow per-device args) and its per-device entry, or null when it has
+    // no fields yet. Creates nothing.
+    std::pair<Program*, PerDeviceRuntimeArgs*> per_device_target(const MeshCoordinateRange& program_range, bool metal2);
+    // Adds a field to the entry of `program_range` (creating the entry for `program`); the caller checked it.
+    PerDeviceRuntimeArgsField& add_per_device_runtime_args_field(
+        Program& program,
+        const MeshCoordinateRange& program_range,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        uint32_t num_words,
+        bool metal2);
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed before normal finalization.
@@ -197,6 +247,8 @@ private:
     friend class tt::tt_metal::Program;
 
     bool use_prefetcher_cache_ = false;
+    // Whether the kernel-config block fits the KERNEL_CONFIG window, as fast dispatch needs. Set by finalize_offsets.
+    bool fits_kernel_config_window_ = true;
 
 public:
     // Main User-Facing API building blocks
@@ -226,15 +278,21 @@ public:
         KernelHandle kernel,
         const std::optional<CoreCoord>& core,
         uint32_t first_word);
-    // Metal 2.0 (ProgramSpec) programs: the words of named run args, resolved by
-    // experimental::UpdateProgramRunArgsForDevice. Same semantics as the legacy setter.
+    // Metal 2.0 (ProgramSpec) programs: one device's words of several named run args, resolved by
+    // MeshWorkload::update_program_run_args_for_device. Same semantics as the legacy setter, all or nothing: every arg
+    // is checked before any is set, and the program and its per-device entry are looked up once per call.
+    struct NamedArgWords {
+        KernelHandle kernel = 0;
+        std::optional<CoreCoord> core;  // nullopt: common run args
+        uint32_t first_word = 0;
+        uint32_t offset = 0;  // into the call's words
+        uint32_t num_words = 0;
+    };
     void set_per_device_named_runtime_args(
         const MeshCoordinateRange& program_range,
         const MeshCoordinate& device,
-        KernelHandle kernel,
-        const std::optional<CoreCoord>& core,
-        uint32_t first_word,
-        ttsl::Span<const uint32_t> values);
+        ttsl::Span<const NamedArgWords> args,
+        ttsl::Span<const uint32_t> words);
     // The field at (kernel, core, first_word), checking that it may be set: null when it does not exist yet (and may be
     // added). Changes nothing, so a multi-arg set can check every arg before setting any.
     PerDeviceRuntimeArgsField* find_per_device_runtime_args_field(
@@ -247,8 +305,9 @@ public:
     bool has_per_device_runtime_args() const { return !per_device_runtime_args_.empty(); }
     // The per-device runtime args of the program at `program_range`, or null; fails if the program there is not the
     // one they were set for. Every enqueue / capture path reads them through this, which first brings them up to
-    // date: applies the program's pending drops (Metal 2.0 SetProgramRunArgs / UpdateProgramRunArgs), removes fields
-    // no device has a value of, and bumps values_version only if the values differ from the last commit.
+    // date: applies the program's pending drops (Metal 2.0 Program::set_program_run_args /
+    // Program::update_program_run_args), removes fields no device has a value of, and bumps values_version only if the
+    // values differ from the last commit.
     const PerDeviceRuntimeArgs* per_device_runtime_args(const MeshCoordinateRange& program_range);
     // Applies the pending drops of the program at `program_range` to its per-device args (Metal 2.0 programs).
     void apply_per_device_run_arg_drops(const MeshCoordinateRange& program_range);
@@ -256,7 +315,15 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    void check_circular_buffers_bound();
+    // Compiles and finalizes the workload; in fast dispatch, also throws if its kernel-config block does not fit the
+    // KERNEL_CONFIG window.
     void compile(MeshDevice* mesh_device);
+    // Whether the finalized workload's kernel-config block, kernel binaries included, fits the KERNEL_CONFIG window.
+    bool fits_kernel_config_window() const { return fits_kernel_config_window_; }
+    // Throws with the size breakdown of the kernel-config block, for a finalized workload whose block does not fit the
+    // KERNEL_CONFIG window.
+    [[noreturn]] void throw_kernel_config_window_overflow(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.
     std::shared_ptr<MeshBuffer> prepare_for_command_list(MeshCommandQueue& mesh_cq);

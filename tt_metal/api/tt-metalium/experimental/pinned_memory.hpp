@@ -10,7 +10,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;

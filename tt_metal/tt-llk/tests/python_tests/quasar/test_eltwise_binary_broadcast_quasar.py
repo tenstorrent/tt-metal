@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -121,25 +120,25 @@ def binary_broadcast_acc_to_dest_modes(input_dimensions, tile_dimensions):
     return valid_acc_to_dest(input_dimensions, tile_dimensions)
 
 
-def binary_broadcast_math_fidelities(format, math_op):
+def binary_broadcast_math_fidelities(format, mathop):
     # Int8 is an exact integer op. Float16_b is full precision at LoFi.
     if format.input_format in (DataFormat.Int8, DataFormat.Float16_b):
         return [MathFidelity.LoFi]
-    return get_valid_math_fidelities(format, math_op)
+    return get_valid_math_fidelities(format, mathop)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    math_op=[
+    mathop=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
-        formats, math_op
+    math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
+        formats, mathop
     ),
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     unpack_to_dest=[False],
@@ -160,7 +159,7 @@ def binary_broadcast_math_fidelities(format, math_op):
 def test_eltwise_binary_broadcast_quasar(
     formats,
     dest_acc,
-    math_op,
+    mathop,
     broadcast_type,
     math_fidelity,
     dest_sync,
@@ -223,7 +222,7 @@ def test_eltwise_binary_broadcast_quasar(
         else formats.input_format
     )
     golden_tensor = generate_golden(
-        math_op,
+        mathop,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
@@ -244,7 +243,7 @@ def test_eltwise_binary_broadcast_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
@@ -258,11 +257,13 @@ def test_eltwise_binary_broadcast_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt_A),
-            INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_BLOCKS(num_blocks),
+            # The unsuffixed value is output-based, as on WH/BH; the kernel reads the
+            # input_/output_ pair.
             NUM_TILES_IN_BLOCK(
-                input_tiles_in_block,
+                output_tiles_in_block,
+                input_num_tiles_in_block=input_tiles_in_block,
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             NUM_FACES(num_faces),

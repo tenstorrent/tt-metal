@@ -7,10 +7,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <enchantum/enchantum.hpp>
 
@@ -70,10 +70,9 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 bool has_padding = false;
-                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
-                CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
-                uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
-                uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+                // Width shards fill every core of the grid, so a 2D grid holds x * y of them, not x or y.
+                uint32_t input_num_shard_cores = input_tensor.buffer()->shard_spec().grid().num_cores();
+                uint32_t output_num_shard_cores = out_mem_config.shard_spec().value().grid.num_cores();
                 uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
                 uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
                 has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];

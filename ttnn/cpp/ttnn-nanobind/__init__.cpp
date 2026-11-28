@@ -30,6 +30,7 @@
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/operations/command_list.hpp"
+#include "ttnn-nanobind/jit_telemetry.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
 #include "ttnn-nanobind/program_spec.hpp"
@@ -102,6 +103,7 @@ void py_module(nb::module_& mod) {
 
     auto m_command_list = mod.def_submodule("command_list", "command list operations (experimental)");
     command_list::py_module_types(m_command_list);
+    command_list::py_module(m_command_list);
 
     auto m_examples = mod.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
@@ -269,11 +271,13 @@ NB_MODULE(_ttnn, mod) {
     auto m_layer_completion = mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
+    auto m_jit_telemetry = mod.def_submodule("jit_telemetry", "JIT build telemetry");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
-    auto m_program_spec = mod.def_submodule("program_spec", "Metal 2.0 ProgramSpec and ProgramRunArgs (experimental)");
+    auto m_program_spec = mod.def_submodule(
+        "program_spec", "Metal 2.0 ProgramSpec and ProgramRunArgs, and generic_op's mesh form (experimental)");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
     auto m_mcast_host =
         mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
@@ -344,6 +348,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::d2d_stream_service::py_module(m_d2d_stream_service);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
+    ttnn::jit_telemetry::py_module(m_jit_telemetry);
     ttnn::reports::py_module(m_reports);
     ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
     ttnn::mcast_host::py_module(m_mcast_host);

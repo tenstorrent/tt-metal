@@ -1,89 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
-#include <memory>
-#include <vector>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/program.hpp> moved to <tt-metalium/workload/program.hpp>.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/program.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/workload/program.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
-namespace tt::tt_metal {
-
-// Fwd declares
-struct ProgramDescriptor;
-class CircularBuffer;
-class Program;
-
-namespace distributed {
-class MeshDevice;
-}  // namespace distributed
-
-namespace detail {
-class ProgramImpl;
-}  // namespace detail
-
-using ProgramId = std::uint64_t;
-
-class Program {
-public:
-    Program();
-
-    // Alternative "ProgramDescriptor" API, created for TTNN generic op
-    explicit Program(const ProgramDescriptor& descriptor);
-
-    // Same, but binds the Program to the MetalEnv that owns `mesh_device` (see CreateProgram(MeshDevice&)).
-    // Transitional: goes away together with the ProgramDescriptor path.
-    Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor);
-
-    // Internal: construct from an already-built ProgramImpl.
-    explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
-
-    ~Program() noexcept;
-
-    Program(const Program& other) = delete;
-    Program& operator=(const Program& other) = delete;
-
-    Program(Program&& other) noexcept;
-    Program& operator=(Program&& other) noexcept;
-
-    //////////////////////////////
-    // ID related functions:
-    // These are often used in tracing and testing.
-    //////////////////////////////
-
-    void set_runtime_id(ProgramId id);
-    ProgramId get_runtime_id() const;
-
-    //////////////////////////////
-    // Buffer related functions:
-    //////////////////////////////
-
-    // Used in ops.
-    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
-
-    // debug/test/internal usage.
-    detail::ProgramImpl& impl() { return *internal_; }
-    const detail::ProgramImpl& impl() const { return *internal_; }
-
-private:
-    // Shared by both descriptor constructors; `internal_` must already be set.
-    void populate_from_descriptor(const ProgramDescriptor& descriptor);
-
-    // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
-    std::shared_ptr<detail::ProgramImpl> internal_;
-};
-
-// Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
-class IDevice;
-namespace detail {
-struct KernelMeta;
-// Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
-// Note: device is nullable
-[[deprecated(
-    "Use experimental::collect_kernel_meta from <tt-metalium/experimental/op_profiler_support.hpp> instead. This "
-    "overload will be removed after 2026-11-14.")]]
-std::vector<detail::KernelMeta> collect_kernel_meta(const Program& program, IDevice* device);
-}; //namespace detail
-
-}  // namespace tt::tt_metal
+#include <tt-metalium/workload/program.hpp>  // IWYU pragma: export

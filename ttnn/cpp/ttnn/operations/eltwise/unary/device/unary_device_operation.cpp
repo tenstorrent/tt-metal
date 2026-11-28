@@ -9,7 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include <bit>
 #include <cstdint>
@@ -88,7 +88,10 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         // Copy / typecast kernels; valid on integer tiles without a separate integer LLK.
         case UnaryOpType::BITCAST:
         case UnaryOpType::IDENTITY:
-        case UnaryOpType::TYPECAST: return true;
+        case UnaryOpType::TYPECAST:
+        // Only carries the quant/requant zero points to binary_ng's QUANT/REQUANT/DEQUANT kernels; it never runs as
+        // a unary op, and quant and requant outputs are integer.
+        case UnaryOpType::ZERO_POINT: return true;
 
         default: return false;
     }
@@ -116,9 +119,11 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
 }
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
+    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0. Those the
+    // compute kernel reads as runtime args are left out, so a new value reuses the program.
     auto hash = ttsl::hash::hash_objects_with_default_seed(op_chain.size());
-    for (const auto& op : op_chain) {
+    for (const auto& op_with_runtime_scalars : op_chain) {
+        const auto op = utils::without_runtime_scalars(op_with_runtime_scalars);
         hash = ttsl::hash::hash_objects(hash, op.type(), op.base.index());
         std::visit(
             [&hash](auto params) {
@@ -158,8 +163,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
-    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
-        if (tensor.layout() != Layout::TILE) {
+    // A constant fill writes the same value to every element, so it is independent of the tile shape.
+    // zeros_like/full_like rely on this to clear tiny-tile outputs (e.g. sparse_matmul with 16x32 tiles).
+    const bool is_fill_only = args.op_chain.size() == 1 && args.op_chain[0].type() == UnaryOpType::FILL;
+    auto validate_tile_shape = [is_fill_only](const Tensor& tensor, const char* name) {
+        if (is_fill_only || tensor.layout() != Layout::TILE) {
             return;
         }
         const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
@@ -435,8 +443,18 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         return std::pair{distribution->shard_shape_in_pages(), distribution->cores()};
     };
 
+    // The packer route replaces the SFPU chain and compiles in a threshold picked from the scalar, which the
+    // attributes' hash leaves out (relu_max(x, 6) must not share a program with relu_max(x, 4)).
+    const auto pack_relu_config = utils::get_pack_relu_config(
+        attributes.op_chain,
+        input_tensor.dtype(),
+        output_spec.data_type(),
+        attributes.fp32_dest_acc_en,
+        shard_specs.has_value() && input_tensor.is_sharded() && output_spec.memory_config().is_sharded());
+
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
+        pack_relu_config,
         input_tensor.tensor_spec().tensor_layout(),
         output_spec.tensor_layout(),
         // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures

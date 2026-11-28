@@ -11,10 +11,17 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
+#include <map>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -84,6 +91,106 @@ TEST_F(UnaryProgramHashFixture, OutputTileSeparatesKeys) {
     EXPECT_NE(
         UnaryDeviceOperation::compute_program_hash(attributes, {input, output_32x32}),
         UnaryDeviceOperation::compute_program_hash(attributes, {input, output_16x32}));
+}
+
+constexpr std::array kRuntimeScalarOps = {
+    UnaryOpType::FILL,           UnaryOpType::RELU_MAX,       UnaryOpType::RELU_MIN,       UnaryOpType::POWER,
+    UnaryOpType::LEAKY_RELU,     UnaryOpType::HEAVISIDE,      UnaryOpType::BITWISE_XOR,    UnaryOpType::BITWISE_AND,
+    UnaryOpType::BITWISE_OR,     UnaryOpType::RIGHT_SHIFT,    UnaryOpType::LEFT_SHIFT,     UnaryOpType::REMAINDER,
+    UnaryOpType::FMOD,           UnaryOpType::RDIV,           UnaryOpType::RSUB,           UnaryOpType::RPOW,
+    UnaryOpType::ADD_UNARY_SFPU, UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::MUL_UNARY_SFPU, UnaryOpType::DIV_UNARY_SFPU,
+    UnaryOpType::UNARY_NE,       UnaryOpType::UNARY_EQ,       UnaryOpType::UNARY_GT,       UnaryOpType::UNARY_LT,
+    UnaryOpType::UNARY_GE,       UnaryOpType::UNARY_LE,       UnaryOpType::SOFTPLUS,       UnaryOpType::XIELU,
+    UnaryOpType::PRELU_SFPU,     UnaryOpType::MAXIMUM,        UnaryOpType::MINIMUM,        UnaryOpType::CELU,
+    UnaryOpType::SOFTSHRINK,     UnaryOpType::CLAMP_TSS,      UnaryOpType::HARDTANH,       UnaryOpType::THRESHOLD,
+    UnaryOpType::SELU,
+};
+
+TEST(UnaryRuntimeScalars, ListedOpsAreTheOnesThatTakeThem) {
+    for (const auto op_type : kRuntimeScalarOps) {
+        EXPECT_TRUE(utils::takes_runtime_scalars(op_type)) << enchantum::to_string(op_type);
+    }
+    EXPECT_FALSE(utils::takes_runtime_scalars(UnaryOpType::ELU));
+    EXPECT_FALSE(utils::takes_runtime_scalars(UnaryOpType::HARDSHRINK));
+    EXPECT_FALSE(utils::takes_runtime_scalars(UnaryOpType::ROUND));
+}
+
+// The program hash keys an op by without_runtime_scalars. Two ops it maps to the same value must therefore generate
+// the same code, or a cached program would run with code compiled for another op's parameters. Returns whether the
+// code read any runtime scalars.
+template <typename T>
+bool expect_code_independent_of_runtime_scalars(UnaryOpType op_type, DataType dtype) {
+    const auto with_values = [&](T value0, T value1) {
+        // Param 1 of RDIV is its rounding mode, which stays compiled in.
+        return EltwiseUnaryWithParam(op_type, std::vector<T>{value0, op_type == UnaryOpType::RDIV ? T{0} : value1});
+    };
+    const auto first = with_values(T{1}, T{3});
+    const auto second = with_values(T{2}, T{5});
+    const auto cache_key = [](const EltwiseUnaryWithParam& op) {
+        const auto projected = utils::without_runtime_scalars(op);
+        const auto params = projected.template get_params_if<T>();
+        return std::vector<T>(params.begin(), params.end());
+    };
+    EXPECT_EQ(cache_key(first), cache_key(second)) << enchantum::to_string(op_type);
+
+    const auto generate = [&](const EltwiseUnaryWithParam& op, std::vector<uint32_t>& values) {
+        return utils::get_unary_chain_defines({op}, dtype, values);
+    };
+    std::vector<uint32_t> first_values;
+    std::map<std::string, std::string> first_defines;
+    try {
+        first_defines = generate(first, first_values);
+    } catch (const std::exception&) {
+        return false;  // op_type does not support dtype or T params
+    }
+    std::vector<uint32_t> second_values;
+    EXPECT_EQ(first_defines, generate(second, second_values))
+        << enchantum::to_string(op_type) << " " << enchantum::to_string(dtype);
+    EXPECT_EQ(first_values.empty(), second_values.empty())
+        << enchantum::to_string(op_type) << " " << enchantum::to_string(dtype);
+    return !first_values.empty();
+}
+
+TEST(UnaryRuntimeScalars, CodeIsIndependentOfRuntimeScalars) {
+    for (const auto op_type : kRuntimeScalarOps) {
+        bool read_runtime_scalars = false;
+        for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32, DataType::UINT32}) {
+            read_runtime_scalars |= expect_code_independent_of_runtime_scalars<float>(op_type, dtype);
+        }
+        read_runtime_scalars |= expect_code_independent_of_runtime_scalars<int32_t>(op_type, DataType::INT32);
+        read_runtime_scalars |= expect_code_independent_of_runtime_scalars<uint32_t>(op_type, DataType::UINT32);
+        EXPECT_TRUE(read_runtime_scalars) << enchantum::to_string(op_type);
+    }
+}
+
+// WHERE_TSS and MAC_TSS read their scalars as packed_scalar1/2 rather than through generated code, so their code must
+// stay the same for every value while the cache key zeroes them.
+TEST(UnaryRuntimeScalars, PackedScalarOpsCodeIsIndependentOfScalars) {
+    const std::array<std::pair<UnaryOpType, std::vector<DataType>>, 2> cases = {{
+        {UnaryOpType::WHERE_TSS, {DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32, DataType::UINT32}},
+        {UnaryOpType::MAC_TSS, {DataType::BFLOAT16, DataType::FLOAT32}},
+    }};
+    for (const auto& [op_type, dtypes] : cases) {
+        EXPECT_TRUE(utils::takes_runtime_scalars(op_type)) << enchantum::to_string(op_type);
+        const EltwiseUnaryWithParam first(op_type, std::vector<float>{1.0f, 3.0f});
+        const EltwiseUnaryWithParam second(op_type, std::vector<float>{2.0f, 5.0f});
+        const auto cache_key = [](const EltwiseUnaryWithParam& op) {
+            const auto projected = utils::without_runtime_scalars(op);
+            const auto params = projected.get_params_if<float>();
+            return std::vector<float>(params.begin(), params.end());
+        };
+        EXPECT_EQ(cache_key(first), cache_key(second)) << enchantum::to_string(op_type);
+        for (const auto dtype : dtypes) {
+            std::vector<uint32_t> first_values;
+            std::vector<uint32_t> second_values;
+            EXPECT_EQ(
+                utils::get_unary_chain_defines({first}, dtype, first_values),
+                utils::get_unary_chain_defines({second}, dtype, second_values))
+                << enchantum::to_string(op_type) << " " << enchantum::to_string(dtype);
+            EXPECT_TRUE(first_values.empty() && second_values.empty())
+                << enchantum::to_string(op_type) << " " << enchantum::to_string(dtype);
+        }
+    }
 }
 
 }  // namespace

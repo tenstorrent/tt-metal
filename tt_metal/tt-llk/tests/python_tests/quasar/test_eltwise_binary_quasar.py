@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     ENABLE_DIRECT_INDEXING,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -60,23 +59,11 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
 
-def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
-    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
-    return [
-        (dest_sync, dest_acc)
-        for dest_sync in dest_sync_modes
-        for dest_acc in dest_acc_modes
-    ]
-
-
-def eltwise_binary_dest_sync_dest_acc(formats, *, is_perf=False):
-    # Int8 -> Int32 and Float32 need the 32-bit Dest.
-    dest_acc_modes = (
-        (DestAccumulation.Yes,)
-        if formats.input_format in (DataFormat.Int8, DataFormat.Float32)
-        else (DestAccumulation.No,)
-    )
-    return _eltwise_dest_acc_sync(dest_acc_modes, is_perf=is_perf)
+def eltwise_binary_dest_acc(formats):
+    """Int8 -> Int32 and Float32 need the 32-bit Dest."""
+    if formats.input_format in (DataFormat.Int8, DataFormat.Float32):
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
 
 
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
@@ -88,7 +75,7 @@ def runs_tile_shape_paths(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
     enable_direct_indexing,
     *,
     is_perf=False,
@@ -105,7 +92,7 @@ def runs_tile_shape_paths(
             and mathop == MathOperation.Elwadd
             and math_fidelity == MathFidelity.LoFi
         )
-    if dest_sync_dest_acc[0] != DestSync.Half:
+    if dest_sync != DestSync.Half:
         return False
     if math_fidelity == MathFidelity.HiFi4:
         # Float32 is the only swept input format that keeps HiFi fidelities on Quasar.
@@ -125,7 +112,7 @@ def eltwise_binary_direct_indexing(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
     *,
     is_perf=False,
 ):
@@ -133,7 +120,7 @@ def eltwise_binary_direct_indexing(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
         True,
         is_perf=is_perf,
     ):
@@ -145,7 +132,7 @@ def eltwise_binary_tile_dimensions(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
     enable_direct_indexing,
     *,
     is_perf=False,
@@ -154,7 +141,7 @@ def eltwise_binary_tile_dimensions(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
         enable_direct_indexing,
         is_perf=is_perf,
     ):
@@ -214,30 +201,29 @@ ELTWISE_FORMATS = (
         MathOperation.Elwmul,
     ],
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
-    dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
-        formats, is_perf=False
-    ),
-    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync_dest_acc: eltwise_binary_direct_indexing(
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_acc=eltwise_binary_dest_acc,
+    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync: eltwise_binary_direct_indexing(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
         is_perf=False,
     ),
     tile_dimensions=runtime(
-        lambda formats, mathop, math_fidelity, dest_sync_dest_acc, enable_direct_indexing: eltwise_binary_tile_dimensions(
+        lambda formats, mathop, math_fidelity, dest_sync, enable_direct_indexing: eltwise_binary_tile_dimensions(
             formats,
             mathop,
             math_fidelity,
-            dest_sync_dest_acc,
+            dest_sync,
             enable_direct_indexing,
             is_perf=False,
         )
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc, tile_dimensions: generate_reduced_input_dimensions(
-            dest_sync_dest_acc[1],
-            dest_sync_dest_acc[0],
+        lambda dest_acc, dest_sync, tile_dimensions: generate_reduced_input_dimensions(
+            dest_acc,
+            dest_sync,
             construct_tile_shape(tile_dimensions),
         )
     ),
@@ -249,7 +235,8 @@ def test_eltwise_binary(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
+    dest_acc,
     input_dimensions,
     acc_to_dest,
     tile_dimensions,
@@ -261,14 +248,13 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
-    dest_sync_mode, dest_acc = dest_sync_dest_acc
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -317,7 +303,7 @@ def test_eltwise_binary(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             # This kernel is a plain binary op: no broadcast and no dest reuse. Stated here so
@@ -330,15 +316,17 @@ def test_eltwise_binary(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
             TILE_COUNT(tile_cnt_A),
-            INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces, num_faces, num_faces),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
             NUM_BLOCKS(num_blocks),
+            # The unsuffixed value is output-based, as on WH/BH; the kernel reads the
+            # input_/output_ pair.
             NUM_TILES_IN_BLOCK(
-                input_tiles_in_block,
+                output_tiles_in_block,
+                input_num_tiles_in_block=input_tiles_in_block,
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             LOOP_FACTOR(loop_factor),
@@ -402,10 +390,11 @@ ELTWISE_BINARY_LOFI_HIFI4 = [MathFidelity.LoFi, MathFidelity.HiFi4]
         for fidelity in get_valid_math_fidelities(formats, mathop)
         if fidelity in ELTWISE_BINARY_LOFI_HIFI4
     ],
-    dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(formats),
+    dest_sync=lambda: quasar_dest_sync_modes(),
+    dest_acc=eltwise_binary_dest_acc,
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: generate_reduced_input_dimensions(
-            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
+        lambda dest_acc, dest_sync: generate_reduced_input_dimensions(
+            dest_acc, dest_sync
         )
     ),
     acc_to_dest=lambda input_dimensions: valid_acc_to_dest(input_dimensions, (32, 32)),
@@ -414,7 +403,8 @@ def test_eltwise_binary_float32_quasar(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
+    dest_acc,
     input_dimensions,
     acc_to_dest,
 ):
@@ -423,7 +413,8 @@ def test_eltwise_binary_float32_quasar(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
+        dest_acc,
         input_dimensions,
         acc_to_dest,
         (32, 32),
@@ -437,19 +428,19 @@ def test_eltwise_binary_float32_quasar(
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     mathop=[MathOperation.Elwadd, MathOperation.Elwmul],
-    dest_sync_dest_acc=lambda: _eltwise_dest_acc_sync(
-        (DestAccumulation.No, DestAccumulation.Yes)
-    ),
+    dest_sync=lambda: quasar_dest_sync_modes(),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: generate_dest_depth_input_dimensions(
-            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
+        lambda dest_acc, dest_sync: generate_dest_depth_input_dimensions(
+            dest_acc, dest_sync
         )
     ),
 )
 def test_eltwise_binary_dest_depth_quasar(
     formats,
     mathop,
-    dest_sync_dest_acc,
+    dest_sync,
+    dest_acc,
     input_dimensions,
 ):
     """4 and 8 full Dest sections per run, in both sync modes and Dest widths."""
@@ -457,7 +448,8 @@ def test_eltwise_binary_dest_depth_quasar(
         formats,
         mathop,
         MathFidelity.LoFi,
-        dest_sync_dest_acc,
+        dest_sync,
+        dest_acc,
         input_dimensions,
         False,
         (32, 32),

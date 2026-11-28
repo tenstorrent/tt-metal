@@ -23,10 +23,15 @@ struct TensorPrefetcherKernelInfo {
     const char* file = nullptr;
     // L1 the kernel keeps for itself in the region, zeroed before fast dispatch launches it.
     uint32_t state_bytes = 0;
+    // NoC transaction ids the kernel tags its transactions with, at least one: one for each group of transactions it
+    // keeps in flight and waits on by itself. All the kernels' together fit in tensor_prefetcher_fifo::kMaxTrids.
+    uint32_t trids = 1;
 };
 
 // The Tensor prefetcher kernels in the order blocks flow through them. Kernel `k` retires request slots as
-// FIFO consumer `k` (tensor_prefetcher_fifo::fifo_rd_offset). Defined in tensor_prefetcher_kernels.cpp.
+// FIFO consumer `k` (tensor_prefetcher_fifo::fifo_rd_offset). The first kernel plans how many blocks of each
+// tensor flow, and the rest follow its plan (kernels/tensor_prefetcher_fifo_device.h). Defined in
+// tensor_prefetcher_kernels.cpp.
 std::span<const TensorPrefetcherKernelInfo> tensor_prefetcher_kernels();
 
 // The layout of the dispatch engine's Tensor prefetcher region on `cluster`: one lane per DRAM bank of its

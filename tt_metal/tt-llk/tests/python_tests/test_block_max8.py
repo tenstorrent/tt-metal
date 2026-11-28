@@ -4,13 +4,12 @@
 
 import pytest
 import torch
+from helpers.llk_params import PerfRunType
+from helpers.perf.core import create_test_or_perf_config
 from tt_llk_harness import (
     DataFormat,
     DestAccumulation,
     StimuliConfig,
-)
-from tt_llk_harness import TestConfig as LLKTestConfig
-from tt_llk_harness import (
     blackhole_only,
     input_output_formats,
     params,
@@ -19,7 +18,11 @@ from tt_llk_harness import (
 
 DST_INDICES = [0, 3, 7]
 VALID_COUNTS = [0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024]
+# Empty, full, and representative partial-mask paths; functional keeps every boundary.
+PERF_VALID_COUNTS = [0, 8, 513, 1024]
 PATTERNS = ["random", "winners", "fractional", "negative_zero"]
+PERF_SFPU_PATTERNS = ["random", "negative_zero"]
+PERF_FPU_PATTERNS = PERF_SFPU_PATTERNS + ["denormal"]
 # Host markers that block_max8_fpu_test.cpp replaces in DST with BF16 denormals.
 DENORMAL_MARKERS = {0.375: 0x007F, -0.375: -0x7FFF}
 
@@ -29,7 +32,17 @@ CALL_STRIDE = 3
 
 
 def _run_block_max8(
-    source, dst_index, valid, pattern, negative_zero_result, fpu_calls=None
+    source,
+    dst_index,
+    valid,
+    pattern,
+    negative_zero_result,
+    fpu_calls=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Check every pooled block and that all other tiles in both DST halves are unchanged.
 
@@ -83,32 +96,46 @@ def _run_block_max8(
     src = tilize_block(
         logical.reshape(-1), [24 * 32, 32], DataFormat.Float16_b
     ).flatten()
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
     formats = input_output_formats([DataFormat.Float16_b])[0]
     runtimes = [
         params.TILE_COUNT(24),
         params.DEST_INDEX(dst_index),
         params.BLOCK_MAX8_PARAMS(valid, int(pattern == "negative_zero")),
-    ]
-    if fpu_calls is not None:
-        runtimes.append(
-            params.BLOCK_MAX8_FPU_PARAMS(fpu_calls, int(pattern == "denormal"))
-        )
-    config = LLKTestConfig(
-        source,
-        formats,
-        runtimes=runtimes,
-        variant_stimuli=StimuliConfig(
-            src,
-            formats.input_format,
-            torch.zeros_like(src),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=24,
-            tile_count_B=24,
-            tile_count_res=24,
+        params.BLOCK_MAX8_FPU_PARAMS(
+            0 if fpu_calls is None else fpu_calls, int(pattern == "denormal")
         ),
-        dest_acc=DestAccumulation.No,
+        params.LOOP_FACTOR(loop_factor),
+    ]
+    config = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=dict(
+            test_name=source,
+            formats=formats,
+            templates=[],
+            runtimes=runtimes,
+            variant_stimuli=StimuliConfig(
+                src,
+                formats.input_format,
+                torch.zeros_like(src),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=24,
+                tile_count_B=24,
+                tile_count_res=24,
+            ),
+            dest_acc=DestAccumulation.No,
+        ),
     )
+    if is_perf:
+        config.run(perf_report)
+        return
+
     for _ in range(2):
         actual = torch.as_tensor(config.run().result, dtype=torch.bfloat16).reshape(
             3, 8, 1024

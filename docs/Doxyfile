@@ -926,7 +926,10 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/dataflow/dataflow_api.h \
                          tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h \
                          tt_metal/hw/inc/internal/ethernet/dataflow_api.h \
-                         tt_metal/api/tt-metalium/host_api.hpp \
+                         tt_metal/api/tt-metalium/discovery/cluster.hpp \
+                         tt_metal/api/tt-metalium/observability/profiler/device_profiler.hpp \
+                         tt_metal/api/tt-metalium/utils/runtime_config.hpp \
+                         tt_metal/api/tt-metalium/workload/legacy/host_api.hpp \
                          tt_metal/api/tt-metalium/experimental/profiler.hpp \
                          tt_metal/hw/inc/api/compute/eltwise_unary/comp.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/erf_erfc.h \
@@ -938,9 +941,9 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rsqrt.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/elu.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/relu.h \
+                         tt_metal/hw/inc/api/compute/eltwise_unary/rsub.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/i0.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/i1.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/reverseops.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/isinf_isnan.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/logical_not.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h \
@@ -990,6 +993,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/lcm.h \
                          tt_metal/hw/inc/api/compute/mask.h \
                          tt_metal/hw/inc/api/compute/reshuffle.h \
+                         tt_metal/hw/inc/api/compute/copy_dest_rows.h \
                          tt_metal/hw/inc/api/compute/triangle_solve.h \
                          tt_metal/hw/inc/api/compute/binary_shift.h \
                          tt_metal/hw/inc/api/compute/binary_max_min.h \
@@ -998,7 +1002,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/mul_int_sfpu.h \
                          tt_metal/hw/inc/api/compute/compute_kernel_api.h \
                          tt_metal/jit_build/kernel_args.hpp \
-                         tt_metal/api/tt-metalium/global_circular_buffer.hpp
+                         tt_metal/api/tt-metalium/memory/cross_program/global_circular_buffer.hpp
 
 
 # This tag can be used to specify the character encoding of the source files

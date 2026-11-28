@@ -78,7 +78,7 @@ def test_quasar_schema_is_not_wh_bh_schema():
     # WH/BH-only columns must not land in the Quasar published table.
     wh_only = {c.name for c in WH_BH_SCHEMA} - {c.name for c in QSR_SCHEMA}
     assert "clamp_negative" in wh_only
-    assert "ternary_mathop" in wh_only
+    assert "ternary_scalar_bits" in wh_only
 
 
 def test_arrow_schema_matches_quasar_db_schema():
@@ -204,12 +204,12 @@ def test_convert_keeps_quasar_sfpu_where_vector_mode(tmp_path):
 
 
 def test_convert_stores_legacy_columns_under_current_names(tmp_path):
-    # CSV written before mathop -> op and formats.sfpu_math -> formats.sfpu_src.
+    # CSV written before op -> mathop and formats.sfpu_math -> formats.sfpu_src.
     df = pd.DataFrame(
         {
             "marker": ["INIT"],
             "tile_cnt": [4],
-            "mathop": ["ADD"],
+            "op": ["ADD"],
             "formats.sfpu_math": ["Float16_b"],
         }
     )
@@ -220,13 +220,13 @@ def test_convert_stores_legacy_columns_under_current_names(tmp_path):
     )
 
     table = pq.read_table(tmp_path / "out.parquet").to_pandas()
-    assert table["op"].tolist() == ["ADD"]
+    assert table["mathop"].tolist() == ["ADD"]
     assert table["formats.sfpu_src"].tolist() == ["Float16_b"]
-    assert table["mathop"].isna().all()
+    assert "op" not in table.columns
     assert diag["unknown_columns"] == {}
     assert diag["renamed_columns"] == {
         "perf_eltwise_binary_sfpu_quasar": {
             "formats.sfpu_math": "formats.sfpu_src",
-            "mathop": "op",
+            "op": "mathop",
         }
     }

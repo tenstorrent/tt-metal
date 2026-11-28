@@ -26,7 +26,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
             "can be pushed before this chunk's KV is written.")
         .value("REST", SparseKvPushPart::kRest, "Every needed row after the prefix.");
 
-    // Cores the push needs per fabric link, for callers laying out its core grid beside other work.
+    // Cores the push needs per fabric link on a chip with fabric neighbours in all four directions, the most it takes,
+    // for callers laying out its core grid beside other work.
     mod.attr("SPARSE_KV_PUSH_CORES_PER_LINK") = cores_needed(1);
     // Test-only: the compact layout's (pages_per_packet, banks), so tests lay out reference buffers as the ops do.
     mod.def(
@@ -42,14 +43,17 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         mod,
         R"doc(
             Whether ``sparse_push_plan`` and ``sparse_kv_push`` can serve a cache of ``max_rows`` rows in blocks of
-            ``stripe_chunk`` rows on ``mesh_device``: a FABRIC_2D_TORUS_XY fabric, at least 3 chips on each mesh axis
-            and at most 32 in all, and a cache geometry the plan table and the plan's reduce fit. When this returns
-            False the ops would raise, so callers can gather the whole prefix instead.
+            ``stripe_chunk`` rows on ``mesh_device`` with ``num_links`` links: a 2D fabric (FABRIC_2D or a torus on
+            either or both axes) on a 2D mesh of 2 to 32 chips that every chip can route on with ``num_links`` links
+            (the push's own routing check), and a cache geometry the plan table and the plan's reduce fit. When this
+            returns False the ops would raise, so callers can gather the whole prefix instead. The push's core grid is
+            the caller's: it needs ``num_links * SPARSE_KV_PUSH_CORES_PER_LINK`` cores.
 
             Args:
                 mesh_device (ttnn.MeshDevice): The mesh the ops would run on.
                 stripe_chunk: Rows per block-cyclic block of the cache.
                 max_rows: Cache rows the plan would cover.
+                num_links: Fabric links the push would run on.
 
             Returns:
                 bool
@@ -57,7 +61,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         &is_sparse_kv_push_supported,
         nb::arg("mesh_device"),
         nb::arg("stripe_chunk"),
-        nb::arg("max_rows"));
+        nb::arg("max_rows"),
+        nb::arg("num_links") = 2);
 
     ttnn::bind_function<"sparse_kv_push_output_spec", "ttnn.experimental.">(
         mod,
@@ -106,7 +111,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
             Builds one chip's plan table for ``ttnn.experimental.sparse_kv_push`` from its top-k indices, and
             rewrites the indices to compact-buffer slots. Needs the fabric the push will run on: its payload size
             sets the packet shape the slots follow. Every chip of the mesh, at most 32, owns a share of the cache:
-            block ``b`` of ``stripe_chunk`` rows lives on chip ``b % chips`` in row-major order.
+            block ``b`` of ``stripe_chunk`` rows lives on owner ``b % chips``; the push's ``sp_axis`` maps owners to
+            chips.
 
             Args:
                 indices: The requester's top-k cache rows, per device uint32 ROW_MAJOR DRAM [1, 1, rows, topk]
@@ -143,12 +149,13 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         R"doc(
             Each owner chip pushes only the cache rows a requester's top-k references into that requester's
             compact ``output_tensor``, at the slots ``sparse_push_plan`` rewrote its indices to.
-            Needs a FABRIC_2D_TORUS_XY fabric on a 2D mesh of at most 32 chips, with each dimension at least 3
-            (every chip has four distinct torus neighbours).
+            Needs a 2D fabric (FABRIC_2D, or a torus on either or both axes) on a 2D mesh of 2 to 32 chips. Each
+            chip sends on the fabric links it has: both ways along an axis the fabric wraps, towards the existing
+            neighbours along one it does not.
 
             Args:
                 input_tensor: The KVPE cache, [slots, 1, rows per chip, width] ROW_MAJOR in DRAM (interleaved or
-                    ND-sharded), sharded over its rows (dim 2) across every chip in row-major order. A row page
+                    ND-sharded), sharded over its rows (dim 2) across every chip, in the stripe order of ``sp_axis``. A row page
                     must fit in one fabric packet payload.
                 output_tensor: The requester's compact buffer, [1, 1, rows, width] ROW_MAJOR interleaved DRAM with
                     the input's dtype and row page; normally far shorter than the cache. Each owner's rows start on
@@ -180,7 +187,12 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                 batch_slot_num_layers: Cache slots per user; must divide the cache's slots.
                 batch_slot_layer_idx: The pushed layer's slot within its user, below ``batch_slot_num_layers``.
                 core_grid: Cores for the push (default: the first sub-device's cores); it needs
-                    ``num_links * 4 * 3`` of them: two senders and one fabric mux per link and torus direction.
+                    ``num_links * directions * 3`` of them: two senders and one fabric mux per link and direction the chip
+                    has a fabric neighbour in (at most 4, so at most ``num_links * SPARSE_KV_PUSH_CORES_PER_LINK``).
+                sp_axis: The mesh axis the cache's blocks stripe along first (0 or 1): the chip at position ``s`` on
+                    it and ``t`` on the other axis owns blocks ``s * chips_on_other_axis + t`` (+ ``k * chips``).
+                    Axis 0 is row-major chip order. Must match how the plan's owners are ordered (block ``b`` on
+                    owner ``b % chips``).
 
             Returns:
                 ttnn.Tensor: ``output_tensor``, holding the pushed rows. Each chip's rows differ, so it is labelled
@@ -201,7 +213,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("batch_index_tensor") = nb::none(),
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
-        nb::arg("core_grid") = nb::none());
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("sp_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push::detail

@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
 #include <span>
+#include <vector>
 
 #include <tt-umd/types/arch.hpp>
 
@@ -19,12 +21,32 @@ UnaryWithParam string_to_unary_with_param(const std::string& name);
 
 using DataType = tt::tt_metal::DataType;
 
+// Scalar parameters an SFPU op chain reads at runtime instead of compiling them in. Given one, the define
+// generators below emit each scalar of an op for which takes_runtime_scalars holds as the kernel expression
+// fmt::format(arg_format, first_index + n), and append its packed bits to `values`. Every other op, and every
+// scalar without one, is emitted as a literal.
+struct RuntimeScalars {
+    std::string arg_format;  // e.g. "get_arg(args::sfpu_scalar{})" or "get_arg_val<uint32_t>({})"
+    uint32_t first_index = 0;
+    std::vector<uint32_t> values;
+};
+
+// Whether the generated SFPU code of op_type takes its scalar parameters as runtime values when given a
+// RuntimeScalars. Ops whose LLK selects code from a scalar at compile time are left out.
+bool takes_runtime_scalars(UnaryOpType op_type);
+
+// `op` with the parameters it reads at runtime zeroed: what a program-cache key hashes in its place. Its generated
+// code with a RuntimeScalars is the same for every value of those parameters, so programs built from it are reused
+// across them. Ops for which takes_runtime_scalars does not hold are returned unchanged.
+EltwiseUnaryWithParam without_runtime_scalars(const EltwiseUnaryWithParam& op);
+
 template <typename T = float>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type,
     std::span<const T> params = {},
     const std::string& idst = "0",
-    std::optional<DataType> input_dtype = std::nullopt);
+    std::optional<DataType> input_dtype = std::nullopt,
+    RuntimeScalars* runtime_scalars = nullptr);
 
 // type_identity_t suppresses template argument deduction
 // this allows get_defines(...) without a template list to use the default type float
@@ -34,7 +56,8 @@ std::map<std::string, std::string> get_defines(
     std::optional<std::span<const std::type_identity_t<T>>> params = std::nullopt,
     const std::string& id = "0",
     const std::string& idst = "0",
-    std::optional<DataType> input_dtype = std::nullopt);
+    std::optional<DataType> input_dtype = std::nullopt,
+    RuntimeScalars* runtime_scalars = nullptr);
 
 // Target dtype (second parameter) of a TYPECAST/BITCAST op, whichever type backs its parameters.
 std::optional<tt::tt_metal::DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op);
@@ -52,7 +75,16 @@ std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id = "0",
     const std::string& idst = "0",
-    std::optional<DataType> input_dtype = std::nullopt);
+    std::optional<DataType> input_dtype = std::nullopt,
+    RuntimeScalars* runtime_scalars = nullptr);
+
+// Name of the unary compute kernel's common arg that holds runtime scalar `index` of its op chain.
+std::string unary_runtime_scalar_name(uint32_t index);
+
+// The unary program's SFPU_OP_CHAIN_0 defines, with the chain's scalars read from the compute kernel's common args
+// named by unary_runtime_scalar_name. `scalars` receives their values, in index order.
+std::map<std::string, std::string> get_unary_chain_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype, std::vector<uint32_t>& scalars);
 
 // The packer ReLU configuration that computes a lone op as its tile is packed, as a
 // ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
@@ -153,4 +185,8 @@ uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
+
+// True when the op's result at 0 is inf or nan. Run on the zero tile padding, such an op leaves a non-finite value in
+// the lanes that share a BFLOAT8_B / BFLOAT4_B block with real lanes, and that value sets the block's exponent.
+bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op);
 }  // namespace ttnn::operations::unary::utils

@@ -82,7 +82,7 @@ def test_all_gather_linear_2D_nightly(
     num_iters,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -136,7 +136,7 @@ def test_all_gather_multicast_non_scatter_pages(
     mem_config_ag,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
@@ -216,7 +216,7 @@ def test_all_gather_linear_4D_nightly(
     num_iters,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -298,7 +298,7 @@ def test_all_gather_ring_nightly(
     cluster_axis,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -373,7 +373,7 @@ def test_all_gather_dtype(
     mem_config_ag,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:

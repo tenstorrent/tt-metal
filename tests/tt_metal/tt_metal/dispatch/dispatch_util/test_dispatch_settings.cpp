@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 #include "gtest/gtest.h"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include "impl/dispatch/dispatch_settings.hpp"

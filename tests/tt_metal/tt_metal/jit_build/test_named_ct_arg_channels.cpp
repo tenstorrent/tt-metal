@@ -16,9 +16,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "common/executor.hpp"
 #include "impl/context/metal_context.hpp"

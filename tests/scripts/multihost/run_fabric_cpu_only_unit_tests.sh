@@ -13,7 +13,7 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc#
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc, fabric-builder#
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
 #     Runs all groups in parallel via self-invocation. Each group's output is
@@ -310,7 +310,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc fabric-builder"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -322,7 +322,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc  )
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc fabric-builder  )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
   pids=()
@@ -356,16 +356,20 @@ set +e
 ####################################
 if run_group "unit"; then
 
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/wormhole_N150.yaml ./build/test/tt_metal/distributed/distributed_mpi_cleanup_tests --gtest_filter="MpiResourceCleanupTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTopologyHelpers*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/2x2_n300_cluster_desc/2x2_n300_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RoutingTableValidation*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="StreamAssignmentTest.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MasterRouterSelectionTest.*"
 # The allocator picks its buffer slot table by the arch the HAL reports, so run it once per arch.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricStaticSizedChannelsAllocatorTest.*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/p100_cluster_desc/p100_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricStaticSizedChannelsAllocatorTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricSlotAllocatorTest.*:FabricTridAllocatorTest.*"
+# Per-router channel layouts and the fabric graph (host-only; the mock builds are in fabric-builder).
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RouterChannelLayoutsTest.*:FabricLaunchGateTest.*:FabricGraph*"
 
 # LogicalToPhysicalConversionFixture used to be run here. Its file,
 # fabric_router/test_control_plane_logical_to_physical.cpp, is in no sources.cmake and does not
@@ -386,6 +390,8 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Physi
 run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
+run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestGenerate*ClusterDescriptorFromFSD:Cluster.TestNodeTypeArchitectureAndBoardRevision"
+run_test python3 -m pytest tests/ttnn/distributed/test_ttrun.py
 
 fi # unit
 
@@ -771,6 +777,20 @@ for parity_case in \
   run_test env TT_METAL_LOGS_PATH=$parity_out/psd TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/${parity_mgd}" --mock-cluster-rank-binding "${parity_mapping}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${parity_filter}"
   run_test env TT_METAL_LOGS_PATH=$parity_out/fsd TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/${parity_mgd}" --mock-cluster-rank-binding "${parity_mapping}" --factory-system-descriptor "${parity_fsd}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${parity_filter}"
   run_test diff -r "$parity_out/psd/generated/fabric" "$parity_out/fsd/generated/fabric"
+done
+
+# Offline vs mock parity. Each mesh graph runs on the 16-host SC16 revC subtorus aisle-D mock + its FSD, then
+# with tt-run --offline on the FSD alone, which generates the mock cluster descriptors from it. The same gtest
+# filters have to pass on both runs, and generated/fabric has to match. The generated descriptors number the
+# ASICs and UMD chips themselves, so asic_id lines and the UMD-keyed coordinate files are not compared.
+for offline_case in \
+  "${MGD_SUBTORUS}/subtorus_32x4_8x2_mesh_graph_descriptor.textproto|${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}" \
+  "${MGD_SUBTORUS}/subtorus_8x4_pipeline_16stage_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_8X4_PIPELINE}"; do
+  IFS='|' read -r offline_mgd offline_filter <<<"$offline_case"
+  offline_out="$FSD_PSD_PARITY_DIR/offline_$(basename "${offline_mgd%%_mesh_graph_descriptor.textproto}")"
+  run_test env TT_METAL_LOGS_PATH=$offline_out/mock TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${offline_mgd}" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${offline_filter}"
+  run_test env TT_METAL_LOGS_PATH=$offline_out/offline TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${offline_mgd}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --offline --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${offline_filter}"
+  run_test diff -r -I 'asic_id:' -x 'physical_chip_mesh_coordinate_mapping_*' "$offline_out/mock/generated/fabric" "$offline_out/offline/generated/fabric"
 done
 rm -rf "$FSD_PSD_PARITY_DIR"
 trap - EXIT
@@ -1182,5 +1202,14 @@ run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-desc
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/disconnected_sc36_quads_2bigmesh_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding tests/tt_metal/tt_fabric/mock_cluster_mappings/disconnected_sc36_quads_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestDisconnectedQuadsZeroIntermeshResolved"
 
 fi # bh-misc
+
+######################################
+# Fabric builder: routers built (kernels compiled) on a QuietBox 2 mock, graph builder and stock
+######################################
+if run_group "fabric-builder"; then
+
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_qb2_p300_cluster_desc/bh_qb2_p300_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RouterLayoutMockTest.*:*GraphFabricMock*"
+
+fi # fabric-builder
 
 print_failure_summary

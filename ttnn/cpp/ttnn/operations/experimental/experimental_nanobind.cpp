@@ -62,10 +62,8 @@
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/fused_msda/fused_msda_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routed_combine/routed_combine_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul/grouped_matmul_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routing_metadata/routing_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
+#include "ttnn/operations/experimental/untilize_and_split_heads/untilize_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -84,6 +82,7 @@
 #include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/sliding_ring_sdpa_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/kda_nanobind.hpp"
+#include "ttnn/operations/experimental/gdn/gdn_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/dispatch_fabric2d_nanobind.hpp"
@@ -100,6 +99,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/high_bw_all_gather/high_bw_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/sparse_kv_push/sparse_kv_push_nanobind.hpp"
+#include "ttnn/operations/experimental/moe_block/moe_block_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_padding_config/moe_padding_config_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
@@ -108,6 +108,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
+#include "ttnn-nanobind/compiled_program.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
@@ -123,7 +124,10 @@
 namespace ttnn::operations::experimental {
 
 void py_module(nb::module_& mod) {
+    ttnn::operations::generic::bind_generic_operation_program_spec(mod);
     ttnn::operations::generic::bind_generic_operation_preparation(mod);
+    ttnn::compiled_program::py_module(mod);
+    ttnn::operations::generic::bind_generic_operation_compilation(mod);
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
 
@@ -205,6 +209,8 @@ void py_module(nb::module_& mod) {
 
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);
+    // The MoE block's ops — creates the ttnn.experimental.moe_block submodule.
+    moe_block::bind_moe_block(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     deepseek_prefill::detail::bind_inbound_socket_service_sync(mod);
     ttnn::experimental::detail::bind_rgb_to_yuv(mod);
@@ -225,10 +231,8 @@ void py_module(nb::module_& mod) {
     broadcast_to::detail::bind_broadcast_to(mod);
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
     fused_msda::detail::bind_fused_msda(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_routed_combine(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
     modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
+    untilize_and_split_heads::detail::bind_untilize_and_split_heads(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
@@ -243,6 +247,7 @@ void py_module(nb::module_& mod) {
     indexer_score::detail::bind_indexer_score(mod);
     ttnn::experimental::gemma4::bind_sliding_ring_sdpa(mod);
     kda::detail::bind_kda(mod);
+    gdn::detail::bind_gdn(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations

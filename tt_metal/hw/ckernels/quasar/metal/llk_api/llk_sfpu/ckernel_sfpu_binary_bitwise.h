@@ -9,6 +9,7 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -20,6 +21,17 @@ enum class BinaryBitwiseOp : std::uint8_t {
     OR = 1,
     XOR = 2,
 };
+
+// ADDR_MOD_6 advances Dest by one SFPU pass; the store in calculate_sfpu_binary_bitwise walks Dest
+// through it. Run by binary_bitwise_tile_init.
+inline void binary_bitwise_init() {
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = ckernel::math::SFP_ROWS},
+    }
+        .set(ADDR_MOD_6);
+}
 
 template <
     bool APPROXIMATION_MODE,
@@ -52,8 +64,8 @@ inline void calculate_sfpu_binary_bitwise(
             result = a ^ b;
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = result;
-        sfpi::dst_reg++;
+        // The store advances Dest to the next pass through ADDR_MOD_6 (binary_bitwise_init).
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = result;
     }
 }
 

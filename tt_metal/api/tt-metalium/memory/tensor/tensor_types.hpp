@@ -1,0 +1,169 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <ostream>
+#include <utility>
+
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <fmt/base.h>
+
+namespace tt::tt_metal {
+
+enum class DataType {
+    BFLOAT16 = 0,
+    FLOAT32 = 1,
+    UINT32 = 2,
+    BFLOAT8_B = 3,
+    BFLOAT4_B = 4,
+    UINT8 = 5,
+    UINT16 = 6,
+    INT32 = 7,
+    // WARNING: narrowly supported — Blackhole only, ROW-MAJOR only for now, used exclusively
+    // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
+    FP8_E4M3 = 8,
+    INT8 = 9,
+    // OCP microscaling (MX) formats: 32 elements share one E8M0 scale. Quasar only, TILE layout only.
+    MXFP8_E4M3 = 10,
+    MXFP8_E5M2 = 11,
+    MXFP6_E2M3 = 12,
+    MXFP6_E3M2 = 13,
+    MXFP4 = 14,
+    MXINT8 = 15,
+    MXINT4 = 16,
+    MXINT2 = 17,
+    // GGUF quantized weights, one value per format: TILE layout, each page one GGUF record, see
+    // experimental::GgufTraits.
+    GGUF_Q8_0 = 19,
+    GGUF_Q4_0 = 20,
+    GGUF_IQ4_NL = 21,
+    GGUF_MXFP4 = 22,
+    GGUF_NVFP4 = 23,
+    GGUF_Q6_K = 24,
+    GGUF_Q4_K = 25,
+    GGUF_Q5_K = 26,
+    GGUF_Q3_K = 27,
+    GGUF_Q2_K = 28,
+    GGUF_IQ4_XS = 29,
+    GGUF_TQ2_0 = 30,
+    GGUF_Q2_0 = 31,
+    GGUF_Q1_0 = 32,
+    GGUF_IQ2_XXS = 33,
+    GGUF_IQ1_S = 34,
+    GGUF_IQ2_S = 35,
+    GGUF_IQ3_S = 36,
+    GGUF_IQ3_XXS = 37,
+    GGUF_IQ2_XS = 38,
+    GGUF_IQ1_M = 39,
+    GGUF_Q4_1 = 40,
+    GGUF_Q5_0 = 41,
+    GGUF_Q5_1 = 42,
+    GGUF_TQ1_0 = 43,
+    // Expanded GGUF layouts, made by from_gguf from the GGUF format of the same name
+    // (experimental::gguf_source_dtype): exact, larger pages that the matmul decodes faster. The codebook formats hold
+    // each grid entry's level codes instead of its grid index (no lookup per matmul); TQ1_0 holds its weights as
+    // TQ2_0's 2-bit codes.
+    GGUF_IQ2_XXS_EXPANDED = 44,
+    GGUF_IQ1_S_EXPANDED = 45,
+    GGUF_IQ2_S_EXPANDED = 46,
+    GGUF_IQ3_S_EXPANDED = 47,
+    GGUF_IQ3_XXS_EXPANDED = 48,
+    GGUF_IQ2_XS_EXPANDED = 49,
+    GGUF_IQ1_M_EXPANDED = 50,
+    GGUF_TQ1_0_EXPANDED = 51,
+    INVALID = 52,
+};
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
+
+template <typename T>
+consteval DataType convert_to_data_type() {
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        return DataType::UINT8;
+    } else if constexpr (std::is_same_v<T, int8_t>) {
+        return DataType::INT8;
+    } else if constexpr (std::is_same_v<T, uint16_t>) {
+        return DataType::UINT16;
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+        return DataType::INT32;
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        return DataType::UINT32;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return DataType::FLOAT32;
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
+        return DataType::BFLOAT16;
+    } else {
+        static_assert(sizeof(T) == 0, "Unsupported DataType!");
+    }
+}
+
+bool is_floating_point(DataType dtype);
+
+bool is_block_float(DataType dtype);
+
+// True for the MX formats. Kept separate from is_block_float(): BFP and MX share the "TILE-only,
+// packed on the host" property but use different encodings, packers and supported architectures.
+constexpr bool is_mx(DataType dtype) {
+    switch (dtype) {
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return true;
+        default: return false;
+    }
+}
+
+// True for the GGUF formats. Their pages hold GGUF records, not values: ops that do not handle GGUF see
+// DataFormat::Invalid for them, and the host converts them only with from_gguf / to_gguf.
+bool is_gguf(DataType dtype);
+
+tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
+tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
+
+/**
+ * Returns the format to declare a CB when moving a tensor of this dtype through the unpacker/packer.
+ *
+ *This differs from datatype_to_dataformat_converter only for INT8.
+ */
+tt::DataFormat cb_dataformat_for(DataType datatype);
+
+/**
+ * Returns tile size of given data type in bytes.
+ *
+ * Equivalent to tt::tile_size(datatype_to_dataformat_converter(dtype)).
+ */
+uint32_t tile_size(DataType dtype);
+
+struct NdShardSpec {
+    Shape shard_shape;
+    CoreRangeSet grid;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
+    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D;
+
+    NdShardSpec with_shard_shape(Shape new_shard_shape) const {
+        return NdShardSpec{std::move(new_shard_shape), grid, orientation, shard_distribution_strategy};
+    }
+
+    bool operator==(const NdShardSpec& other) const = default;
+    bool operator!=(const NdShardSpec& other) const = default;
+};
+
+std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
+
+}  // namespace tt::tt_metal
+
+template <>
+struct fmt::formatter<tt::tt_metal::DataType> : fmt::formatter<string_view> {
+    auto format(tt::tt_metal::DataType dt, format_context& ctx) const -> format_context::iterator;
+};

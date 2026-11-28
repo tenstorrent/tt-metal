@@ -21,7 +21,6 @@ root is read off the index rather than guessed, and `language_model.model.` is t
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -34,7 +33,9 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kda.weights import current_cache_globs as kda_current_cache_globs
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import checkpoint_cache_key
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
 # What each TT module reads out of a layer's state dict. Kept here rather than inline so the map
 # from checkpoint name to TT name is in one place and can be read against the modules.
@@ -242,16 +243,6 @@ _CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
 _DEFAULT_CACHE = Path("/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill")
 
 
-def _checkpoint_identity(checkpoint_dir: Path) -> str:
-    """A short stable id for a checkpoint, from its index rather than its 5.5 TB of tensors."""
-    index = Path(checkpoint_dir) / "model.safetensors.index.json"
-    digest = hashlib.sha256()
-    digest.update(Path(checkpoint_dir).resolve().name.encode())
-    stat = index.stat()
-    digest.update(str(stat.st_size).encode())
-    return digest.hexdigest()[:16]
-
-
 def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) -> Path | None:
     """Where this (checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
 
@@ -264,12 +255,7 @@ def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) 
         return None  # explicitly empty disables caching, for a run that must build from weights
     root = Path(override) if override else _DEFAULT_CACHE
     rows, columns = mesh_shape
-    path = (
-        root
-        / f"kimi_k3_bh_{rows * columns}dev"
-        / _checkpoint_identity(checkpoint_dir)
-        / f"mesh{rows}x{columns}.tpaxis{tp_axis}"
-    )
+    path = root / f"kimi_k3_bh_{rows * columns}dev" / checkpoint_cache_key(checkpoint_dir, mesh_shape, tp_axis)
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -287,35 +273,39 @@ def _marker_exists(root: Path | None, layer_idx: int) -> bool:
     return root is not None and _marker(root, layer_idx).is_file()
 
 
-def _kda_cache_current(root: Path, layer_idx: int) -> bool:
-    """Whether every KDA tensorbin of this layer is in the current KDA cache format, projections at
-    `KIMI_K3_PROJECTION_DTYPE`."""
-    return all(
-        any(root.glob(pattern))
-        for pattern in kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
-    )
-
-
-def _attention_cache_current(root: Path, layer_idx: int, model_cfg: type) -> bool:
-    """Whether the layer's attention tensorbins are all present in their current format: a KDA layer's in the
-    current KDA cache format, and an attention layer's indexer (dtype-pinned by `TtIndexer`) when the model has one."""
+def _attention_cache_globs(layer_idx: int, model_cfg: type) -> tuple[str, ...]:
+    """One glob per attention tensorbin of the layer in its current format: a KDA layer's in the current KDA cache
+    format (projections at `KIMI_K3_PROJECTION_DTYPE`), and an attention layer's indexer (dtype-pinned by
+    `TtIndexer`) when the model has one."""
     if layer_idx not in model_cfg.mla_layer_ids():
-        return _kda_cache_current(root, layer_idx)
-    return not has_indexer(model_cfg) or TtIndexer.check_cache_complete(root, f"layer_{layer_idx}.mla")
+        return kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
+    return TtIndexer.cache_globs(f"layer_{layer_idx}.mla") if has_indexer(model_cfg) else ()
 
 
-def layer_is_stale(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
+def layer_is_stale(
+    root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config, *, listing: FastCacheChecker | None = None
+) -> bool:
     """A marked layer whose attention tensorbins are not all present in their current format.
 
     Its marker predates a KDA cache format change, was written for an attention layer before its indexer was
     built (it would otherwise load `torch.empty` placeholders as indexer weights), or a rebuild was interrupted.
     Every other tensorbin of the layer is still good, so only the attention weights need rebuilding.
+
+    `listing` is a `FastCacheChecker` over `root` that a caller checking many layers lists once and passes to every
+    call; it must not outlive a write to `root`. Without one, this lists `root` itself, only if the layer is marked.
     """
-    return _marker_exists(root, layer_idx) and not _attention_cache_current(root, layer_idx, model_cfg)
+    if not _marker_exists(root, layer_idx):
+        return False
+    listing = listing if listing is not None else FastCacheChecker(root)
+    return not all(
+        listing.pattern_exists(pattern, "K3 attention") for pattern in _attention_cache_globs(layer_idx, model_cfg)
+    )
 
 
-def layer_is_cached(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
-    return _marker_exists(root, layer_idx) and not layer_is_stale(root, layer_idx, model_cfg)
+def layer_is_cached(
+    root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config, *, listing: FastCacheChecker | None = None
+) -> bool:
+    return _marker_exists(root, layer_idx) and not layer_is_stale(root, layer_idx, model_cfg, listing=listing)
 
 
 def mark_layer_cached(root: Path | None, layer_idx: int) -> None:
@@ -338,10 +328,11 @@ def load_layer_state_dict_cached(
     `state_dict.get(...)`, and each falls back to its tensorbins when the entry is missing and a
     `weight_cache_path` is set. Nothing in the stack needed changing for this.
     """
-    if layer_is_cached(root, layer_idx, model_cfg):
+    listing = FastCacheChecker(root) if root is not None else None  # lazy: lists only for a marked layer
+    if layer_is_cached(root, layer_idx, model_cfg, listing=listing):
         logger.info(f"layer {layer_idx}: cache hit, not opening the checkpoint")
         return {}
-    if layer_is_stale(root, layer_idx, model_cfg):
+    if layer_is_stale(root, layer_idx, model_cfg, listing=listing):
         # Rebuild only the attention weights; every other component still loads from its tensorbins.
         logger.info(f"layer {layer_idx}: cache hit, rebuilding its attention weights")
         return load_attention_weights(checkpoint_dir, layer_idx, model_cfg=model_cfg)

@@ -9,10 +9,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -46,9 +46,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    tt::DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat src0_dfb_data_format = cb_dataformat_for(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_dfb_data_format);
-    tt::DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat dst_dfb_data_format = cb_dataformat_for(output_tensor.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_dfb_data_format);
 
     MeshDevice* device = input_tensor.device();

@@ -504,8 +504,7 @@ _K3_ROWS = 640
 _K3_WIDTHS = (3072, 3072, 3072)
 _K3_TRAILING_COLUMNS = 128 + 3072 + 32
 _K3_CHANNEL_CHUNK_SIZE = 64
-# P150b median under FP32 DST (70,516 ns), scaled by the BF16-DST CI/P150b ratio (54,100 / 51,534).
-_K3_EXPECTED_DURATION_NS = 74_000
+_K3_EXPECTED_DURATION_NS = 54_200
 # Kimi-K3's channel-paged convolution tail: half a 128-channel head per page.
 _K3_PAGE_CHANNELS = 64
 

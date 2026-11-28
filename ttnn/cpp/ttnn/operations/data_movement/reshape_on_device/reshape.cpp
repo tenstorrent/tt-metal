@@ -6,7 +6,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "reshape.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"

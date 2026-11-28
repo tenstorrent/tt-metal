@@ -22,10 +22,10 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/buffers/dram_sender_topology.hpp"
@@ -117,10 +117,10 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
         "Tensor prefetcher request has {} receivers; fast dispatch's prefetcher serves 1 to {}",
         target.total_receivers,
         fifo::kMaxReceivers);
-    // The stage slot each of this target's blocks lands in, exactly as the kernels size it.
-    const uint32_t stage_slot_bytes = fifo::stage_slot_bytes(
+    // The largest block each receiver's share of the stage ring takes, exactly as the kernels size the shares.
+    const uint32_t max_block_bytes = fifo::max_stage_block_bytes(fifo::stage_share_bytes(
         fifo_layout_.stage_ring_bytes(mesh_device_->impl().metal_context().dispatch_mem_map().unused_l1_size()),
-        target.total_receivers);
+        target.total_receivers));
     for (const auto& page : sender_pages) {
         const TensorPrefetcherRequestHeader& header = header_of(page);
         if (header.base.cmd_id != DRAM_PREFETCHER_CMD_PREFETCH) {
@@ -142,17 +142,12 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
                 "Fast dispatch's Tensor prefetcher does not stream (tensor {} is streaming; #65545)",
                 e);
             TT_FATAL(
-                entry.num_groups == 1 && entry.selector_mode == TENSOR_PREFETCHER_SELECTOR_NONE,
-                "Fast dispatch's Tensor prefetcher does not serve grouped or selected weights (tensor {}; #65545)",
-                e);
-            TT_FATAL(
-                layout.page_bytes_per_recv <= stage_slot_bytes,
-                "Tensor {} has {} B blocks; the dispatch engine stages {} receivers' blocks in {} slots of {} B each",
+                layout.page_bytes_per_recv <= max_block_bytes,
+                "Tensor {} has {} B blocks; the dispatch engine stages blocks of at most {} B for {} receivers",
                 e,
                 layout.page_bytes_per_recv,
-                target.total_receivers,
-                fifo::kStageSlotsPerReceiver,
-                stage_slot_bytes);
+                max_block_bytes,
+                target.total_receivers);
         }
     }
 }
@@ -235,17 +230,19 @@ void TensorPrefetcherManager::wait_for_fifo_idle() const {
 }
 
 void TensorPrefetcherManager::worker_loop_dispatch_engine() {
-    // One slot per request and device: the header, then the request page of each lane in use. A PREFETCH
-    // request becomes one slot whose lanes are its senders' pages, so the kernels serve all of its
-    // receivers together. A DRAIN request's lanes are independent, so it may take several slots. A WAIT_SIGNAL
-    // names no sender: its one page is a slot of its own, which every kernel waits out.
+    // One slot per request and device: the header, the plan line still unplanned, then the request page of each
+    // lane in use. A PREFETCH request becomes one slot whose lanes are its senders' pages, so the kernels serve
+    // all of its receivers together. A DRAIN request's lanes are independent, so it may take several slots. A
+    // WAIT_SIGNAL names no sender: its one page is a slot of its own, which every kernel waits out.
     const auto slots_for = [this](const Request& request) {
         const bool names_senders = !request.target_sender_indices.empty();
         const size_t num_pages = names_senders ? request.target_sender_indices.size() : 1;
         std::vector<std::vector<uint8_t>> slots;
         for (size_t first = 0; first < num_pages; first += fifo_layout_.lanes) {
             const size_t num_lanes = std::min<size_t>(fifo_layout_.lanes, num_pages - first);
-            std::vector<uint8_t> slot(fifo::kSlotHeaderBytes + num_lanes * fifo::kLanePageBytes, 0);
+            std::vector<uint8_t> slot(fifo::kSlotPagesOffset + num_lanes * fifo::kLanePageBytes, 0);
+            std::fill_n(slot.begin() + fifo::kSlotHeaderBytes, fifo::kSlotPlanBytes, uint8_t{0xFF});
+            static_assert(fifo::kTensorBlocksUnplanned == ~0u, "The plan is filled with all-ones bytes");
             fifo::SlotHeader header{};
             header.command = fifo::kSlotRequest;
             header.num_lanes = static_cast<uint32_t>(num_lanes);
@@ -257,7 +254,7 @@ void TensorPrefetcherManager::worker_loop_dispatch_engine() {
                 const auto& page = request.sender_pages[request.sender_pages.size() == 1 ? 0 : first + l];
                 // validate_request_pages holds every page to exactly one lane.
                 std::memcpy(
-                    slot.data() + fifo::kSlotHeaderBytes + l * fifo::kLanePageBytes, page.data(), fifo::kLanePageBytes);
+                    slot.data() + fifo::kSlotPagesOffset + l * fifo::kLanePageBytes, page.data(), fifo::kLanePageBytes);
             }
             std::memcpy(slot.data(), &header, sizeof(header));
             slots.push_back(std::move(slot));

@@ -7,8 +7,9 @@
 
 The shell wrappers validate the tier name themselves, before any Python runs,
 so a tier added to tiers.py and not to them is a tier nobody can launch. The
-docker wrapper also hardcodes which tiers want the sys-triage mounts, and
-run_health_check.py its own --tier choices. These tests fail until they agree.
+docker wrapper also hardcodes which tiers want the sys-triage mounts and the
+syseng package, and run_health_check.py its own --tier choices. These tests
+fail until they agree.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
 ACCEPTED = set(TIERS) | set(DEPRECATED_TIER_ALIASES)
 
-# A case-statement arm listing the tiers, e.g. `daily|weekly|full|pre_bmc_reboot|light|...)`.
+# A case-statement arm listing the tiers, e.g. `flash|daily|weekly|full|pre_bmc_reboot|light|...)`.
 TIER_ARM_RE = re.compile(r"^\s*((?:[a-z_]+\|)+[a-z_]+)\)", re.MULTILINE)
 
 
@@ -56,8 +57,21 @@ class TestShellWrappersAgree(unittest.TestCase):
         # run_diag_docker.sh adds the journal mounts and the BMC credentials
         # only for these (and pre_reboot, the old name of pre_bmc_reboot).
         self.assertEqual(
-            {name for name, tier in TIERS.items() if tier.sys_triage}, {"full", "pre_bmc_reboot", "post_bmc_reboot"}
+            {name for name, tier in TIERS.items() if tier.sys_triage},
+            {"flash", "full", "pre_bmc_reboot", "post_bmc_reboot"},
         )
+        text = (SUITE_DIR / "run_diag_docker.sh").read_text()
+        self.assertIn("flash|full|pre_bmc_reboot|pre_reboot|post_bmc_reboot)", text)
+
+    def test_docker_qsfp_tiers(self):
+        # run_diag_docker.sh sets WANT_QSFP, which installs the syseng package and
+        # warns about missing BMC API credentials, on every tier but these.
+        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, {"flash"})
+        text = (SUITE_DIR / "run_diag_docker.sh").read_text()
+        self.assertIn("[[ ${TIER} != flash ]]", text)
+
+    def test_only_flash_prints_the_eth_summary(self):
+        self.assertEqual({name for name, tier in TIERS.items() if tier.eth_summary}, {"flash"})
 
     def test_run_health_check_tier_choices(self):
         # parse_args() builds and parses in one go, so read the call instead.
@@ -101,6 +115,30 @@ class TestDiagRunnerCli(unittest.TestCase):
                         skip_sys_triage=True,
                     )
                 self.assertEqual(report["tier"], new)
+
+    def test_skip_flags_skip_the_retest(self):
+        from diag_runner import run_diag
+
+        for flag in ("skip_reset", "skip_tests"):
+            with self.subTest(flag), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    _rc, report = run_diag(
+                        "weekly",
+                        input_snapshot=d / "missing.json",
+                        output=d / "report.json",
+                        snapshot_out=d / "snapshot.json",
+                        dry_run=True,
+                        skip_triage=True,
+                        skip_qsfp_tests=True,
+                        skip_sys_triage=True,
+                        # Dry run still resolves tt-smi for the resets it prints.
+                        tt_smi_path="/usr/bin/true",
+                        **{flag: True},
+                    )
+                retest = report["phases"]["retest"]
+                self.assertEqual(retest["status"], "SKIP")
+                self.assertEqual([c["name"] for c in retest["checks"]], ["retest"])
 
     def test_docker_wrapper_feature_probe_still_matches(self):
         # run_diag_docker.sh greps diag_runner.py for this flag to tell an image

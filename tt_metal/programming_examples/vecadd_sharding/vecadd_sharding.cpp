@@ -7,15 +7,15 @@
 // then perform vector addition tile by tile. Because of sharding to L1, DRAM nor NoC is not involved.
 // Data copy is avoided and reader and writer kernels are not needed.
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include <cstddef>

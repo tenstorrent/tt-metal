@@ -5,8 +5,8 @@
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
@@ -109,6 +109,15 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3,
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
     }
+
+    // An MX output is written by the packer from a Float16_b / Float32 DEST; the pad value is packed in the input's
+    // format before the tilize, so padding never meets the MX block layout. Integer / fp8 inputs have no MX pack path.
+    TT_FATAL(
+        !is_mx(operation_attributes.output_dtype) ||
+            (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32),
+        "tilize_with_val_padding to MX output dtype {} needs a bfloat16 or float32 row-major input, got {}",
+        operation_attributes.output_dtype,
+        input_tensor.dtype());
 
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
@@ -223,7 +232,6 @@ Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<TilizeWithValPaddingDeviceOperation>(
@@ -233,7 +241,6 @@ Tensor tilize_with_val_padding(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
         },

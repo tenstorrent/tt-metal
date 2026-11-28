@@ -33,9 +33,9 @@
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -53,9 +53,7 @@ constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/com
 // The GGUF grid lookup kernel (experimental/gguf_lookup_rvv.h), IQ2_S.
 constexpr const char* kGgufLookupKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/gguf_lookup_rvv.cpp";
 // Matches the flags HalJitBuildQueryBlackHole::rvv_compile_flags emits.
-constexpr const char* kBhRvvMarch = "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f";
-// The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
-constexpr const char* kBhTensixMcpu = "-mcpu=tt-bh-tensix";
+constexpr const char* kBhVectorTensixMcpu = "-mcpu=tt-bh-vector-tensix";
 
 // Resolve the sfpi g++ the JIT build uses (local runtime/sfpi, then system sfpi).
 std::string sfpi_gxx_path() {
@@ -69,20 +67,20 @@ std::string sfpi_gxx_path() {
     return {};
 }
 
-// True when the bundled sfpi compiler accepts the Blackhole-tensix + Zve32f march string.
+// True when the bundled sfpi compiler accepts the Blackhole-vector-tensix mcpu option.
 // Probed via the JIT build system's own shell-free process launcher (posix_spawn with a
 // fixed argv — nothing is interpreted by a shell).
-bool sfpi_supports_bh_zve32f() {
+bool sfpi_supports_bh_vector_tensix() {
     const std::string gxx = sfpi_gxx_path();
     if (gxx.empty()) {
         return false;
     }
     const auto scratch =
         std::filesystem::temp_directory_path() /
-        ("tt_metal_rvv_march_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        ("tt_metal_vector_mcpu_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(scratch);
     const std::vector<std::string> args = {
-        gxx, kBhTensixMcpu, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
+        gxx, kBhVectorTensixMcpu, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
     const bool ok = tt::jit_build::utils::exec_command(args, scratch.string(), (scratch / "probe.log").string());
     std::error_code ec;
     std::filesystem::remove_all(scratch, ec);
@@ -129,8 +127,10 @@ bool elf_contains_vector_instructions(const std::string& elf_path) {
         if (static_cast<size_t>(shdr.sh_offset) + shdr.sh_size > bytes.size()) {
             continue;
         }
+        // We should really pay attention to mapping symbols.
         for (uint32_t off = 0; off + 4 <= shdr.sh_size; off += 4) {
             uint32_t insn = 0;
+            // Presume same endianness
             std::memcpy(&insn, bytes.data() + shdr.sh_offset + off, 4);
             if (is_rvv_instruction(insn)) {
                 return true;
@@ -209,14 +209,14 @@ TEST_F(Trisc2RvvMockBlackholeFixture, KnobOffRecipesCarryNoVectorFlags) {
     auto kernel = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
     for (int processor_id = 0; processor_id < 3; processor_id++) {
         const std::string cflags = recipe_cflags(kernel, processor_id);
-        EXPECT_EQ(cflags.find("zve32f"), std::string::npos) << "trisc" << processor_id;
+        EXPECT_EQ(cflags.find(kBhVectorTensixMcpu), std::string::npos) << "trisc" << processor_id;
         EXPECT_EQ(cflags.find("-fno-lto"), std::string::npos) << "trisc" << processor_id;
     }
 }
 
 TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
-    if (!sfpi_supports_bh_zve32f()) {
-        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
+    if (!sfpi_supports_bh_vector_tensix()) {
+        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhVectorTensixMcpu;
     }
     auto kernel_off = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
     auto kernel_on = compile_rvv_kernel(/*enable_trisc2_rvv=*/true);
@@ -228,13 +228,13 @@ TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
     EXPECT_EQ(recipe_cflags(kernel_on, 0), recipe_cflags(kernel_off, 0));
     EXPECT_EQ(recipe_cflags(kernel_on, 1), recipe_cflags(kernel_off, 1));
     const std::string pack_cflags = recipe_cflags(kernel_on, 2);
-    EXPECT_NE(pack_cflags.find(kBhRvvMarch), std::string::npos);
+    EXPECT_NE(pack_cflags.find(kBhVectorTensixMcpu), std::string::npos);
     EXPECT_NE(pack_cflags.find("-fno-lto"), std::string::npos);
 }
 
 TEST_F(Trisc2RvvMockBlackholeFixture, VaddKernelCompilesToVectorCode) {
-    if (!sfpi_supports_bh_zve32f()) {
-        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
+    if (!sfpi_supports_bh_vector_tensix()) {
+        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhVectorTensixMcpu;
     }
     auto kernel_on = compile_rvv_kernel(/*enable_trisc2_rvv=*/true);
     EXPECT_TRUE(kernel_elf_has_vector_code(kernel_on, 2))
@@ -249,8 +249,8 @@ TEST_F(Trisc2RvvMockBlackholeFixture, VaddKernelCompilesToVectorCode) {
 }
 
 TEST_F(Trisc2RvvMockBlackholeFixture, GgufLookupKernelCompilesToVectorCode) {
-    if (!sfpi_supports_bh_zve32f()) {
-        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
+    if (!sfpi_supports_bh_vector_tensix()) {
+        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhVectorTensixMcpu;
     }
     auto kernel_on = compile_gguf_lookup_kernel(/*enable_trisc2_rvv=*/true);
     EXPECT_TRUE(kernel_elf_has_vector_code(kernel_on, 2)) << "lookup_grid_rvv compiled to no vector instructions";

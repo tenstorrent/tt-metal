@@ -39,6 +39,13 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+
+#ifndef ARCH_QUASAR
+// Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -49,12 +56,8 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         VectorMode::RC));
 }
 
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
-
 ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -160,11 +163,24 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
+    MATH(if constexpr (ckernel::sfpu::hardshrink_bf16_whole_tile && !DST_ACCUM_MODE) {
+        if (param0 == ckernel::sfpu::hardshrink_bf16_param0_bits) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_hardshrink,
+                (APPROX, 32 /*ITERATIONS*/, DST_ACCUM_MODE),
+                idst,
+                VectorMode::None,
+                param0);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_hardshrink,
-        (APPROX, 8 /* ITERATIONS */),
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
         idst,
         VectorMode::RC,
         param0));

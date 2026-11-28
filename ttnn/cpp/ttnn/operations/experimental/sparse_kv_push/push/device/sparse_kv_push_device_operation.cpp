@@ -4,7 +4,7 @@
 
 #include "sparse_kv_push_device_operation.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
@@ -133,26 +133,27 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
     auto* mesh_device = input.device();
     const auto mesh_shape = mesh_device->shape();
     const uint32_t num_devices = mesh_shape.mesh_size();
-    TT_FATAL(mesh_shape.dims() == 2, "the sparse KV push needs a 2D device mesh, got {}", mesh_shape);
     TT_FATAL(
         num_devices <= ::sparse_push::plan_table::kMaxDevices,
         "the plan table holds at most {} owners, the mesh has {}",
         ::sparse_push::plan_table::kMaxDevices,
         num_devices);
     TT_FATAL(
-        params.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
-        "the sparse KV push needs a 2D torus fabric (FABRIC_2D_TORUS_XY), got {}",
-        params.fabric_config);
-    TT_FATAL(
         params.num_links >= 1 && params.num_links <= 2,
         "the sparse KV push supports 1 or 2 links, got {}",
         params.num_links);
+    // The same check is_sparse_kv_push_supported makes, so a caller it sent here does not land on this.
+    const auto& routes = fabric_routes(mesh_device, params.num_links);
+    TT_FATAL(routes.ok(), "the sparse KV push cannot route on this mesh: {}", routes.problem);
+    // Chips with fewer fabric neighbours use a prefix of the grid.
+    const uint32_t cores = cores_needed(params.num_links, routes.max_directions());
     TT_FATAL(
-        params.core_grid.num_cores() >= cores_needed(params.num_links),
+        params.core_grid.num_cores() >= cores,
         "the sparse KV push needs {} cores on {} links, core_grid has {}",
-        cores_needed(params.num_links),
+        cores,
         params.num_links,
         params.core_grid.num_cores());
+    TT_FATAL(params.sp_axis < 2, "the sparse KV push's sp_axis must be 0 or 1, got {}", params.sp_axis);
     validate_stripe_chunk(params.stripe_chunk, params.max_rows);
     validate_semaphore_placement(params, mesh_device);
 
@@ -231,6 +232,7 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
         params.part,
         params.num_links,
         params.core_grid,
+        params.sp_axis,
         params.fabric_config,
         mesh_device->shape(),
         tensor_args.input_tensor.tensor_spec(),
@@ -315,7 +317,8 @@ Tensor sparse_kv_push(
     const std::optional<Tensor>& batch_index_tensor,
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
-    const std::optional<CoreRangeSet>& core_grid) {
+    const std::optional<CoreRangeSet>& core_grid,
+    uint32_t sp_axis) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_push input must be on device");
@@ -328,7 +331,8 @@ Tensor sparse_kv_push(
             .part = part,
             .num_links = num_links,
             .core_grid = grid,
-            .fabric_config = tt::tt_fabric::GetFabricConfig(),
+            .sp_axis = sp_axis,
+            .fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device),
             .ready_semaphore = ready_semaphore,
             .done_semaphore = done_semaphore,
             .batch_index = batch_index,

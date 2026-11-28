@@ -6,6 +6,7 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import WhereGolden, get_golden_generator
 from helpers.llk_params import (
+    ApproximationMode,
     DataCopyType,
     MathOperation,
     PerfRunType,
@@ -24,6 +25,7 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
@@ -90,12 +92,12 @@ def _build_condition_for_test_case(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=get_valid_formats_dest_acc(),
+    format_variant=get_valid_formats_dest_acc(),
     test_case=runtime(["mixed", "all_ones", "all_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
-    formats_dest_acc,
+    format_variant,
     test_case,
     vector_mode,
     *,
@@ -118,7 +120,6 @@ def test_sfpu_where_quasar(
     modes; unprocessed faces are excluded from the golden assertion since
     Dest retains the producer-written data there.
     """
-    format_variant = formats_dest_acc
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -174,6 +175,7 @@ def test_sfpu_where_quasar(
         "formats": formats,
         "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
+            APPROX_MODE(ApproximationMode.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -229,10 +231,10 @@ def test_sfpu_where_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=get_valid_formats_dest_acc()[:3],
+    format_variant=get_valid_formats_dest_acc()[:3],
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
-def test_sfpu_where_mcw_quasar(formats_dest_acc, vector_mode):
+def test_sfpu_where_mcw_quasar(format_variant, vector_mode):
     """
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
@@ -240,7 +242,6 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, vector_mode):
     Runs through the same C++ harness as `test_sfpu_where_quasar`. The test uses
     Dest index 0 because the unary Unpack-to-Dest API always starts at Dest[0].
     """
-    format_variant = formats_dest_acc
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -271,6 +272,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, vector_mode):
         "formats": formats,
         "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
+            APPROX_MODE(ApproximationMode.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA

@@ -13,20 +13,14 @@
 
 #include "ccl_host_datastructures.hpp"
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/math.hpp>
-#include "tt-metalium/hal.hpp"
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/discovery/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::ccl {
-
-bool is_fabric_2d() {
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
-}
 
 std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config, tt::tt_metal::DataType input_dtype) {
@@ -201,7 +195,9 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
 }
 
 tt::tt_fabric::Topology get_axis_topology(
-    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricConfig fabric_config,
+    uint32_t axis) {
     // Whether the fabric wraps this axis into a ring/torus.
     const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
     bool axis_can_wrap;
@@ -219,8 +215,13 @@ tt::tt_fabric::Topology get_axis_topology(
 
     // The torus flags name a fabric axis. A view axis can be a permutation of it, so the flag alone
     // says nothing about this axis: only a wired closing link makes it a ring.
-    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(*tensor.device(), axis);
+    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(mesh_device, axis);
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
+}
+
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    return get_axis_topology(*tensor.device(), fabric_config, axis);
 }
 
 tt::tt_fabric::Topology get_usable_topology(
@@ -1229,7 +1230,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
 
-    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         validate_fabric_2d_dynamic_config();
         if (forward_device_coord) {
@@ -1289,7 +1290,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     std::array<uint32_t, 6> backward_args = {};
     // Used for experimentation for optimal perf
     // May be uplifted to an op parameter if needed
-    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
 
     if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         validate_fabric_2d_dynamic_config();
@@ -1450,7 +1451,7 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
-        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
     const uint32_t termination_sync_semaphore_id =
         termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
     worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10

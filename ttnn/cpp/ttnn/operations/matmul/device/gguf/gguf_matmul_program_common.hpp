@@ -15,8 +15,8 @@
 #include <vector>
 
 #include <tt-metalium/experimental/gguf.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/matmul/device/gguf/gguf_matmul_program_factory.hpp"

@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
@@ -28,7 +28,6 @@ namespace sliding_window = ttnn::operations::sliding_window;
 
 struct Conv2dDeviceOperation {
     using operation_attributes_t = Conv2dParams;
-    using hashable_operation_attributes_t = Conv2dHashableParams;
     using tensor_args_t = Conv2dInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
@@ -41,8 +40,6 @@ struct Conv2dDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
