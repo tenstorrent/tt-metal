@@ -54,6 +54,13 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
+bool is_folded_pointwise_conv(
+    bool kernel_stride_folding,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation);
+
 bool is_1d_conv(uint32_t kernel_height, uint32_t image_height);
 
 bool is_1d_depthwise_conv(
