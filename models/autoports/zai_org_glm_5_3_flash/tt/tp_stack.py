@@ -18,7 +18,7 @@ from __future__ import annotations
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_dense import SEM_A
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import MkStack
-from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import _kernel, _rt_dict, _src_is
+from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import _hooked_rsplit_check, _kernel, _rt_dict, _src_is
 
 
 class TPStack(MkStack):
@@ -26,6 +26,7 @@ class TPStack(MkStack):
     same mesh: its lanes, FabricPhase and owner placement serve every layer)."""
 
     FAB_MASK = (1 << 2) | (1 << 4)  # the readers' phases whose output is a partial: o_proj (2), down (4)
+    LANE_SEM = SEM_A  # the lanes' +1 on the owners (P6's MK_POST_WAIT_SEM): finalize's lane_parts cons_sem
 
     def __init__(self, mesh, mks: list, fab_layer, *, t: int, probe: bool = False, rev: str | None = None, res=None,
                  pool=None, live=None):  # fmt: skip
@@ -52,6 +53,8 @@ class TPStack(MkStack):
             else:
                 kernels.append(_kernel(kd, defines=list(kd.defines) + rev) if rev else kd)
         assert seen == {"reader": 1, "post": 1}, seen
+        # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
+        _hooked_rsplit_check(kernels, "mk/reader_a.cpp", self.LANE_SEM, len(fab.lanes), self.fl.n_readers)
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=list(desc.semaphores), cbs=list(desc.cbs))
 
     def reserved_sems(self) -> list:
@@ -64,7 +67,8 @@ class TPStack(MkStack):
         mpd = ttnn.MeshProgramDescriptor()
         for r in range(self.fl.R):
             for c in range(self.fl.C):
-                lk, lcbs = fab.lane_parts(r, c, 2 * self.n, self.fl.n_readers, self.fl.owner_noc, cons_sem=SEM_A)
+                lk, lcbs = fab.lane_parts(r, c, 2 * self.n, self.fl.n_readers, self.fl.owner_noc,
+                                          cons_sem=self.LANE_SEM)  # fmt: skip
                 prog = ttnn.ProgramDescriptor(kernels=kernels + lk,
                                               semaphores=list(desc.semaphores) + list(self.fl.extra_sems),
                                               cbs=list(desc.cbs) + lcbs)  # fmt: skip
@@ -105,6 +109,8 @@ class TPSparseStack(TPStack):
             else:
                 kernels.append(_kernel(kd, defines=list(kd.defines) + rev) if rev else kd)
         assert seen == {"a", "o"}, seen
+        # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
+        _hooked_rsplit_check(kernels, "mk/reader_moe_a.cpp", self.LANE_SEM, len(fab.lanes), nr)
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=list(desc.semaphores), cbs=list(desc.cbs))
 
     def finalize(self, io, desc):
@@ -142,7 +148,8 @@ class TPSparseStack(TPStack):
                     )  # fmt: skip
                     kw.compile_time_args = ct
                     ks[wk] = kw
-                lk, lcbs = fab.lane_parts(r, c, 2 * self.n, self.fl.n_readers, self.fl.owner_noc, cons_sem=SEM_A)
+                lk, lcbs = fab.lane_parts(r, c, 2 * self.n, self.fl.n_readers, self.fl.owner_noc,
+                                          cons_sem=self.LANE_SEM)  # fmt: skip
                 prog = ttnn.ProgramDescriptor(kernels=ks + lk,
                                               semaphores=list(desc.semaphores) + list(self.fl.extra_sems),
                                               cbs=list(desc.cbs) + lcbs)  # fmt: skip

@@ -220,6 +220,12 @@ class MkStepB:
             if ds_o is not None
             else None
         )
+        # the o_proj readers wait for h x spread SEM_ON signals (the phase above): one user group's kda_rec cores. With
+        # kda_rec_ugroups > 1 every group's cores signal, so the readers could start before the last group landed
+        assert self.rec is None or self.rec.ug == 1, (
+            f"MkStepB: kda_rec_ugroups {self.rec.ug} > 1 (the o_proj readers wait for one user group's "
+            f"{self.rec.hs} kda_rec cores, not all {self.rec.n_active}); build the layer with MkLayer"
+        )
         from models.autoports.zai_org_glm_5_3_flash.tt import mhc_post as _mpost
 
         assert not post or ds_o is not None, "step D (post) needs step C (ds_o)"

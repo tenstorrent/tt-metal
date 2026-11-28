@@ -53,7 +53,10 @@ launch value is read once per process.
 * test_pre_split_galaxy_default: apply() on the 8x4, an explicit 0, other meshes;
 * test_pre_split_set_knobs (a child with a stub ttnn: stack_model imports it): on for every kind at t 1 / 4 / 16 in any
   kind order, one "active" line per kind; an explicit 0 off everywhere; TP8 / one chip off; GLM53_STACK_KNOB_SET per
-  kind without leaking; a later environment change ignored; a foreign value warned once and off;
+  kind without leaking; a later environment change ignored; a foreign value warned once and off. In the same child,
+  GLM53_KDA_VERIFY_RSPLIT through set_knobs and the TP owner rewrites: a sparse_dsa PIPE / FLAT entry drops the
+  FLAT / RSPLIT defaults before the KDA verify build reads them; every owner rewrite runs the lanes check on its own
+  values;
 * test_pre_split_knob_names: the stack's GLM53_MHC_PRE_SPLIT and the mesh model's GLM53_MESH_MHC_PRE_SPLIT never meet.
 
 GLM53_MHC_RMS_EARLY (a galaxy default; the sparse_dsa programs' mhc_pre roots, kernels/mhc_pre/sync.cpp MHC_RMS_EARLY): the
@@ -935,8 +938,10 @@ def test_pre_split_galaxy_default(monkeypatch):
 # stack_model / mhc_pre import ttnn at module level: the child stubs it (this process stays ttnn-free); every case starts
 # a new "process": the GLM53_ environment cleared, the launch latch (_PRE_SPLIT_LAUNCH) and the logged kinds reset
 _PRE_SPLIT_CHILD = r"""
-import contextlib, inspect, io, os, sys
+import contextlib, inspect, io, os, sys, types
 from unittest import mock
+
+import torch
 
 sys.modules["ttnn"] = mock.MagicMock()
 from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1015,6 +1020,114 @@ assert splits(KINDS)[0] == [True] * 3
 launch({"GLM53_MHC_PRE_SPLIT": "extras"})  # a foreign value (the mesh model's old name): off, one warning
 got, log = splits(KINDS + KINDS)
 assert got == [False] * 6 and log.count("WARNING: GLM53_MHC_PRE_SPLIT='extras'") == 1, log
+# GLM53_KDA_VERIFY_PIPE / _FLAT are no per-kind knobs (set_knobs leaves them in the environment): a sparse_dsa
+# GLM53_STACK_KNOB_SET entry for them reaches the KDA builds after it, so the galaxy defaults drop FLAT and RSPLIT
+# and the sparse_kda verify's KdaPre (8 user groups at TP 32: 2 heads x kda_pre spread 4) builds knob-off; the RSPLIT
+# default left on beside that entry's values is the refusal
+from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+from models.autoports.zai_org_glm_5_3_flash.tt.kda_pre import KdaPre
+
+VP, VF, VR = "GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT", "GLM53_KDA_VERIFY_RSPLIT"
+assert set(GD._PER_KIND_KEYS) <= set(STM.KNOB_KEYS) and not {VP, VF} & set(STM.KNOB_KEYS), GD._PER_KIND_KEYS
+TTNN = sys.modules["ttnn"]
+TTNN.get_device_tensors.side_effect = lambda t: [t]
+TTNN.to_torch.side_effect = lambda t: t
+
+
+def verify_rows():  # the sparse_kda verify build's row groups (KdaPre reads its knobs at construction)
+    kda = types.SimpleNamespace(device=None, h=2, kda_pre_spread=4, kda_rec_spread=2, kda_rec_ugroups=8,
+                                kda_verify_sel=object(), kda_verify_groups=8, taps_hist=torch.zeros(3, 768),
+                                tap_cur=torch.zeros(1, 768))  # fmt: skip
+    return KdaPre(kda).vrsplit
+
+
+for spec, rows in ((None, 8), ("a:GLM53_KDA_VERIFY_PIPE=0;a:GLM53_KDA_VERIFY_FLAT=0", 1)):
+    got = launch({"GLM53_STACK_KNOB_SET": spec} if spec else None)
+    splits((False, "dsa", True))
+    assert verify_rows() == rows, spec
+    assert (VF in got, VR in got) == (rows > 1, rows > 1), (spec, got)
+os.environ[VR] = "1"
+try:
+    verify_rows()
+    raise RuntimeError("KdaPre took GLM53_KDA_VERIFY_RSPLIT=1 without PIPE / FLAT")
+except ValueError as e:
+    assert "needs GLM53_KDA_VERIFY_PIPE=1 and GLM53_KDA_VERIFY_FLAT=1" in str(e), e
+# the RSPLIT lanes check in every owner rewrite (tt/tp8_layer.py TPDenseKDALayer._hooked, tt/tp8_sparse.py
+# TPSparseKDALayer._hooked_sparse, tt/tp_stack.py TPStack / TPSparseStack.layer_hook + finalize) on that builder's own
+# values: the P6 wait it wrote, the semaphore and producer count it hands its lanes (fabric_ar lane_parts), its o_proj
+# readers' cores and MK_FAB_MASK. Captured programs stand in for MkLayer's / MkSparseLayer's (their builds place cores
+# on a device): every check call is recorded
+from models.autoports.zai_org_glm_5_3_flash.tt import tp8_layer as TPL
+from models.autoports.zai_org_glm_5_3_flash.tt import tp8_sparse as TPSP
+from models.autoports.zai_org_glm_5_3_flash.tt import tp_stack as TPS
+from models.autoports.zai_org_glm_5_3_flash.tt.mk_dense import SEM_A
+
+NR, NS, CHECKS, LANES = 16, types.SimpleNamespace, [], []
+_LANES_CHECK = SP.kda_verify_rsplit_lanes_check
+SP.kda_verify_rsplit_lanes_check = lambda *a: CHECKS.append(a) or _LANES_CHECK(*a)
+
+
+def kern(src, rects, defines):  # a captured KernelDescriptor: the fields the owner rewrites read and write
+    rt = {}
+    for x0, y0, x1, y1 in rects:
+        for x in range(x0, x1 + 1):
+            for y in range(y0, y1 + 1):
+                rt.setdefault(x, {})[y] = [0]
+    crs = NS(ranges=lambda: [NS(start=NS(x=a, y=b), end=NS(x=c, y=d)) for a, b, c, d in rects])
+    return NS(kernel_source="models/autoports/zai_org_glm_5_3_flash/tt/kernels/" + src, core_ranges=crs,
+              runtime_args=rt, defines=list(defines), compile_time_args=[0] * 64)  # fmt: skip
+
+
+def captured(sparse, rsplit):  # the o_proj readers (NR cores), the owners, the sparse kind's weight streamer
+    own = [("MK_POST_WAIT_SEM", str(SEM_A)), ("MK_POST_WAIT_COUNT", str(NR))] + [("KDA_VERIFY_RSPLIT", "1")] * rsplit
+    if not sparse:
+        return NS(kernels=[kern("mk/reader_a.cpp", [(0, 8, 7, 9)], []), kern("mk/owner_dm0.cpp", [(0, 0, 7, 7)], own)],
+                  semaphores=[], cbs=[])  # fmt: skip
+    return NS(kernels=[kern("mk/reader_moe_a.cpp", [(0, 8, 5, 9)], []), kern("mk/reader_moe_a.cpp", [(6, 8, 7, 9)], []),
+                       kern("mk/reader_moe_w.cpp", [(0, 10, 7, 10)], [("MK_X_CT", "0")]),
+                       kern("mk/owner_dm0.cpp", [(0, 0, 7, 7)], own + [("MK_POST2_WAIT_COUNT", str(NR))])],
+              semaphores=[], cbs=[])  # fmt: skip
+
+
+def build(stack, sparse, *, rsplit=True, lanes=2, nr=NR):  # -> (check calls, lane_parts (cons_sem, readers) calls)
+    del CHECKS[:], LANES[:]
+    def lane_parts(r, c, iters, readers, owner_noc, cons_sem):  # fabric_ar FabricPhase.lane_parts: the lanes
+        LANES.append((cons_sem, readers))
+        return [], []
+
+    fab = NS(lanes=[(1, 1)] * lanes, brows=1, producer_args=lambda: [1], consumer_args=lambda: [2], io=lambda: [],
+             add_connections=lambda *a, **k: None, lane_parts=lane_parts)  # fmt: skip
+    desc = captured(sparse, rsplit)
+    if stack:  # spec_mtp's verify widths and stack_model's main stack
+        stk = object.__new__(TPS.TPSparseStack if sparse else TPS.TPStack)
+        stk.fl = NS(fabric=fab, rev_defs=[], n_readers=nr, R=1, C=1, owner_noc=[], extra_sems=[])
+        stk.n, stk.info = 1, {}
+        stk.layer_hook(desc)
+        stk.finalize([], desc)
+    else:  # the per-layer launches
+        lay = object.__new__(TPSP.TPSparseKDALayer if sparse else TPL.TPDenseKDALayer)
+        lay.__dict__.update(fabric=fab, rev_defs=[], n_readers=nr, R=1, C=1, owner_noc=[], extra_sems=[], xsl=False,
+                            placement=None)  # fmt: skip
+        if sparse:
+            lay._hooked_sparse([], desc)
+        else:
+            lay._hooked([], desc, fab_mask=TPS.TPStack.FAB_MASK, cons_sem=SEM_A, iters=2)
+    return list(CHECKS), list(LANES)
+
+
+for stack in (False, True):
+    for sparse, mask in ((False, TPS.TPStack.FAB_MASK), (True, TPS.TPSparseStack.FAB_MASK)):
+        chk, lanes_got = build(stack, sparse)
+        assert chk == [((SEM_A, 2), SEM_A, 2, NR, NR, mask)], (stack, sparse, chk)
+        assert lanes_got == [(chk[0][1], chk[0][3])], (stack, sparse, lanes_got)  # the lanes' semaphore + producers
+        assert build(stack, sparse, rsplit=False)[0] == [], (stack, sparse)
+        for kw, msg in ((dict(nr=NR - 1), "producers"), (dict(lanes=3), "P6 waits")):
+            try:
+                build(stack, sparse, **kw)
+                raise RuntimeError(f"the RSPLIT lanes check passed {kw}")
+            except AssertionError as e:
+                assert msg in str(e), (stack, sparse, kw, e)
+SP.kda_verify_rsplit_lanes_check = _LANES_CHECK
 print("PRE_SPLIT_OK")
 """
 
@@ -1024,7 +1137,11 @@ def test_pre_split_set_knobs():
     at t 1 / 4 / 16 in any kind order, one "active" line per kind; an explicit 0 keeps every kind off; TP8 / one chip
     off; GLM53_STACK_KNOB_SET overrides it per kind without leaking (set_knobs and the galaxy defaults parse the
     variable with galaxy_defaults.knob_set_items); the launch value is read once per process; a foreign value warns
-    once and stays off"""
+    once and stays off. GLM53_KDA_VERIFY_RSPLIT in the same child: a sparse_dsa GLM53_STACK_KNOB_SET entry for
+    GLM53_KDA_VERIFY_PIPE / _FLAT (no per-kind knobs) drops the FLAT / RSPLIT defaults, so the sparse_kda verify's
+    KdaPre after set_knobs builds knob-off instead of refusing; the four TP owner rewrites (tt/tp8_layer.py,
+    tt/tp8_sparse.py, tt/tp_stack.py) pass the lanes check their own P6 wait, lane semaphore, lane producers and
+    o_proj readers, the same semaphore and producers their lanes get"""
     root = Path(__file__).resolve().parents[4]
     env = {k: v for k, v in os.environ.items() if not k.startswith("GLM53_")}
     env["PYTHONPATH"] = str(root)

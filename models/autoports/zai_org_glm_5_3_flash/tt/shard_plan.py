@@ -2915,11 +2915,12 @@ def kda_verify_rsplit_order_check(cons: dict, n_pre: int, n_rec: int, o_wait: tu
 
 def kda_verify_rsplit_lanes_check(post_wait: tuple, lane_sem: int, lanes: int, lane_prod: int, readers: int,
                                   fab_mask: int) -> None:  # fmt: skip
-    """kda_verify_rsplit_order_check's last link on the TP builds (tt/tp8_layer.py, tt/tp8_sparse.py: the o_proj
-    all-reduce): P6 waits for the all-reduce lanes (post_wait = the owner's (MK_POST_WAIT_SEM, MK_POST_WAIT_COUNT) =
-    (lane_sem, lanes): every lane signals lane_sem on every owner), and every lane waits for every o_proj reader of its
-    chip (the o_proj phase in the readers' fab_mask: they hand their partial rows to the lanes; lane_prod = the lanes'
-    producer count = readers). Host asserts only"""
+    """kda_verify_rsplit_order_check's last link on the TP builds (the o_proj all-reduce; tt/tp8_layer.py
+    _hooked_rsplit_check in every owner rewrite: the per-layer launches of tt/tp8_layer.py / tt/tp8_sparse.py and the
+    stacks of tt/tp_stack.py): P6 waits for the all-reduce lanes (post_wait = the owner's (MK_POST_WAIT_SEM,
+    MK_POST_WAIT_COUNT) = (lane_sem, lanes): every lane signals lane_sem on every owner), and every lane waits for every
+    o_proj reader of its chip (the o_proj phase in the readers' fab_mask: they hand their partial rows to the lanes;
+    lane_prod = the lanes' producer count = readers). Host asserts only"""
     assert fab_mask >> KDA_O_PHASE & 1, ("KDA_VERIFY_RSPLIT: o_proj is not on the all-reduce", fab_mask)
     assert tuple(post_wait) == (lane_sem, lanes), ("KDA_VERIFY_RSPLIT: P6 waits", post_wait, lane_sem, lanes)
     assert lane_prod == readers, ("KDA_VERIFY_RSPLIT: the lanes' producers", lane_prod, readers)

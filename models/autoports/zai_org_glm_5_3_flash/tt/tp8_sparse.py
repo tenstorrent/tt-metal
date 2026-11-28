@@ -29,7 +29,14 @@ from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_dense import SEM_A
 from models.autoports.zai_org_glm_5_3_flash.tt.mk_sparse import MkSparseLayer
 from models.autoports.zai_org_glm_5_3_flash.tt.tp8 import TPShards
-from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import TPDenseKDALayer, _Capture, _kernel, _rt_dict, _src_is
+from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import (
+    TPDenseKDALayer,
+    _Capture,
+    _hooked_rsplit_check,
+    _kernel,
+    _rt_dict,
+    _src_is,
+)
 
 REC_RMS_SEM_SPARSE = 14  # MkSparseLayer: 13 = SEM_LOGITS (the readers also signal it on the owners)
 XW_E_LO_CT = 12  # mk_experts.py ReaderExperts.parts_raw w_ct index of e_lo
@@ -296,7 +303,7 @@ class TPSparseKDALayer(TPDenseKDALayer):
     def _hooked_sparse(self, io, desc):
         """The captured MkSparseLayer program -> one program per chip: fabric hooks on o_proj (dense reader phase 2)
         and on the routed experts (xa.cpp), the lanes' 2 all-reduces, per-chip e_lo, the post-mix waits."""
-        fab, nr = self.fabric, self.n_readers
+        fab, nr, cons_sem = self.fabric, self.n_readers, SEM_A  # cons_sem: the lanes' +1 on the owners (P6)
         base, wkern, wdesc, seen = [], None, None, set()
         for i, kd in enumerate(desc.kernels):  # (ProgramDescriptor.kernels returns copies)
             src = str(kd.kernel_source)
@@ -322,18 +329,8 @@ class TPSparseKDALayer(TPDenseKDALayer):
             else:
                 base.append(_kernel(kd, defines=list(kd.defines) + self.rev_defs) if self.rev_defs else kd)
         assert seen == {"a", "w", "o"}, (seen, [str(k.kernel_source) for k in desc.kernels])
-        own = [k for k in base if _src_is(k, "mk/owner_dm0.cpp") and dict(k.defines).get("KDA_VERIFY_RSPLIT") == "1"]
-        if own:  # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
-            from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import kda_verify_rsplit_lanes_check
-
-            rdr = [k for k in base if _src_is(k, "mk/reader_moe_a.cpp")]
-            masks = {int(dict(k.defines)["MK_FAB_MASK"]) for k in rdr}
-            assert len(masks) == 1, masks
-            for k in own:
-                pw = dict(k.defines)
-                kda_verify_rsplit_lanes_check((int(pw["MK_POST_WAIT_SEM"]), int(pw["MK_POST_WAIT_COUNT"])), SEM_A,
-                                              len(fab.lanes), nr, sum(len(_rt_dict(r_)) for r_ in rdr),
-                                              next(iter(masks)))  # fmt: skip
+        # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
+        _hooked_rsplit_check(base, "mk/reader_moe_a.cpp", cons_sem, len(fab.lanes), nr)
         xct = dict(desc.kernels[wkern].defines).get("MK_X_CT") if wkern is not None else None
         assert xct is not None, "reader_moe_w.cpp carries MK_X_CT"
         e_lo_idx = int(xct) + XW_E_LO_CT
@@ -354,7 +351,7 @@ class TPSparseKDALayer(TPDenseKDALayer):
                                     else self.e_loc * (rank // self.xsl_group if self.xsl_group else rank))  # fmt: skip
                     kw.compile_time_args = ct
                     kernels[wkern] = kw
-                lk, lcbs = fab.lane_parts(r, c, 2, nr, self.owner_noc, cons_sem=SEM_A)
+                lk, lcbs = fab.lane_parts(r, c, 2, nr, self.owner_noc, cons_sem=cons_sem)
                 prog = ttnn.ProgramDescriptor(kernels=kernels + lk, semaphores=list(desc.semaphores) + self.extra_sems,
                                               cbs=list(desc.cbs) + lcbs)  # fmt: skip
                 fab.add_connections(prog, r, c, send_kernel_index=len(kernels))

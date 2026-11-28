@@ -1357,17 +1357,25 @@ def test_agk_count_is_the_local_select_count(monkeypatch):
     assert src.index("self.vrsplit = kda_verify_rsplit_rows(") < src.index('"KDA_VERIFY: one row group"')
     # the hand-off chain the deferred write-backs rely on (kernels/mk/owner_dm0.cpp), asserted where MkLayer /
     # MkSparseLayer / MkStepB build it (kda_verify_rsplit_order_check) and where the TP wrappers route P6 through the
-    # all-reduce lanes (kda_verify_rsplit_lanes_check), on the plans of the served shapes: KdaPre.consumers() (its body
-    # from kda_pre.py; TP 32 = 2 heads x kda_pre spread 4 = 8 column cores x G row groups, kda_rec spread 2 x G user
-    # groups), the o_proj readers' SEM_ON count and P6's wait. A mutated count, a quiet kda_pre core or a consumer
-    # past the kda_rec cores fails
+    # all-reduce lanes (kda_verify_rsplit_lanes_check, through tp8_layer._hooked_rsplit_check in all four owner
+    # rewrites: the per-layer TP launches and tp_stack's layer_hooks, the stacks the served widths build), on the plans
+    # of the served shapes: KdaPre.consumers() (its body from kda_pre.py; TP 32 = 2 heads x kda_pre spread 4 = 8 column
+    # cores x G row groups, kda_rec spread 2 x G user groups), the o_proj readers' SEM_ON count and P6's wait. A mutated
+    # count, a quiet kda_pre core or a consumer past the kda_rec cores fails
     import ast
     import types
 
-    for name, fn in (("mk_layer.py", "order"), ("mk_sparse.py", "order"), ("mk_dense.py", "order"),
-                     ("tp8_layer.py", "lanes"), ("tp8_sparse.py", "lanes")):  # fmt: skip
+    for name, fn, n in (("mk_layer.py", "kda_verify_rsplit_order_check", 1),
+                        ("mk_sparse.py", "kda_verify_rsplit_order_check", 1),
+                        ("mk_dense.py", "kda_verify_rsplit_order_check", 1),
+                        ("tp8_layer.py", "kda_verify_rsplit_lanes_check", 1),  # in _hooked_rsplit_check
+                        ("tp8_layer.py", "_hooked_rsplit_check", 2),  # its def + TPDenseKDALayer._hooked
+                        ("tp8_sparse.py", "_hooked_rsplit_check", 1),  # TPSparseKDALayer._hooked_sparse
+                        ("tp8_sparse.py", "kda_verify_rsplit_lanes_check", 0),
+                        ("tp_stack.py", "_hooked_rsplit_check", 2),  # TPStack / TPSparseStack.layer_hook
+                        ("tp_stack.py", "kda_verify_rsplit_lanes_check", 0)):  # fmt: skip
         with open(os.path.join(os.path.dirname(SP.KDIR), name)) as fh:
-            assert fh.read().count(f"kda_verify_rsplit_{fn}_check(") == 1, name
+            assert fh.read().count(f"{fn}(") == n, (name, fn, n)
     tree = ast.parse(src)
     kp = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KdaPre")
     body = [n for n in kp.body if isinstance(n, ast.FunctionDef) and n.name == "consumers"]
@@ -1910,15 +1918,18 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
         assert ("GLM53_KDA_VERIFY_RSPLIT" not in GD.apply((8, 4), 4096, 4096)) == drop, (k, v)
         assert (os.environ.get("GLM53_KDA_VERIFY_RSPLIT") is None) == drop, (k, v)
         monkeypatch.delenv(k)
-    # a KDA kind's GLM53_STACK_KNOB_SET entry for PIPE / FLAT counts like the environment's value ("K=-" leaves that
-    # kind's build on the readers' default 0): PIPE = 0 drops the FLAT and RSPLIT defaults, FLAT = 0 the RSPLIT one --
-    # else that kind's verify build refuses the knob-on FLAT / RSPLIT; sparse_dsa entries and 1s keep both
+    # a GLM53_STACK_KNOB_SET entry for PIPE / FLAT counts like the environment's value ("K=-" leaves the builds it
+    # reaches on the readers' default 0): PIPE = 0 drops the FLAT and RSPLIT defaults, FLAT = 0 the RSPLIT one -- else
+    # a verify build refuses the knob-on FLAT / RSPLIT. Every kind's entry counts, sparse_dsa's too: neither knob is a
+    # per-kind one (stack_model.KNOB_KEYS), so the value a sparse_dsa entry sets stays for the KDA builds after it; 1s
+    # keep both
     for spec, flat, rsplit in (
         ("s:GLM53_KDA_VERIFY_PIPE=0", False, False),
         ("d:GLM53_MK_OPT=O3,d:GLM53_KDA_VERIFY_PIPE=-", False, False),
         ("d:GLM53_KDA_VERIFY_FLAT=0", True, False),
         ("s:GLM53_KDA_VERIFY_FLAT=-", True, False),
-        ("a:GLM53_KDA_VERIFY_PIPE=0;a:GLM53_KDA_VERIFY_FLAT=0", True, True),
+        ("a:GLM53_KDA_VERIFY_PIPE=0;a:GLM53_KDA_VERIFY_FLAT=0", False, False),
+        ("a:GLM53_KDA_VERIFY_FLAT=-", True, False),
         ("s:GLM53_KDA_VERIFY_PIPE=1;d:GLM53_KDA_VERIFY_FLAT=1", True, True),
     ):
         for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT", "GLM53_KDA_VERIFY_RSPLIT"):
