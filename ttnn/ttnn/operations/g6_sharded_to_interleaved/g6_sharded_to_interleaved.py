@@ -217,5 +217,5 @@ def g6_sharded_to_interleaved(
     kernels, plan, program_hash = entry
     _LAST_PLAN = plan
 
-    desc = bind_call(kernels, input_tensor, output_tensor, program_hash)
+    desc = bind_call(kernels, input_tensor, output_tensor, program_hash, plan["common_tail"])
     return ttnn.generic_op([input_tensor, output_tensor], desc)

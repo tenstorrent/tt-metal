@@ -48,3 +48,4 @@
 {"event":"hypothesis","detail":"p1 is NoC-congestion bound (issue 1198 p50 vs 292 uncontended cycles; 11/110 banks hit per step)","ts":"2026-11-28T13:55:51+01:00"}
 {"event":"test_run","status":"pass","test":"perf eager + trace replay","result":"p1 auto 1299ns kernel, 5885 ns/op replay; guards flat","ts":"2026-11-28T13:55:51+01:00"}
 {"event":"test_run","status":"pass","test":"unit dir 60+3 passed; golden 17/17","ts":"2026-11-28T13:55:51+01:00"}
+{"event":"test_run","refinement":3,"status":"pass","detail":"derive_core_args: p1 replay 5886->2597 ns/op, kernel 1306->1285.5; p2 2860->2105; p2l1 2830->1628; unit 10+5 pass, golden 17/17","ts":"2026-11-28T14:04:16+01:00"}

@@ -1,0 +1,104 @@
+{
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op[1x128x256x32-shard320x32-0.0-10.8+0.9-3.9-row_major-buffer=l1-dtype=BFLOAT8_B-in_scheme=height_sharded-layout=TILE]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "in_scheme": "height_sharded",
+    "buffer": "l1"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x128x256x32-shard320x32-0.0-10.8+0.9-3.9-row_major-buffer=l1-dtype=BFLOAT8_B-in_scheme=height_sharded-layout=TILE]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "in_scheme": "height_sharded",
+    "buffer": "l1"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE0]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x96-0.0-8.5-column_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x128x256x32-shard352x32-0.0-8.9+9.0-9.3-column_major-buffer=l1-dtype=BFLOAT8_B-in_scheme=height_sharded-layout=TILE]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "in_scheme": "height_sharded",
+    "buffer": "l1"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=l1-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "l1"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE1]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE3]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_golden.py::test_op_loose[1x5120-shard32x160-0.0-7.3-row_major-buffer=dram-dtype=BFLOAT16-in_scheme=width_sharded-layout=TILE5]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_regression.py::test_other_shard_spec": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_regression.py::test_dirty_destination": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_regression.py::test_input_intact": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_regression.py::test_cache_order": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  },
+  "eval/golden_tests/g6_sharded_to_interleaved/test_regression.py::test_repeat": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "in_scheme": "width_sharded",
+    "buffer": "dram"
+  }
+}

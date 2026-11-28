@@ -58,3 +58,27 @@
 - Golden test progress: 17/17 passing.
 - Issues encountered: the Tracy capture tool crashes intermittently (exit 3, no .tracy); re-run. `probes/zone_timeline.py` had stale zone names (fixed).
 - Tests added: `test_g6_sharded_to_interleaved_plan_selection` (3 cases) in the acceptance file; perf harness gains an `auto` plan, the lever variants and a p2 → L1 guard case.
+
+## Refinement 3 — Speed up the perf-flagged profile: per-call dispatch / launch cost
+- Date: 2026-11-28
+- What was done: new knob `Knobs.derive_core_args` (single source `DERIVE_CORE_ARGS`, on in both auto plans: `AUTO_DEFAULT_KNOBS` and `L1_OUTPUT_KNOBS`; part of the cache key and `last_plan()`). With it the writer kernel gets **no per-core RT args** (was 7 per core).
+  - Each core derives its shard index k from `get_absolute_logical_x/y()` and the shard grid's ranges `[num_ranges, (x0, y0, x1, y1, k_base)*]`, sent as common RT args (multicast, cached with the build; only `out_addr` is patched per call). Ranges are walked row- or column-wise per orientation.
+  - It then computes on device what the host used to send: the shard rectangle (ragged last shard clamped), `first_page`, the `bank_stagger` start slot `(first_page / num_banks) % slots`, and the `blocks_per_shard` split. The new CT args are `derive_core_args, height, shard_row_tiles, tensor_row_tiles, num_shards, num_banks, blocks_per_shard, bank_stagger, row_wise`, appended after the TensorAccessor args. The per-core branch is `if constexpr`-eliminated, so the binary stays small.
+  - Host guard `_derived_ranges`: it falls back to per-core RT args when `writer_lanes=2` or when the coordinate → k formula does not reproduce the `corerange_to_cores` order (e.g. overlapping ranges).
+  - Reused: the single owner-writes kernel, walk and store loop unchanged; same descriptor. Added: a derived-geometry prologue in the kernel, `_derived_ranges`, one knob.
+- Perf (Blackhole; kernel ns = median of eager calls 3–12; replay = 50 × 16-call trace):
+
+  | Case | Plan | Kernel ns | FW ns | Replay ns/op |
+  |------|------|-----------|-------|--------------|
+  | p1 bf8b → L1 (flagged) | R2 (dual+stagger, per-core args) | 1306 | 2267 | 5885–5886 |
+  | p1 | **auto (+derive_core_args)** | **1285.5** | 2253.5 | **2593–2601** |
+  | p2 bf16 → DRAM | R2 default | 1464.5 | 2011 | 2860 |
+  | p2 | **auto** | 1455 | 1993 | **2102–2108** |
+  | p2 → L1 | R2 default | 994.5 | 1558 | 2816–2859 |
+  | p2 → L1 | **auto** | 991 | 1531.5 | **1624–1631** |
+
+  Per-call cost was dominated by the per-core unique RT-arg writes, which scale with the core count. Replay now sits ≈ FW duration + ~350 ns. What remains is the kernel, launch skew and FW launch/teardown.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0) on every unit case (row/column-major, short last shard, multi-range grids, width/height, DRAM/L1), in both derived and per-core modes.
+- Golden test progress: 17/17 passing.
+- Issues encountered: `run_safe_pytest.sh --profile` breaks on `-k` expressions with parentheses (the shell splits them in the tracy wrapper); pass explicit test IDs instead.
+- Tests added: the acceptance test asserts `last_plan()["derive_core_args"]` on every case and bit-compares against the per-core path (`_knobs=Knobs()`). The perf harness gains `derived` / `dual_stagger_derived` variants.

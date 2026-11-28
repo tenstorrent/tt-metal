@@ -49,9 +49,19 @@ class Knobs:
     # One RISC writes on BOTH NoCs (DM_DYNAMIC_NOC, alternate per page): the second NoC's link
     # capacity without a second kernel instance (whose dispatch cost shows up in trace replay).
     dual_noc: bool = False
+    # No per-core (unique) RT args: each core derives its shard index from its logical coordinate and
+    # the shard grid's ranges (common RT args) and computes its lane geometry on device. Per-call
+    # dispatch writes unique RT args core by core, so this trims launch cost on wide grids.
+    # Single lane only; the host falls back to per-core args when the core-order formula does not
+    # reproduce the allocator's (see _derived_ranges). False -> Phase 0 per-core RT args.
+    derive_core_args: bool = False
 
 
 DEFAULT_KNOBS = Knobs()
+
+# Refinement 3: whether the auto plans drop per-core RT args (see Knobs.derive_core_args).
+DERIVE_CORE_ARGS = True
+AUTO_DEFAULT_KNOBS = Knobs(derive_core_args=DERIVE_CORE_ARGS)
 
 # Plan for an L1-interleaved output (Refinement 2). L1 pages spread over every worker core's bank,
 # so the writes are all-to-all across the grid and congest one NoC's links: splitting them over both
@@ -62,7 +72,7 @@ DEFAULT_KNOBS = Knobs()
 # DM_DYNAMIC_NOC carries a fixed launch cost (~25-40 ns FW / replay), so the plan only pays once the
 # grid injects enough pages to congest one NoC: p1 (1030 pages) wins, p2 -> L1 (160 pages) is a
 # flat kernel (987 -> 974 ns) and +1.5% replay, so it stays on DEFAULT_KNOBS.
-L1_OUTPUT_KNOBS = Knobs(bank_stagger=True, dual_noc=True)
+L1_OUTPUT_KNOBS = Knobs(bank_stagger=True, dual_noc=True, derive_core_args=DERIVE_CORE_ARGS)
 L1_OUTPUT_MIN_PAGES = 512
 
 
@@ -70,7 +80,7 @@ def select_knobs(output_buffer_type, num_pages):
     """Host predicate: the plan for this call (reported via last_plan(), part of the cache key)."""
     if output_buffer_type == ttnn.BufferType.L1 and num_pages >= L1_OUTPUT_MIN_PAGES:
         return L1_OUTPUT_KNOBS
-    return DEFAULT_KNOBS
+    return AUTO_DEFAULT_KNOBS
 
 
 # lane index -> data-movement processor (lane 0 = BRISC, lane 1 = NCRISC); NoC from Knobs.lane_nocs
@@ -158,6 +168,30 @@ def _lane_rt_args(geo, rect, knobs, num_banks):
     return [num_blocks, block_rows, cols, rows, first_page, src_first_slot, start_slot]
 
 
+def _derived_ranges(geo, cores, knobs):
+    """Common RT-arg tail [num_ranges, (x0, y0, x1, y1, k_base)*] for derive_core_args, or None.
+
+    None when the mode does not apply (two lanes) or the kernel's coordinate -> shard formula does
+    not reproduce the allocator's shard -> core order (then the per-core RT args are used)."""
+    if not knobs.derive_core_args or knobs.writer_lanes != 1:
+        return None
+    tail, k_base, derived = [0], 0, {}
+    for r in geo["grid"].ranges():
+        x0, y0, x1, y1 = r.start.x, r.start.y, r.end.x, r.end.y
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        for x in range(x0, x1 + 1):
+            for y in range(y0, y1 + 1):
+                if (x, y) in derived:
+                    return None  # overlapping ranges: first-match lookup would be ambiguous
+                derived[(x, y)] = k_base + ((y - y0) * w + (x - x0) if geo["row_wise"] else (x - x0) * h + (y - y0))
+        tail += [x0, y0, x1, y1, k_base]
+        tail[0] += 1
+        k_base += w * h
+    if any(derived.get((c.x, c.y)) != k for k, c in enumerate(cores)):
+        return None
+    return tail
+
+
 def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT_KNOBS):
     """Build the cacheable parts of the program: kernels (with per-core RT args).
 
@@ -176,6 +210,11 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
     num_shards = geo["num_shards"]
     assert num_shards <= len(cores), "more shards than shard-grid cores"
 
+    out_buffer_type = output_tensor.memory_config().buffer_type
+    num_banks = ttnn.get_memory_view(output_tensor.device(), out_buffer_type).num_banks
+    common_tail = _derived_ranges(geo, cores, knobs)
+    derive = common_tail is not None
+
     out_page_size = output_tensor.buffer_page_size()
     in_slot_bytes = input_tensor.buffer_aligned_page_size()
     ct_args = [
@@ -187,11 +226,22 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
         int(knobs.dual_noc),
     ]
     ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    ct_args.extend(
+        [
+            int(derive),
+            int(geo["height"]),
+            geo["shard_row_tiles"],
+            geo["tensor_row_tiles"],
+            num_shards,
+            num_banks,
+            knobs.blocks_per_shard,
+            int(knobs.bank_stagger),
+            int(geo["row_wise"]),
+        ]
+    )
 
-    out_buffer_type = output_tensor.memory_config().buffer_type
-    num_banks = ttnn.get_memory_view(output_tensor.device(), out_buffer_type).num_banks
     lane_rt = [ttnn.RuntimeArgs() for _ in range(knobs.writer_lanes)]
-    for k, core in enumerate(cores):
+    for k, core in enumerate(cores if not derive else ()):
         if k < num_shards:
             row0, col0, rows, cols = _shard_rect(geo, k)
             rects = _lane_rects(rows, cols, knobs.writer_lanes)
@@ -209,7 +259,7 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
                 core_ranges=grid,
                 compile_time_args=ct_args,
                 runtime_args=lane_rt[lane],
-                common_runtime_args=[output_tensor.buffer_address()],
+                common_runtime_args=[output_tensor.buffer_address()] + (common_tail or []),
                 config=_lane_config(lane, knobs),
             )
         )
@@ -223,16 +273,21 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
         "lane_nocs": tuple(knobs.lane_nocs[: knobs.writer_lanes]),
         "bank_stagger": knobs.bank_stagger,
         "dual_noc": knobs.dual_noc,
+        "derive_core_args": derive,
+        "common_tail": common_tail or [],
         "knobs": knobs,
     }
     return kernels, plan
 
 
-def bind_call(kernels, input_tensor, output_tensor, program_hash):
-    """Per-call patch of a cached build: output address + the shard CB on the current input."""
+def bind_call(kernels, input_tensor, output_tensor, program_hash, common_tail=()):
+    """Per-call patch of a cached build: output address + the shard CB on the current input.
+
+    Only the output address changes per call; ``common_tail`` (the derive_core_args shard-grid
+    ranges) is part of the cached build."""
     out_addr = output_tensor.buffer_address()
     for kd in kernels:
-        kd.common_runtime_args = [out_addr]
+        kd.common_runtime_args = [out_addr] + list(common_tail)
     cb_input_shard = ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_SHARD, input_tensor)
     desc = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb_input_shard])
     desc.custom_program_hash = program_hash

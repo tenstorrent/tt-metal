@@ -131,6 +131,11 @@ def test_g6_sharded_to_interleaved(device, case_id):
     in_addr = tt_input.buffer_address()
 
     out = _call(tt_input, out_mc)
+    # Refinement 3: every auto plan drops per-core RT args (the shard index is derived on device),
+    # including column-major grids, short last shards and multi-range grids.
+    from ttnn.operations.g6_sharded_to_interleaved import last_plan
+
+    assert last_plan()["derive_core_args"] is True, last_plan()
 
     assert tuple(out.shape) == tuple(shape)
     assert out.dtype == dtype
@@ -145,6 +150,14 @@ def test_g6_sharded_to_interleaved(device, case_id):
     out2 = g6_sharded_to_interleaved(tt_input, out_mc)
     assert out2.buffer_address() != out.buffer_address()
     _assert_bits_equal(ttnn.to_torch(out2), out_torch, "repeat")
+
+    # The per-core RT-arg path (Knobs.derive_core_args=False, still used by writer_lanes=2) agrees.
+    from ttnn.operations.g6_sharded_to_interleaved.g6_sharded_to_interleaved_program_descriptor import Knobs
+
+    out3 = g6_sharded_to_interleaved(tt_input, out_mc, _knobs=Knobs())
+    assert last_plan()["derive_core_args"] is False
+    _assert_bits_equal(ttnn.to_torch(out3), out_torch, "per-core RT args")
+    ttnn.deallocate(out3)
 
     # Input intact: still allocated, same placement and address, same values.
     assert tt_input.is_allocated()

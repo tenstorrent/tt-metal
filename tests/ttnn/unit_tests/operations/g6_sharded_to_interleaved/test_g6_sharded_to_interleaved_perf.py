@@ -62,6 +62,9 @@ KNOBS = {
     "lanes2_stagger": Knobs(writer_lanes=2, bank_stagger=True),
     "dual": Knobs(dual_noc=True),
     "dual_stagger": Knobs(dual_noc=True, bank_stagger=True),
+    # Refinement 3: no per-core RT args (cores derive their shard from their coordinate).
+    "derived": Knobs(derive_core_args=True),
+    "dual_stagger_derived": Knobs(dual_noc=True, bank_stagger=True, derive_core_args=True),
 }
 
 

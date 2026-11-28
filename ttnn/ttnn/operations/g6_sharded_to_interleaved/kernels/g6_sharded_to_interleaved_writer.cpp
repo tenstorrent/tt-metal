@@ -26,10 +26,20 @@
 // NoC and the other one, so one RISC injects into both NoCs' links; both NoCs are drained at the end.
 // dual_noc = 0 issues every write on noc_index (the kernel's configured NoC).
 //
+// derive_core_args (CT): the kernel takes NO per-core RT args (per-call dispatch cost scales with
+// unique RT args x cores). It finds its shard index k from its own logical coordinate and the shard
+// grid's ranges (common RT args, multicast once), then derives the lane geometry the host would
+// have sent: the shard rectangle (ragged last shard clamped), first_page, start_slot and the block
+// split. Single lane only (the lane is the whole shard: src_first_slot = 0). The host asserts the
+// coordinate -> k formula reproduces the allocator's shard -> core order before choosing this mode.
+//
 // CT args: cb_input_shard, shard_col_tiles, tensor_col_tiles, out_page_size, in_slot_bytes,
-//          dual_noc, TensorAccessorArgs(output)
-// Common RT args: out_addr
-// RT args: num_blocks, block_rows, block_cols, total_rows, first_page, src_first_slot, start_slot
+//          dual_noc, TensorAccessorArgs(output),
+//          derive_core_args, height, shard_row_tiles, tensor_row_tiles, num_shards, num_banks,
+//          blocks_per_shard, bank_stagger, row_wise
+// Common RT args: out_addr [, num_ranges, (x0, y0, x1, y1, k_base) * num_ranges   (derive_core_args)]
+// RT args (per core, !derive_core_args only):
+//          num_blocks, block_rows, block_cols, total_rows, first_page, src_first_slot, start_slot
 
 #include <cstdint>
 
@@ -44,19 +54,69 @@ void kernel_main() {
     constexpr uint32_t in_slot_bytes = get_compile_time_arg_val(4);  // input aligned page size
     constexpr bool dual_noc = get_compile_time_arg_val(5) != 0;
     constexpr auto out_args = TensorAccessorArgs<6>();
+    constexpr uint32_t derived_base = out_args.next_compile_time_args_offset();
+    constexpr bool derive_core_args = get_compile_time_arg_val(derived_base + 0) != 0;
+    constexpr bool height = get_compile_time_arg_val(derived_base + 1) != 0;
+    constexpr uint32_t shard_row_tiles = get_compile_time_arg_val(derived_base + 2);
+    constexpr uint32_t tensor_row_tiles = get_compile_time_arg_val(derived_base + 3);
+    constexpr uint32_t num_shards = get_compile_time_arg_val(derived_base + 4);
+    constexpr uint32_t num_banks = get_compile_time_arg_val(derived_base + 5);
+    constexpr uint32_t blocks_per_shard = get_compile_time_arg_val(derived_base + 6);
+    constexpr bool bank_stagger = get_compile_time_arg_val(derived_base + 7) != 0;
+    constexpr bool row_wise = get_compile_time_arg_val(derived_base + 8) != 0;
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
 
-    const uint32_t num_blocks = get_arg_val<uint32_t>(0);
-    const uint32_t block_rows = get_arg_val<uint32_t>(1);
-    const uint32_t block_cols = get_arg_val<uint32_t>(2);
-    const uint32_t total_rows = get_arg_val<uint32_t>(3);
-    const uint32_t first_page = get_arg_val<uint32_t>(4);
-    const uint32_t src_first_slot = get_arg_val<uint32_t>(5);
-    const uint32_t start_slot = get_arg_val<uint32_t>(6);
-
-    if (num_blocks == 0) {
-        return;  // grid core with no shard (k >= num_shards) or an empty lane
+    uint32_t num_blocks, block_rows, block_cols, total_rows, first_page, src_first_slot, start_slot;
+    if constexpr (derive_core_args) {
+        // Shard index k of this core: ranges in set order, each walked row- or column-wise.
+        const uint32_t x = get_absolute_logical_x();
+        const uint32_t y = get_absolute_logical_y();
+        const uint32_t num_ranges = get_common_arg_val<uint32_t>(1);
+        uint32_t k = num_shards;  // not in the grid -> idle
+        for (uint32_t i = 0; i < num_ranges; ++i) {
+            const uint32_t x0 = get_common_arg_val<uint32_t>(2 + 5 * i);
+            const uint32_t y0 = get_common_arg_val<uint32_t>(3 + 5 * i);
+            const uint32_t x1 = get_common_arg_val<uint32_t>(4 + 5 * i);
+            const uint32_t y1 = get_common_arg_val<uint32_t>(5 + 5 * i);
+            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) {
+                const uint32_t k_base = get_common_arg_val<uint32_t>(6 + 5 * i);
+                k = row_wise ? k_base + (y - y0) * (x1 - x0 + 1) + (x - x0)
+                             : k_base + (x - x0) * (y1 - y0 + 1) + (y - y0);
+                break;
+            }
+        }
+        if (k >= num_shards) {
+            return;  // grid core with no shard
+        }
+        uint32_t row0 = 0, col0 = 0;
+        if constexpr (height) {
+            row0 = k * shard_row_tiles;
+            const uint32_t left = tensor_row_tiles - row0;
+            total_rows = left < shard_row_tiles ? left : shard_row_tiles;
+            block_cols = tensor_col_tiles;
+        } else {
+            col0 = k * shard_col_tiles;
+            const uint32_t left = tensor_col_tiles - col0;
+            total_rows = tensor_row_tiles;
+            block_cols = left < shard_col_tiles ? left : shard_col_tiles;
+        }
+        block_rows = (total_rows + blocks_per_shard - 1) / blocks_per_shard;
+        num_blocks = (total_rows + block_rows - 1) / block_rows;
+        first_page = row0 * tensor_col_tiles + col0;
+        src_first_slot = 0;
+        start_slot = bank_stagger ? (first_page / num_banks) % (total_rows * block_cols) : 0;
+    } else {
+        num_blocks = get_arg_val<uint32_t>(0);
+        block_rows = get_arg_val<uint32_t>(1);
+        block_cols = get_arg_val<uint32_t>(2);
+        total_rows = get_arg_val<uint32_t>(3);
+        first_page = get_arg_val<uint32_t>(4);
+        src_first_slot = get_arg_val<uint32_t>(5);
+        start_slot = get_arg_val<uint32_t>(6);
+        if (num_blocks == 0) {
+            return;  // grid core with no shard (k >= num_shards) or an empty lane
+        }
     }
 
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_page_size);
