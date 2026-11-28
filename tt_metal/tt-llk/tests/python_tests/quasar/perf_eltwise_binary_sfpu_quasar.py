@@ -37,7 +37,7 @@ def _perf_approx_modes(mathop):
 
 def _perf_int_sign_magnitude(mathop):
     # Quasar add_int_tile and mul_int_tile pass SIGN_MAGNITUDE_FORMAT=true.
-    return [mathop in (MathOperation.SfpuElwadd, MathOperation.SfpuElwmulInt)]
+    return [mathop in (MathOperation.SfpuElwadd, MathOperation.SfpuMulInt32)]
 
 
 _INT_PERF_SWEEP = {
