@@ -404,6 +404,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.sort": data_movement.test_sort,
     "ttnn.moe_expert_token_remap": data_movement.test_moe_expert_token_remap,
     "ttnn.narrow": data_movement.test_narrow,
+    "ttnn.unsqueeze": data_movement.test_unsqueeze,
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,
