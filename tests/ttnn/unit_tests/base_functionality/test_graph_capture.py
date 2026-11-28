@@ -557,6 +557,32 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
     assert True
 
 
+def test_graph_capture_buffer_layout_matches_memory_layout(device):
+    """Buffer nodes must report the buffer's TensorMemoryLayout, including ND_SHARDED (was "UNKNOWN")."""
+    torch_input = torch.randn(1, 1, 128, 32).bfloat16()
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 64, 64]),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    for memory_config, expected in [
+        (ttnn.DRAM_MEMORY_CONFIG, "INTERLEAVED"),
+        (ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec), "ND_SHARDED"),
+    ]:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        captured_graph = ttnn.graph.end_graph_capture()
+        assert tt_input.memory_config().memory_layout == getattr(ttnn.TensorMemoryLayout, expected)
+        buffer_layouts = {
+            node["params"]["layout"] for node in captured_graph if str(node["node_type"]).startswith("buffer")
+        }
+        assert buffer_layouts == {expected}
+        ttnn.deallocate(tt_input)
+
+
 # Tests for new features: buffer pages, full tensor info
 
 
