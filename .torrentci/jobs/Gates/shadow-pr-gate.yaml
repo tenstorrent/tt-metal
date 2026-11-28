@@ -22,3 +22,21 @@ dashboards:
         when:
           changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
                     llk-quasar]
+      - job: verify-time-budgets
+      - job: build-docs
+        when:
+          changed: [any-code, docs, image]
+      # code-analysis's include-cleaner-api-headers: run-clang-tidy and an API header change.
+      - job: include-cleaner
+        when:
+          changed:
+            - all: [tt-metalium-api-headers, clang-tidy-source]
+            - all: [tt-metalium-api-headers, cmake-raw]
+            - all: [tt-metalium-api-headers, clang-tidy-config]
+            - all: [tt-metalium-api-headers, llk-wormhole]
+            - all: [tt-metalium-api-headers, llk-blackhole]
+            - all: [tt-metalium-api-headers, llk-common]
+            - all: [tt-metalium-api-headers, llk-sfpi]
+            - all: [tt-metalium-api-headers, submodule]
+            - all: [tt-metalium-api-headers, clang-tidy-key-workflow]
+            - image
