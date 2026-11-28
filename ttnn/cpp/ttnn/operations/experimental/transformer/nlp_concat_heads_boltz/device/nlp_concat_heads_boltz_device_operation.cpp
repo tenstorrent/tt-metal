@@ -55,6 +55,13 @@ void NLPConcatHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == tt::tt_metal::Layout::TILE,
         "Input tensor layout must be TILE but got {}",
         input_tensor.layout());
+    // The factory takes the head tile count from padded_shape()[3] and copies whole head tiles, so a
+    // logical head dim that is not tile-aligned has its heads written at a padded stride even though
+    // compute_output_specs sizes the hidden dim from the logical head dim.
+    TT_FATAL(
+        input_tensor.logical_shape()[3] % 32 == 0,
+        "nlp_concat_heads_boltz: the logical head dim (last dim) must be a multiple of 32, got {}",
+        input_tensor.logical_shape()[3]);
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
