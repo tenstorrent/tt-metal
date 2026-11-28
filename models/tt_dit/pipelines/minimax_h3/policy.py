@@ -88,13 +88,14 @@ class SolSchedule:
 SOL_PRESETS = {
     # The 10Eros-Max card's setting (13% sparsity on all blocks, 2 of the 8 forwards dense) with a third dense forward.
     "10eros-max": SolSchedule(tau=1.13, dense_steps=3, dense_layers=0),
-    # NVIDIA's HyperFlow recipe: no sinks.
-    "hyperflow": SolSchedule(sinks=False),
+    # NVIDIA's HyperFlow recipe (no sinks) with a third dense forward: with two, the served audio is quieter than dense.
+    "hyperflow": SolSchedule(dense_steps=3, sinks=False),
 }
 
 #: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset, each with the longest clip (frames) it then runs sparse.
 #: 10Eros-Max: at 6 s the served audio is level with dense; at 10 s it stays about 2 LU under, with fewer sound events.
-SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6)}
+#: HyperFlow: checked at 6 s, text and image jobs.
+SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6), "hyperflow": get_num_frames(6)}
 
 
 def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:

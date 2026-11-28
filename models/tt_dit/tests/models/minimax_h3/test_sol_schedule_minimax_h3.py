@@ -22,7 +22,8 @@ _SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS", "H3_SOL_POOLED")
 
 _EROS = SolSchedule(tau=1.13, dense_steps=3, dense_layers=0, sinks=True)  # the 10Eros-Max card and a third dense step
 _EROS_DEFAULT = replace(_EROS, max_frames=158)  # with no switch set: clips up to 6 s
-_HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # NVIDIA's HyperFlow recipe
+_HF = SolSchedule(tau=1.0, dense_steps=3, dense_layers=2, sinks=False)  # NVIDIA's recipe and a third dense step
+_HF_DEFAULT = replace(_HF, max_frames=158)
 
 
 @pytest.mark.parametrize(
@@ -42,10 +43,21 @@ def test_the_10eros_max_turbo_file_runs_sol_attn_by_default(monkeypatch, file, t
     assert pipeline._requested_sol_schedule() == expected
 
 
-@pytest.mark.parametrize(("hyperflow", "expected"), [(object(), _HF), (None, SolSchedule())])
-def test_turbo_pipeline_names_the_hyperflow_preset(monkeypatch, hyperflow, expected):
-    pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1"}, MiniMaxH3TurboPipeline)
-    pipeline.hyperflow = hyperflow
+@pytest.mark.parametrize(
+    ("hyperflow", "task", "env", "expected"),
+    [
+        (object(), "t2va", {}, _HF_DEFAULT),
+        (object(), "t2va", {"H3_SOL_ATTN": "0"}, None),  # the off switch
+        (object(), "t2va", {"H3_SOL_ATTN": "1"}, _HF),
+        (object(), "ref2va", {}, None),
+        (object(), "ref2va", {"H3_SOL_ATTN": "1"}, SolSchedule()),
+        (None, "t2va", {}, None),  # a Turbo build without the HyperFlow LoRA
+        (None, "t2va", {"H3_SOL_ATTN": "1"}, SolSchedule()),
+    ],
+)
+def test_hyperflow_runs_sol_attn_by_default(monkeypatch, hyperflow, task, env, expected):
+    pipeline = _pipeline(monkeypatch, env, MiniMaxH3TurboPipeline)
+    pipeline.hyperflow, pipeline.task = hyperflow, task
     assert pipeline._requested_sol_schedule() == expected
 
 

@@ -3536,7 +3536,9 @@ class MiniMaxH3Pipeline:
 
     def _requested_sol_schedule(self) -> SolSchedule | None:
         """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
-        return None if self.dynamic_length else sol_schedule(os.environ, self._sol_preset())
+        # No preset for ref2va: Sol-Attn is unmeasured with reference rows.
+        preset = self._sol_preset() if self.task == "t2va" else None
+        return None if self.dynamic_length else sol_schedule(os.environ, preset)
 
     def _is_sol_dense_step(self, step: int, first_stage: bool = False, *, num_latent_frames: int) -> bool:
         """Whether step `step` of a denoise stage runs dense under the Sol-Attn schedule in force: all of a low-res
@@ -3555,9 +3557,8 @@ class MiniMaxH3Pipeline:
 
     def _sol_preset(self) -> str | None:
         """The `policy.SOL_PRESETS` entry this pipeline's files name, if any."""
-        # Not for ref2va on the same file: Sol-Attn is unmeasured with reference rows.
         eros_max = self.transformer_file is not None and self.transformer_file.stem == EROS_MAX_TURBO_STEM
-        return "10eros-max" if eros_max and self.task == "t2va" else None
+        return "10eros-max" if eros_max else None
 
     def _set_sol_attention(
         self,
