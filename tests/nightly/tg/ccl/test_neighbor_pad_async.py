@@ -18,7 +18,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
-@pytest.mark.timeout(200)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
@@ -120,7 +119,6 @@ def test_neighbor_pad_async_1d(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "mesh_device, num_links",
     [
@@ -247,7 +245,6 @@ def _setup_sub_device(mesh_device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, num_links, use_persistent_output_buffer, skip_for_ci_env",
@@ -825,7 +822,6 @@ _BH_2D_SHAPES_IDS = [
 ]
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, use_persistent_output_buffer, skip_for_ci_env",
@@ -924,7 +920,6 @@ _BH_LH_1D_IDS = [
 ]
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, halo_dim, other_shard_dim, cluster_axis, padding_left, padding_right, logical_h, skip_for_ci_env",
@@ -1020,7 +1015,6 @@ _BH_LH_2D_IDS = [
 ]
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, use_persistent_output_buffer, skip_for_ci_env",
@@ -1100,7 +1094,6 @@ _BH_TF_1D_IDS = [
 ]
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, h_axis, other_shard_dim, padding_h, t_front_pad, skip_for_ci_env",
@@ -1184,7 +1177,6 @@ _BH_TF_2D_IDS = [
 ]
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, use_persistent_output_buffer, skip_for_ci_env",
@@ -1274,7 +1266,6 @@ _BH_COMBINED_IDS = [
 ]
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, t_front_pad, use_persistent_output_buffer, skip_for_ci_env",

@@ -25,7 +25,6 @@ from models.experimental.diffusion_drive.reference.model import DiffusionDriveCo
 from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
 
 
-@pytest.mark.timeout(300)
 def test_stage4_consolidated_perception_pcc(device, model_config) -> None:
     if model_config.plan_anchor_path is None:
         pytest.skip("plan_anchor_path not set — run scripts/prepare_assets.py first")

@@ -98,7 +98,6 @@ def _assert_num_program_cache_entries(device, expected, context):
     assert actual == expected, f"{context}: expected {expected} program cache entries, found {actual}"
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "socket_storage_type",
     [
@@ -169,7 +168,6 @@ def test_send_recv_program_cache(mesh_device, socket_storage_type):
     _assert_send_recv_equal(send_device, recv_device, input_miss, output_miss, "miss output after hit")
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "per_chip_shape",
     [

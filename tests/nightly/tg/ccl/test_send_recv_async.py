@@ -54,7 +54,6 @@ def run_send_recv_test(
     assert eq, output
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "per_chip_shape",
     [

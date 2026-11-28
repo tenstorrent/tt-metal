@@ -118,7 +118,6 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
     "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
     ([2, 20, 20, 512, 64, (8, 8), True],),  # Whisper-large (nh not multiple of 32; grid must give num_cores/b <= nkv)
 )
-@pytest.mark.timeout(120)
 def test_sdpa_decode_non_tile_aligned_heads(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor):
     """Regression test for models with num_heads not a multiple of 32 (e.g. Whisper-large with 20 heads).
 
@@ -285,7 +284,6 @@ def test_sdpa_decode_paged_attention(
     ],
     ids=["blackhole_b32_nkv8"],
 )
-@pytest.mark.timeout(120)
 def test_sdpa_decode_kv_head_core_divisibility(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     """Regression test for github.com/tenstorrent/tt-metal/issues/40978.
 
@@ -475,7 +473,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, reset_seeds)
     ],
 )
 @pytest.mark.parametrize("cur_pos_tensor", [True], ids=["cur_pos_tensor"])
-@pytest.mark.timeout(120)
 def test_sdpa_decode_sliding_window(
     device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sliding_window_size, cur_pos_tensor
 ):

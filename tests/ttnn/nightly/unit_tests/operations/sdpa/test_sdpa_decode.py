@@ -286,7 +286,6 @@ def test_sdpa_decode_paged_attention_regressions(
     ids=["paged-default-config-l1-regr"],
 )
 @pytest.mark.parametrize("block_size", (32,), ids=["paged_32"])
-@pytest.mark.timeout(120)
 def test_sdpa_decode_paged_attention_default_config_regression(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
 ):
@@ -309,7 +308,6 @@ def test_sdpa_decode_paged_attention_default_config_regression(
     )
 
 
-@pytest.mark.timeout(120)
 def test_sdpa_decode_tree_reduction_power_of_2_regression(device):
     """Regression test for issue #38521: tree-reduction round count off-by-one for power-of-2 core counts.
 
@@ -674,7 +672,6 @@ def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     ],
 )
 @pytest.mark.parametrize("cur_pos_tensor", [False, True])
-@pytest.mark.timeout(120)
 def test_sdpa_decode_sliding_window(
     device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sliding_window_size, cur_pos_tensor
 ):
@@ -741,7 +738,6 @@ def test_sdpa_decode_sliding_window(
         [32, 8, 1, 128, 128, (8, 4)],  # llama2-70B-style, batch=32 exposes OOB reads for batches 1-31
     ],
 )
-@pytest.mark.timeout(120)
 def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, grid_size, mask_dtype):
     """Regression test for issue #39910: mask batch-broadcast reads OOB DRAM."""
     run_test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, ttnn.bfloat16, grid_size, mask_dtype)

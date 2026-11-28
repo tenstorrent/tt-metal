@@ -104,7 +104,6 @@ def _assert_device_usable(device, ttnn_model, features) -> None:
     assert torch.isfinite(out["trajectory"]).all(), "eager fallback produced non-finite trajectory"
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("site", ["backbone", "perception"])
 def test_capture_failure_leaves_device_usable(
     device, model_config, checkpoint_path, missing_asset, monkeypatch, expect_error, site

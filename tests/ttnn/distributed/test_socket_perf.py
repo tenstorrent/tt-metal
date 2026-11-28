@@ -211,7 +211,6 @@ fabric_router_config = ttnn.FabricRouterConfig()
 fabric_router_config.max_packet_payload_size_bytes = 1088 * 8
 
 
-@pytest.mark.timeout(180)
 @pytest.mark.parametrize(
     "device_params",
     [

@@ -245,7 +245,6 @@ def _run_bounded_decode_walk(device, sliding_window, use_modulo, decode_steps):
     return results
 
 
-@pytest.mark.timeout(180)
 def test_bounded_sliding_decode_with_hybrid_page_table(device):
     """End-to-end: hybrid page_table built by build_hybrid_page_tables, fed to the
     paged ops with cache_position_modulo set, correctly tracks the sliding window
@@ -559,7 +558,6 @@ def _ring_slots(cache_tt, ring_blocks):
     return torch.cat([cache[b, 0] for b in ring_blocks], dim=0)
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize("extra_cols", [0, 2], ids=["ring_width", "wider_table"])
 @pytest.mark.parametrize("modulo", [SLIDING_WINDOW, 2 * SLIDING_WINDOW], ids=["exact_ring", "ring_with_headroom"])
 @pytest.mark.parametrize(

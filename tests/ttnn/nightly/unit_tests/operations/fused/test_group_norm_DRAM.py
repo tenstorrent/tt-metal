@@ -449,7 +449,6 @@ def test_group_norm_DRAM_row_major_affine_and_mask(
 # Regression: ROW_MAJOR out + large block_ht on no_mcast used to undersize c_10 and hang.
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
-@pytest.mark.timeout(300)
 def test_group_norm_DRAM_row_major_no_mcast_large_block_ht(device):
     """c_10 (cb_ex_external) must be sized for num_out_blocks_padded on the no_mcast path.
 

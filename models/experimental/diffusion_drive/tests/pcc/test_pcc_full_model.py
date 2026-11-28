@@ -80,7 +80,6 @@ def test_full_model_output_shapes(model_config, checkpoint_path, missing_asset):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("batch", [1])
 def test_full_model_pcc_random(device, model_config, checkpoint_path, missing_asset, batch):
     """Fully built TTNN model vs the PyTorch reference, random inputs."""

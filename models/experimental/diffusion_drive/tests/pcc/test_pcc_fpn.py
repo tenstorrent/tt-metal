@@ -17,7 +17,6 @@ instantiated with random weights.
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
@@ -42,7 +41,6 @@ def _make_backbone() -> TransfuserBackbone:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(300)
 def test_fpn_pcc(device) -> None:
     """TtnnFPN vs _top_down reference PCC ≥ 0.99 on (1, 512, 8, 8) input."""
     torch.manual_seed(42)

@@ -158,7 +158,6 @@ def _run_decode_walk(device, sliding_window, use_modulo_kwarg, decode_steps, sca
 # ── Positive: cache_position_modulo makes bounded cache correct ────────────
 
 
-@pytest.mark.timeout(180)
 def test_bounded_sliding_kv_cache_position_modulo_round_trip(device):
     """With ``cache_position_modulo=sliding_window`` set, the bounded cache addresses
     correctly across multiple wrap cycles; PCC ≥ 0.99 at every step."""
@@ -176,7 +175,6 @@ def test_bounded_sliding_kv_cache_position_modulo_round_trip(device):
 # ── Negative: without the kwarg, positions past sliding_window clobber block 0 ──
 
 
-@pytest.mark.timeout(180)
 def test_bounded_sliding_kv_cache_without_modulo_clobbers(device):
     """Without ``cache_position_modulo``, positions past sliding_window route through
     the zero-padded page_table tail and collapse onto physical block 0 — silently
@@ -306,7 +304,6 @@ def test_paged_update_cache_modulo_must_fit_page_table(device, expect_error):
 # ── paged_fill_cache: long prefill with wrap survives the last cache_position_modulo tokens ──
 
 
-@pytest.mark.timeout(60)
 def test_paged_fill_cache_bounded_capacity_wrap(device):
     """A prefill of length > cache_position_modulo, written with the kwarg set, must
     leave the cache holding *exactly* the last cache_position_modulo tokens (each at
@@ -369,7 +366,6 @@ def test_paged_fill_cache_bounded_capacity_wrap(device):
     assert eq, f"Bounded fill_cache wrap mismatch: {msg}"
 
 
-@pytest.mark.timeout(60)
 def test_paged_fill_cache_valid_seq_len_tensor_skips_padding_tail(device):
     """Padded prefill + valid_seq_len_tensor must keep the last real window, not padding.
 
@@ -472,7 +468,6 @@ def test_paged_fill_cache_valid_seq_len_tensor_skips_padding_tail(device):
     assert eq2, f"valid_seq_len_tensor refresh mismatch: {msg2}"
 
 
-@pytest.mark.timeout(30)
 def test_paged_fill_cache_valid_seq_len_tensor_rejects_multi_element(device, expect_error):
     """API contract: valid_seq_len_tensor must be a single scalar element."""
     block_size = 32

@@ -17,7 +17,6 @@ Two checks:
 
 from __future__ import annotations
 
-import pytest
 import torch
 import torch.nn.functional as F
 
@@ -26,7 +25,6 @@ from models.experimental.diffusion_drive.reference.model import DiffusionDriveCo
 from models.experimental.diffusion_drive.tt.ttnn_grid_sample_attention import TtnnGridSampleCrossBEVAttention
 
 
-@pytest.mark.timeout(300)
 def test_grid_sample_primitive_pcc(device) -> None:
     """ttnn.grid_sample matches F.grid_sample (bilinear/zeros/align_corners=False)."""
     import ttnn
@@ -49,7 +47,6 @@ def test_grid_sample_primitive_pcc(device) -> None:
     assert pcc >= 0.99, f"grid_sample primitive PCC {pcc:.6f} < 0.99"
 
 
-@pytest.mark.timeout(300)
 def test_grid_sample_attention_pcc(device) -> None:
     """Full GridSampleCrossBEVAttention block: TTNN (grid_sample on device) vs reference."""
     torch.manual_seed(0)

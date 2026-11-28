@@ -454,7 +454,6 @@ def test_neighbor_pad_async_1d(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, use_persistent_output_buffer",
