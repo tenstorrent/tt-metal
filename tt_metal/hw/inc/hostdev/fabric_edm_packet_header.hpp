@@ -1246,10 +1246,23 @@ struct LowLatencyMeshRoutingFields {
 };
 static_assert(sizeof(LowLatencyMeshRoutingFields) == sizeof(uint32_t));
 
+// The domain exit a packet into another domain leaves by, as its sender chose it: the exit chip and the direction bit
+// of its inter-domain link there (0: not such a packet). Its domain's meshes route it to that chip, since its
+// destination numbers a chip of the other domain.
+struct InterDomainExit {
+    uint16_t mesh_id;
+    uint8_t chip_id;
+    uint8_t action;
+} __attribute__((packed));
+static_assert(sizeof(InterDomainExit) == sizeof(uint32_t));
+
 // Primary template for 2D routing headers with variable route buffer size
 template <int RouteBufferSize = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    LowLatencyMeshRoutingFields routing_fields;
+    union {
+        LowLatencyMeshRoutingFields routing_fields;  // reserved in 2D, 0
+        InterDomainExit inter_domain_exit;
+    };
     uint8_t route_buffer[RouteBufferSize];
     union {
         struct {

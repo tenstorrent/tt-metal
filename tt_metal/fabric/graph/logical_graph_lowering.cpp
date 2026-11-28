@@ -70,7 +70,10 @@ private:
                 continue;
             }
             std::optional<RouterIndex> match;
-            if (p.capability != EdgeCapability::INTERMESH) {
+            // off the mesh's letters: the router on the peer chip's same plane linked back here
+            const bool by_peer =
+                p.capability == EdgeCapability::INTERMESH || p.capability == EdgeCapability::INTRADOMAIN;
+            if (!by_peer) {
                 const auto it = by_key_.find(RouterKey{p.peer, facing_back(p.direction), p.plane});
                 if (it != by_key_.end() && g_.routers[it->second].port.peer == p.node) {
                     match = it->second;
@@ -78,7 +81,7 @@ private:
             } else {
                 for (RouterIndex c : on_chip_plane_[{p.peer, p.plane}]) {
                     const auto& cp = g_.routers[c].port;
-                    if (cp.capability == EdgeCapability::INTERMESH && cp.peer == p.node) {
+                    if (cp.capability == p.capability && cp.peer == p.node) {
                         TT_FATAL(!match, "fabric graph: router {} has more than one link peer", router.id);
                         match = c;
                     }
@@ -171,7 +174,8 @@ private:
             while (members.size() <= g_.routers.size()) {
                 const auto& far = g_.routers[*g_.routers[at].peer].port;
                 const auto next = by_key_.find(RouterKey{far.node, s.direction, s.plane});
-                if (next == by_key_.end() || !g_.routers[next->second].peer) {
+                if (next == by_key_.end() || !g_.routers[next->second].peer ||
+                    g_.routers[next->second].port.capability != EdgeCapability::INTRAMESH_CARDINAL) {
                     break;
                 }
                 if (next->second == start) {

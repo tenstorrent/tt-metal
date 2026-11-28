@@ -6,9 +6,12 @@
 
 #include <algorithm>
 
+#include <set>
+
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -26,8 +29,8 @@ GraphFabricBuilder::GraphFabricBuilder(
         const auto& port = graph_.logical.routers[r].port;
         if (port.node == local_node_) {
             on_chip_.emplace(graph_.eth_chans[r], r);
-            if (port.capability == EdgeCapability::INTERDOMAIN) {
-                chip_facts_.per_direction_capabilities.at(*port.direction) = EdgeCapability::INTERDOMAIN;
+            if (port.capability == EdgeCapability::INTERDOMAIN || port.capability == EdgeCapability::INTRADOMAIN) {
+                chip_facts_.per_direction_capabilities.at(*port.direction) = port.capability;
             }
         }
     }
@@ -63,6 +66,45 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
     in.on_domain_edge = std::any_of(g.routers.begin(), g.routers.end(), [&](const LogicalRouter& r) {
         return r.port.node == g.routers[router].port.node && r.port.capability == EdgeCapability::INTERDOMAIN;
     });
+    if (fabric_context_.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
+        const auto& domain = fabric_context_.get_inter_domain_mesh();
+        const auto& port = g.routers[router].port;
+        const auto shape = domain.shape();
+        const auto chip = domain.domain_chip.at(port.node);
+        Vc2DomainInputs vc2{.y = chip / shape[1], .x = chip % shape[1], .rows = shape[0], .cols = shape[1]};
+        // its downstreams are on its own plane: a domain direction the chip has elsewhere but not there can't be routed
+        std::set<RoutingDirection> on_chip;
+        for (const auto& r : g.routers) {
+            if (r.port.node != port.node) {
+                continue;
+            }
+            if (const auto d = domain.direction(port.node, r.port.peer)) {
+                on_chip.insert(*d);
+                if (r.port.plane != port.plane) {
+                    continue;
+                }
+                const auto local = builder::routing_direction_to_eth_direction(*r.port.direction);
+                vc2.routers.at(builder::routing_direction_to_eth_direction(*d)) = local;
+                if (&r.port == &port) {
+                    vc2.facing = builder::routing_direction_to_eth_direction(*d);
+                }
+            }
+        }
+        for (const RoutingDirection d : on_chip) {
+            TT_FATAL(
+                vc2.routers.at(builder::routing_direction_to_eth_direction(d)) != eth_chan_directions::COUNT,
+                "fabric graph: VC2 over the domain needs {} on {}'s plane {}, which has no router that way",
+                enchantum::to_string(d),
+                port.node,
+                port.plane);
+        }
+        vc2.translates = in.inter_domain && domain.translates();
+        in.vc2_domain = vc2;
+    }
+    if (g.routers[router].port.capability == EdgeCapability::INTRADOMAIN) {
+        const RouterIndex peer = *g.routers[router].peer;
+        in.link_peer = std::pair{g.routers[peer].port.node, graph_.eth_chans[peer]};
+    }
     for (ChannelIndex c : g.channels_of(router, ChannelKind::Sender)) {
         const uint32_t i = base[g.channels[c].vc] + graph_.index_in_vc[c];
         in.injection[i] = graph_.enters_ring[c];
@@ -134,9 +176,13 @@ std::vector<RouterLocation> GraphFabricBuilder::perimeter_router_locations() con
     std::vector<RouterLocation> locations;
     for (const auto& [chan, r] : on_chip_) {
         const auto& port = graph_.logical.routers[r].port;
-        if (port.capability == EdgeCapability::INTERDOMAIN) {
+        if (port.capability == EdgeCapability::INTERDOMAIN || port.capability == EdgeCapability::INTRADOMAIN) {
+            const bool perimeter = port.capability == EdgeCapability::INTERDOMAIN;
             locations.push_back(RouterLocation{
-                .eth_chan = chan, .remote_node = local_node_, .direction = *port.direction, .is_dispatch_link = false});
+                .eth_chan = chan,
+                .remote_node = perimeter ? local_node_ : port.peer,
+                .direction = *port.direction,
+                .is_dispatch_link = false});
         }
     }
     return locations;

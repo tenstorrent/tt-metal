@@ -1,0 +1,25 @@
+# An inter-domain domain of a whole Blackhole quad as two meshes: each 16x4 over two neighbouring Galaxies of the pod's
+# ring (one process per Galaxy), the two linked by the next Galaxy pair. VC2 spans all 128 chips as one mesh.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 16, 4 ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

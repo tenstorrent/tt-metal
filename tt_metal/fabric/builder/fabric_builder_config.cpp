@@ -40,8 +40,12 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
     return get_num_used_sender_channel_count(topology);
 }
 
-uint32_t get_downstream_edm_count(bool is_2D_routing) {
-    return is_2D_routing ? builder_config::max_downstream_edms : builder_config::num_downstream_edms_1d;
+uint32_t get_downstream_edm_count(bool is_2D_routing, bool vc2_forwards) {
+    if (!is_2D_routing) {
+        return builder_config::num_downstream_edms_1d;
+    }
+    return vc2_forwards ? builder_config::max_downstream_edms
+                        : builder_config::max_downstream_edms_without_vc2_forwarding;
 }
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled) {

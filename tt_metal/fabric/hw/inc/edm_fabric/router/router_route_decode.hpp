@@ -61,18 +61,70 @@ __attribute__((noinline)) uint32_t exit_action(uint32_t dst_mesh) {
 // mesh; INTERMESH_INGRESS) or not.
 template <size_t VC, bool INTERMESH_INGRESS>
 struct Routing2D {
-    static constexpr bool intermesh_exits = is_intramesh_router_on_edge;
+    // VC2 routes over the domain's mesh and never leaves it
+    static constexpr bool over_domain = VC == 2 && vc2_domain;
+    static constexpr bool intermesh_exits = is_intramesh_router_on_edge && !over_domain;
 
     // The landing rewrite (out of line: one call per packet on an ingress channel).
     static __attribute__((noinline)) void set_landing_route(tt_l1_ptr PACKET_HEADER_TYPE* header) {
-        fabric_set_2d_intermesh_landing_route(header, l1_routing_table(), MESH_Y_SIZE, MESH_X_SIZE);
+        const auto& routing_table = l1_routing_table();
+        if constexpr (over_domain) {
+            if constexpr (VC2_DOMAIN_TRANSLATES) {
+                // the workload's (mesh, chip) as the domain's chip: exit_node_table holds the map here. The route is
+                // built from it and the header keeps the workload's: a packet held for a full downstream lands again.
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
+                ASSERT(volatile_header->mcast_params_64 == 0);
+                const uint32_t workload = volatile_header->dst_start_node_id;
+                const uint32_t base = routing_table.exit_node_table[volatile_header->dst_start_mesh_id];
+                volatile_header->dst_start_node_id =
+                    (uint32_t{routing_table.my_mesh_id} << 16) |
+                    routing_table.exit_node_table[base + volatile_header->dst_start_chip_id];
+                fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
+                volatile_header->dst_start_node_id = workload;
+            } else {
+                fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
+            }
+        } else if constexpr (vc2_domain) {
+            // into another domain: landed as if bound for its exit chip (the header keeps the destination, as the
+            // translation above does), then out its inter-domain link there
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
+            const InterDomainExit exit = domain_exit(header);
+            const uint32_t destination = volatile_header->dst_start_node_id;
+            if (exit.action != 0) {
+                volatile_header->dst_start_node_id = (uint32_t{exit.mesh_id} << 16) | exit.chip_id;
+            }
+            fabric_set_2d_intermesh_landing_route(header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
+            volatile_header->dst_start_node_id = destination;
+            if (exit.action != 0 && exit.mesh_id == routing_table.my_mesh_id) {
+                header->route_buffer[MESH_Y_SIZE + exit.chip_id % MESH_X_SIZE] = exit.action;
+            }
+        } else {
+            fabric_set_2d_intermesh_landing_route(header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
+        }
+    }
+    // A packet into another domain: the exit its sender chose (action 0: not such a packet).
+    static FORCE_INLINE InterDomainExit domain_exit(tt_l1_ptr PACKET_HEADER_TYPE* header) {
+        const volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
+        const uint32_t word = volatile_header->routing_fields.value;
+        return InterDomainExit{
+            .mesh_id = static_cast<uint16_t>(word),
+            .chip_id = static_cast<uint8_t>(word >> 16),
+            .action = static_cast<uint8_t>(word >> 24)};
     }
     // The action byte, by the codec's decode for this build (Fabric2DRoutingConfig over Routing2DCodec; Y first after a
     // landing). The link's DMA writes the header, so its bytes are read through the codec's volatile API.
     // owns the decode.
     static FORCE_INLINE uint8_t action(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates& my_chip) {
         const volatile uint8_t* const route_buffer = header->route_buffer;
-        if constexpr (INTERMESH_INGRESS) {
+        if constexpr (over_domain) {
+            constexpr uint8_t directions = 0xF;
+            const uint8_t domain_action =
+                INTERMESH_INGRESS
+                    ? Routing2DCodec::decode_action_y_first(route_buffer, VC2_DOMAIN_Y, VC2_DOMAIN_X, VC2_DOMAIN_Y_SIZE)
+                    : Routing2DCodec::decode_action<VC2_DOMAIN_FACING, Fabric2DAxis::Y>(
+                          route_buffer, VC2_DOMAIN_Y, VC2_DOMAIN_X, VC2_DOMAIN_Y_SIZE);
+            return (domain_action & ~directions) | vc2_domain_routers[domain_action & directions];
+        } else if constexpr (INTERMESH_INGRESS) {
             return Routing2DCodec::decode_action_y_first(route_buffer, my_chip.y, my_chip.x, MESH_Y_SIZE);
         } else {
             return Fabric2DRoutingConfig::decode_action<static_cast<eth_chan_directions>(my_direction)>(
@@ -89,7 +141,14 @@ struct Routing2D {
         }
         if constexpr (intermesh_exits) {
             const volatile PACKET_HEADER_TYPE* const volatile_header = header;
-            const uint32_t dst_mesh = volatile_header->dst_start_mesh_id;
+            uint32_t dst_mesh = volatile_header->dst_start_mesh_id;
+            if constexpr (vc2_domain) {
+                // into another domain: the destination numbers the other domain's chip, so leave toward the exit's mesh
+                const InterDomainExit exit = domain_exit(header);
+                if (exit.action != 0) {
+                    dst_mesh = exit.mesh_id;
+                }
+            }
             const uint32_t route_action = action(header, my_chip);
             return Routing2DCodec::action_is_intermesh_exit(route_action, dst_mesh, my_chip.mesh_id)
                        ? exit_action<VC>(dst_mesh)

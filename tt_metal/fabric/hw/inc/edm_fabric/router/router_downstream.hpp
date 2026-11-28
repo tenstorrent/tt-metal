@@ -56,7 +56,10 @@ template <size_t VC>
 constexpr uint32_t live_downstreams() {
     if constexpr (is_2d) {
         return Routing2DCodec::live_downstreams<static_cast<eth_chan_directions>(my_direction)>(
-            DOWNSTREAM_EDM_COUNT_BY_VC[VC], is_intermesh_router, is_intramesh_router_on_edge);
+            DOWNSTREAM_EDM_COUNT_BY_VC[VC],
+            is_intermesh_router,
+            // VC2 over the domain's mesh turns by the domain's axes, which this router's facing doesn't give
+            is_intramesh_router_on_edge || (VC == 2 && vc2_domain));
     } else {
         // In 1d, we either have one downstream or none
         return DOWNSTREAM_EDM_COUNT_BY_VC[VC] > 0 ? 1u : 0u;
@@ -111,7 +114,7 @@ struct DownstreamTraits {
     // downstream; a 1D downstream has one forwarding channel. Only forwarding_position's check reads it.
     template <size_t ENTRY>
     static constexpr size_t ranked_forwarding_position() {
-        constexpr size_t first = VC == 0 ? 1 : VC == 1 ? VC1_FABRIC_POSITION_START : VC2_FABRIC_POSITION_START + 1;
+        constexpr size_t first = VC == 0 ? 1 : VC == 1 ? VC1_FABRIC_POSITION_START : VC2_FABRIC_POSITION_START;
         if constexpr (is_2d) {
             constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
             return first + compact_index_on(facing, static_cast<size_t>(my_direction));
@@ -141,9 +144,11 @@ struct DownstreamTraits {
     // Whether VC's forwards go to one destination for the whole run, which its forward buffer pair then keeps
     // (FullPresetForwards): the router picks no downstream at run time (not intermesh, not on a mesh's edge), and every
     // VC forwarded on the pair has one live downstream (every 1D router; an E/W-facing 2D router inside a mesh), the
-    // same. Otherwise the pair is partially preset, so no VC's commands overwrite another's preset.
+    // same. Otherwise the pair is partially preset, so no VC's commands overwrite another's preset. Not where VC2 over
+    // the domain's mesh is on the pair: its downstreams are the domain's, which the pair's owner VC may not have.
     static constexpr bool one_destination = !is_intermesh_router && !is_intermesh_router_on_edge &&
                                             !is_intramesh_router_on_edge &&
+                                            !(vc2_domain && ((CommandBuffers::vcs_on_forward_pair(VC) >> 2) & 1u)) &&
                                             pair_has_one_destination<VC>(std::make_index_sequence<MAX_NUM_VCS>{});
 
     static_assert(count > 0 && count <= max_downstreams);

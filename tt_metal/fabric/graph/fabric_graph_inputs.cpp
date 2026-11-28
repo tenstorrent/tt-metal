@@ -256,4 +256,51 @@ std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimet
     return ports;
 }
 
+std::vector<ChannelPort> ports_from_domain_links(
+    const std::vector<DomainLink>& links, const std::vector<Port>& ports, const MeshGraph& mesh_graph) {
+    std::map<FabricNodeId, std::set<RoutingDirection>> taken;
+    for (const auto& p : ports) {
+        taken[p.node].insert(*p.direction);
+    }
+    std::map<std::pair<FabricNodeId, FabricNodeId>, RoutingDirection> direction_of;
+    std::map<std::pair<FabricNodeId, FabricNodeId>, uint32_t> planes;
+    std::vector<ChannelPort> out;
+    auto end = [&](const FabricNodeId& node, chan_id_t chan, const FabricNodeId& peer) {
+        auto it = direction_of.find({node, peer});
+        if (it == direction_of.end()) {
+            auto& used = taken[node];
+            used.insert(RoutingDirection::Z);
+            const auto d = free_direction(node, mesh_graph, used);
+            TT_FATAL(d.has_value(), "inter-domain: {} has no free direction for its VC2 link to {}", node, peer);
+            used.insert(*d);
+            it = direction_of.emplace(std::pair{node, peer}, *d).first;
+        }
+        out.push_back(ChannelPort{
+            .port =
+                Port{
+                    .node = node,
+                    .direction = PortDirection{it->second},
+                    .plane = planes[{node, peer}]++,
+                    .peer = peer,
+                    .capability = EdgeCapability::INTRADOMAIN},
+            .eth_chan = chan});
+    };
+    for (const auto& l : links) {
+        end(l.a, l.a_chan, l.b);
+        end(l.b, l.b_chan, l.a);
+    }
+    return out;
+}
+
+std::map<std::pair<FabricNodeId, RoutingDirection>, RoutingDirection> vc2_directions(
+    const std::vector<Port>& ports, const InterDomainMesh& domain) {
+    std::map<std::pair<FabricNodeId, RoutingDirection>, RoutingDirection> directions;
+    for (const auto& p : ports) {
+        if (const auto d = domain.direction(p.node, p.peer)) {
+            directions[{p.node, *p.direction}] = *d;
+        }
+    }
+    return directions;
+}
+
 }  // namespace tt::tt_fabric::graph

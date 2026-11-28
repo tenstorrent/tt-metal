@@ -38,10 +38,13 @@ struct WiringOptions {
     IntermeshVCConfig vc_config;
     std::map<MeshId, ExpressAxis> express_axis;
     std::set<MeshId> wrap_around_meshes;
+    // where VC2 forwards: each port on a domain edge, by its direction in the domain
+    std::map<std::pair<FabricNodeId, RoutingDirection>, RoutingDirection> vc2_directions;
 };
 
 inline EdgeCapability stock_capability(EdgeCapability c) {
-    return c == EdgeCapability::INTERDOMAIN ? EdgeCapability::INTRAMESH_CARDINAL : c;
+    return c == EdgeCapability::INTERDOMAIN || c == EdgeCapability::INTRADOMAIN ? EdgeCapability::INTRAMESH_CARDINAL
+                                                                                : c;
 }
 
 // Same routers, VCs and turns as the stock builder: the turn sets come from turn_set_for_router.

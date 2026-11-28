@@ -96,7 +96,9 @@ uint32_t layout_fingerprint(const InterDomainPort& port) {
           config.inter_domain_ctrl_address,
           sizeof(InterDomainRouterControl),
           offsetof(InterDomainRouterControl, peer_marker),
-          offsetof(InterDomainRouterControl, marker)}) {
+          offsetof(InterDomainRouterControl, marker),
+          // a VC2 route spans the larger domain's grid: both ends size their headers alike
+          fabric_context(port).get_fabric_packet_header_size_bytes()}) {
         h = (h ^ static_cast<uint32_t>(v)) * 16777619u;
     }
     return h;

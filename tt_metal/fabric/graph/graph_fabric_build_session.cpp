@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <set>
 
+#include <enchantum/enchantum.hpp>
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
@@ -94,25 +96,57 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     // logical: topology and turns
     const auto mgd_ports = ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis);
     auto ports = with_live_planes(mgd_ports, control_plane);
+    std::vector<ChannelPort> domain_ports;
     if (inter_domain) {
+        TT_FATAL(
+            is_2D_topology(topology),
+            "fabric graph: inter-domain needs a 2D fabric, got {}",
+            enchantum::to_string(topology));
+        auto taken = mgd_ports;
+        if (fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
+            domain_ports = ports_from_domain_links(
+                fabric_context.get_inter_domain_mesh().vc2_links, mgd_ports, control_plane.get_mesh_graph());
+            for (const auto& p : domain_ports) {
+                ports.push_back(p.port);
+                taken.push_back(p.port);
+            }
+        }
         perimeter_ = perimeter_ports(
             unused_links(
                 control_plane,
                 fabric_context.get_cluster(),
                 rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : ""),
-            mgd_ports,
+            taken,
             control_plane.get_mesh_graph(),
             topology);
         const auto down =
             std::count_if(perimeter_.begin(), perimeter_.end(), [](const auto& p) { return !p.link_trained; });
-        log_info(tt::LogFabric, "fabric graph: {} perimeter ports, {} untrained", perimeter_.size(), down);
+        log_info(
+            tt::LogFabric,
+            "fabric graph: {} perimeter ports, {} untrained, {} VC2-only ports",
+            perimeter_.size(),
+            down,
+            domain_ports.size());
         for (const auto& p : perimeter_) {
             if (*p.direction == RoutingDirection::Z) {
                 log_warning(
                     tt::LogFabric, "fabric graph: no inter-domain router on Z yet: {} chan {}", p.node, p.eth_chan);
             }
         }
-        const auto open_ports = ports_from_perimeter(perimeter_);
+        // a landing feeds its own plane's routers: none on a plane where the chip has other routers but none there (a
+        // chip without routers is its whole domain: a landing only delivers)
+        std::map<FabricNodeId, std::set<uint32_t>> planes;
+        for (const auto& p : ports) {
+            planes[p.node].insert(p.plane);
+        }
+        const auto routed = [&](const PerimeterPort& p) {
+            const auto it = planes.find(p.node);
+            return p.link_trained && *p.direction != RoutingDirection::Z &&
+                   (it == planes.end() || it->second.contains(p.plane));
+        };
+        std::vector<PerimeterPort> with_routers;
+        std::copy_if(perimeter_.begin(), perimeter_.end(), std::back_inserter(with_routers), routed);
+        const auto open_ports = ports_from_perimeter(with_routers);
         ports.insert(ports.end(), open_ports.begin(), open_ports.end());
         std::vector<internal::InterDomainPort> api_ports;
         api_ports.reserve(perimeter_.size());
@@ -123,17 +157,34 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
                 .direction = *p.direction,
                 .plane = p.plane,
                 .link_trained = p.link_trained,
-                .has_router = p.link_trained && *p.direction != RoutingDirection::Z,
+                .has_router = routed(p),
                 .peer_asic = p.peer_asic,
                 .peer_chan = p.peer_chan});
         }
         fabric_context.get_builder_context().set_inter_domain_ports(std::move(api_ports));
     }
-    const WiringOptions options{
+    WiringOptions options{
         .topology = topology,
         .vc_config = fabric_context.get_builder_context().get_intermesh_vc_config(),
         .express_axis = express_axis,
         .wrap_around_meshes = wrap_around_meshes};
+    if (options.vc_config.vc2_forwards) {
+        const auto& domain = fabric_context.get_inter_domain_mesh();
+        options.vc2_directions = vc2_directions(ports, domain);
+        for (const auto& [node, chip] : domain.domain_chip) {
+            log_info(tt::LogFabric, "fabric graph: VC2 domain chip {} is {}", chip, node);
+        }
+        for (const auto& p : domain_ports) {
+            log_info(
+                tt::LogFabric,
+                "fabric graph: VC2-only {} {} plane {} chan {} to {}",
+                p.port.node,
+                *p.port.direction,
+                p.port.plane,
+                p.eth_chan,
+                p.port.peer);
+        }
+    }
     const auto rules = stock_wiring_rules(ports, options);
     auto logical = lower_to_logical(ports, *rules);
     validate(logical, *rules, ValidationLimits{});
@@ -157,6 +208,9 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     std::map<std::pair<FabricNodeId, RoutingDirection>, std::vector<chan_id_t>> perimeter_chans;
     for (const auto& p : perimeter_) {
         perimeter_chans[{p.node, *p.direction}].push_back(p.eth_chan);
+    }
+    for (const auto& p : domain_ports) {
+        perimeter_chans[{p.port.node, *p.port.direction}].push_back(p.eth_chan);
     }
     graph_->eth_chans = bind_eth_channels(graph_->logical, [&](const FabricNodeId& node, RoutingDirection d) {
         const auto it = perimeter_chans.find({node, d});

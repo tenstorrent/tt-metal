@@ -230,6 +230,7 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         .fabric_tensix_config = fabric_tensix_config,
         .direction = direction,
         .arch = fabric_context_.get_hal().get_arch(),
+        .vc2_forwards = intermesh_vc_config_.vc2_forwards,
     };
 
     // MUX/UDM modes are mutually exclusive with VC2 — zero out VC2 channels
@@ -409,10 +410,7 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
     }
     if (fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
         TT_FATAL(config.requires_vc2, "inter-domain fabric needs VC2: Blackhole, no UDM or mux");
-        config.vc2_forwards = !config.requires_vc1;
-        if (config.requires_vc1) {
-            log_warning(tt::LogFabric, "inter-domain on a multi-mesh fabric: VC2 doesn't span the domain (#67139)");
-        }
+        config.vc2_forwards = true;
     }
 
     if (fabric_context_.get_rtoptions().get_enable_fabric_host_rdma()) {

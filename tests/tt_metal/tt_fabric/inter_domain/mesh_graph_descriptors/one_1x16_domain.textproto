@@ -1,0 +1,11 @@
+# An inter-domain domain of one 1x16 mesh (half a Galaxy): VC0 snakes, VC2 spans the chips as one 4x4.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 16 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

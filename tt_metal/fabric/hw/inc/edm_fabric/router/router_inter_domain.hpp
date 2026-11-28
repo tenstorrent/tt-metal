@@ -158,6 +158,21 @@ __attribute__((noinline, cold)) void exchange_markers() {
     c->command = InterDomainCommand::NONE;
 }
 
+// A forwarding channel's slots not yet credited back to its upstream router, credited; its counts restarted. One copy
+// for every channel.
+__attribute__((noinline, cold)) void return_forwarding_slots(
+    SenderChannelProgress& progress, uint64_t upstream_free_slots_addr, bool first_level_ack) {
+    const uint32_t returned = first_level_ack ? progress.first_level_acked : progress.completed;
+    if (progress.sent != returned) {
+        noc_inline_dw_write<InlineWriteDst::REG, true>(
+            upstream_free_slots_addr,
+            pack_value_for_inc_on_write_stream_reg_write(progress.sent - returned),
+            INLINE_WRITE_ALL_BYTES,
+            tt::tt_fabric::worker_handshake_noc);
+    }
+    progress.sent = progress.completed = progress.first_level_acked = 0;
+}
+
 __attribute__((noinline, cold)) void reset_link(const RuntimeArgs& args) {
     zero_credit_counters(to_sender_remote_ack_counters_base_address);
     zero_credit_counters(to_sender_remote_completion_counters_base_address);
@@ -166,13 +181,7 @@ __attribute__((noinline, cold)) void reset_link(const RuntimeArgs& args) {
         constexpr size_t CH = decltype(i)::value;
         if constexpr (((SenderChannels::forwarding_channels >> CH) & 1u) != 0) {
             auto& state = carried_forwarding.template get<CH>();
-            auto& progress = state.progress;
-            const uint32_t returned =
-                SenderChannel<CH>::first_level_ack ? progress.first_level_acked : progress.completed;
-            if (progress.sent != returned) {
-                ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, progress.sent - returned);
-            }
-            progress.sent = progress.completed = progress.first_level_acked = 0;
+            return_forwarding_slots(state.progress, state.upstream_free_slots_addr, SenderChannel<CH>::first_level_ack);
         }
     });
 }
