@@ -1,0 +1,18 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16"
+    ],
+    "layout": [
+      "TILE"
+    ],
+    "in_scheme": [
+      "width_sharded"
+    ],
+    "buffer": [
+      "dram"
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}
