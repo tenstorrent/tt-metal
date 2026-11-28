@@ -76,10 +76,9 @@ ProgramArtifacts ProdAllDeviceOperation::ProdAllProgramFactory::create_program_a
         .enable_32_bit_dest = fp32_dest_acc_en,
         .double_buffer_dest = true,  // legacy dst_full_sync_en = false -> !false
     };
-    // Compute consumes INPUT_DFB; with enable_32_bit_dest an explicit unpack mode is required for a
-    // Float32-formatted consumed DFB. Legacy set no unpack_to_dest_mode (default -> UnpackToSrc).
+    const bool sfpu_mul = in_cb_data_format == DataFormat::Float32 && fp32_dest_acc_en;
     if (in_cb_data_format == DataFormat::Float32) {
-        compute_hw.unpack_modes.insert({INPUT_DFB, UnpackMode::UnpackToSrc});
+        compute_hw.unpack_modes.insert({INPUT_DFB, sfpu_mul ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc});
     }
 
     // ------------------------------------------------------------------
@@ -117,7 +116,7 @@ ProgramArtifacts ProdAllDeviceOperation::ProdAllProgramFactory::create_program_a
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER},
              m2::DFBBinding{
                  .dfb_spec_name = OUTPUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER}},
-        .compile_time_args = {{"num_tiles", num_tiles}},
+        .compile_time_args = {{"num_tiles", num_tiles}, {"sfpu_mul", sfpu_mul ? 1u : 0u}},
         .hw_config = compute_hw,
     };
 

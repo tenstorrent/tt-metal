@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -17,6 +18,7 @@ void kernel_main() {
     // dfb::in = input DFB (c_0), dfb::out = output DFB (c_3).
     constexpr std::uint32_t onetile = 1;
     constexpr std::uint32_t dst0 = 0;
+    constexpr bool sfpu_mul = get_arg(args::sfpu_mul) == 1;
 
     DataflowBuffer dfb_in0_obj(dfb::in);
     DataflowBuffer dfb_out0_obj(dfb::out);
@@ -35,11 +37,22 @@ void kernel_main() {
         copy_tile(dfb::in, 0, dst0);
         dfb_in0_obj.pop_front(onetile);
 
-        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in);
-        for (std::uint32_t j = 1; j < num_input_tiles; ++j) {
-            dfb_in0_obj.wait_front(onetile);
-            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in, 0, dst0);
-            dfb_in0_obj.pop_front(onetile);
+        if constexpr (sfpu_mul) {
+            for (std::uint32_t j = 1; j < num_input_tiles; ++j) {
+                dfb_in0_obj.wait_front(onetile);
+                copy_init(dfb::in);
+                copy_tile(dfb::in, 0, dst0 + 1);
+                mul_binary_tile_init();
+                mul_binary_tile(dst0, dst0 + 1, dst0);
+                dfb_in0_obj.pop_front(onetile);
+            }
+        } else {
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in);
+            for (std::uint32_t j = 1; j < num_input_tiles; ++j) {
+                dfb_in0_obj.wait_front(onetile);
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in, 0, dst0);
+                dfb_in0_obj.pop_front(onetile);
+            }
         }
 
         tile_regs_commit();
