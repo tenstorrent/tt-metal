@@ -44,7 +44,10 @@ def check(name: str, status: str = FAIL, details: str = "bad", **kw) -> Check:
 # Row id -> (a check that reports it, text its repair must hold).
 CASES = {
     "F01": (check("tray_power", cause="POWER", parts=TRAY2), "replace UBB2's bus bar set"),
-    "F02": (check("tray_power", WARN, cause="POWER", parts=TRAY2), "watch UBB2's 12 V feed"),
+    "F02": (
+        check("tray_power", WARN, cause="POWER", parts=TRAY2),
+        "watch UBB2's 12 V feed; if its under-voltage latch sets again",
+    ),
     "F03": (check("busbar_brick_vout", WARN, "PSU1 12.00 V"), "12.24 V or 12.35 V"),
     "F04": (check("pcie_enum_count", cause="POWER", parts=[CHIP]), "fix UBB2's 12 V feed"),
     "F05": (check("pcie_enum_count", parts=TRAY2), "reseat UBB2, then replace it"),
@@ -98,6 +101,8 @@ class TestRows(unittest.TestCase):
                 cause = c.cause or ROWS[rid].cause
                 self.assertEqual(lines[1:-3], [f"  Cause: {cause}"] * bool(cause))
                 self.assertIn(repair, lines[-3])
+                if rid == "F02":  # a latch alone is watched, not reset
+                    self.assertNotIn("glx_reset", lines[-3])
 
     def test_every_row_check_has_an_emitter(self):
         """A row's check must be emitted: an exact name, or for "x*" a name starting with x."""
@@ -160,6 +165,12 @@ class TestVerdict(unittest.TestCase):
         lines = verdict_lines(report(phase("eth", check("eth_status_heartbeat", details="2 stale", ip="eth"))))
         self.assertEqual(lines[0], "Fault 1: FAIL eth_status_heartbeat: 2 stale | host")
         self.assertIn("reseat or replace the cable", lines[1])
+
+    def test_warn_only(self):
+        lines = verdict_lines(report(phase("snapshot", check("asic_thermal_precheck", WARN, "hot", ip="thermal"))))
+        self.assertEqual(lines[-2], "Final verdict: WARN: 1 warning(s)")
+        dram = check("dram_status", WARN, "ch3", ip="gddr", parts=[CHIP])
+        self.assertIn("Repair: re-run", verdict_lines(report(phase("snapshot", dram)))[2])
 
     def test_chips_on_several_trays_keep_that_tray(self):
         two = check("pcie_gen", WARN, "Gen4", ip="pcie", parts=[CHIP, "0000:c3:00.0 (UBB3/U3)"])

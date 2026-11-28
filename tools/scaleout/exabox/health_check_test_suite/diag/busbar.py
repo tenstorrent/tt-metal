@@ -166,15 +166,19 @@ def boot_time() -> float:
 
 
 def check_last_boot(phase: Phase) -> None:
-    """A leg file left by another boot that started before the leg's end: the host rebooted during that leg.
-    A later boot means a killed run left the file, and the host rebooted after it."""
+    """A leg file left by another boot that started before the leg's end: the host rebooted during that leg (FAIL).
+    A later boot: a killed run left the file or the host stayed off past the leg's end (WARN)."""
     try:
         leg = json.loads(LEG_FILE.read_text())
     except (OSError, ValueError):
         return
-    if leg.get("boot_id") and leg["boot_id"] != boot_id() and boot_time() <= leg.get("until", float("inf")):
-        why = f"host rebooted during {leg.get('leg', '?')} -> POWER: PSU/feed, see SEL"
-        _add(phase, BUSBAR_REBOOT, FAIL, why, data=leg, ip="other", cause="POWER")
+    if leg.get("boot_id") and leg["boot_id"] != boot_id():
+        name = leg.get("leg", "?")
+        if boot_time() <= leg.get("until", float("inf")):
+            why = f"host rebooted during {name} -> POWER: PSU/feed, see SEL"
+            _add(phase, BUSBAR_REBOOT, FAIL, why, data=leg, ip="other", cause="POWER")
+        else:
+            _add(phase, BUSBAR_REBOOT, WARN, f"host rebooted after {name} ended; see SEL", data=leg, ip="other")
     LEG_FILE.unlink(missing_ok=True)
 
 

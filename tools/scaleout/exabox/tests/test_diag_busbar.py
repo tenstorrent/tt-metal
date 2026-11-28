@@ -29,7 +29,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 from diag import busbar, sensors, xchip  # noqa: E402
 from diag.galaxy import expected_bdf, format_bdf  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
 from diag.verdict import ROWS, verdict_lines  # noqa: E402
 from test_diag_resets import fake_sysfs  # noqa: E402
 from test_diag_sensors import SensorCase  # noqa: E402
@@ -201,11 +201,17 @@ class TestStage(BusbarCase):
         self.assertNotIn("busbar_chunk1m", by)
 
     def test_reboot_during_a_leg_is_a_power_fail(self):
-        (self.dir / "leg.json").write_text(json.dumps({"leg": "chunk25m", "boot_id": "boot-old"}))
-        _, by = self.run_stage(STEPS)
-        self.assertEqual(by["busbar_reboot"].details, "host rebooted during chunk25m -> POWER: PSU/feed, see SEL")
-        (self.dir / "leg.json").write_text(json.dumps({"leg": "chunk25m", "boot_id": "boot-old", "until": 1}))
-        self.assertNotIn("busbar_reboot", self.run_stage(STEPS)[1])  # a killed run's file, booted after its end
+        during = (FAIL, "host rebooted during chunk25m -> POWER: PSU/feed, see SEL")
+        for until, want in (
+            (None, during),  # a leg file with no end
+            (time.time() + 3600, during),  # booted before the leg's end
+            (1, (WARN, "host rebooted after chunk25m ended; see SEL")),  # booted after it
+        ):
+            with self.subTest(until=until):
+                leg = {"leg": "chunk25m", "boot_id": "boot-old", **({} if until is None else {"until": until})}
+                (self.dir / "leg.json").write_text(json.dumps(leg))
+                c = self.run_stage(STEPS)[1]["busbar_reboot"]
+                self.assertEqual((c.status, c.details), want)
 
     def test_new_sel_power_line_is_a_power_fail(self):
         orig = busbar._after_step
@@ -242,7 +248,17 @@ class TestStage(BusbarCase):
         os.chdir(self.dir.parent)  # a relative --hook still runs once the loads' cwd is the tt-metal root
         _, by = self.run_stage(pv, hook=f"{self.dir.name}/hook.sh")
         self.assertEqual(by["busbar_power_virus"].status, PASS)
-        self.assertEqual((self.dir / "hook.args").read_text().split()[::4], ["load", str(self.dir)])
+        args = (self.dir / "hook.args").read_text().split()
+        self.assertEqual(args, ["load", "power_virus", "5", str(self.dir / "logs"), str(self.dir)])
+
+    def test_call_hook_makes_relative_paths_absolute(self):
+        (self.dir / "hook.sh").write_text(f'#!/bin/sh\necho "$@" > {self.dir}/hook.args\n')
+        (self.dir / "hook.sh").chmod(0o755)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.dir)
+        self.assertEqual(busbar.call_hook("./hook.sh", "load", "x", "1", Path("out"), False, self.dir.parent), 0)
+        args = (self.dir / "hook.args").read_text().split()
+        self.assertEqual(args, ["load", "x", "1", str(self.dir / "out")])
 
     def test_sigterm_stops_the_load_cleanly(self):
         self.loads["didt"] = "import time; time.sleep(60)"
