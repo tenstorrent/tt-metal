@@ -105,8 +105,9 @@ def build_plan(input_tensor, canonical_dims) -> NhwcPlan:
     )
     budget = L1_OP_BUDGET_BYTES - out_l1
 
+    # Row-first: column-first measured +31 % on Panoptic p53 (32 cores, L1).
     num_cores, all_cores, groups_g1, groups_g2, assignment = split_units(
-        worker_grid(input_tensor.device()), tensor_groups
+        worker_grid(input_tensor.device()), tensor_groups, row_wise=True
     )
     depth = min(GROUP_DEPTH, groups_g1)
     while depth > 1 and _footprint(depth, in_page_bytes, row_page_bytes) > budget:

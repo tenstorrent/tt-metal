@@ -78,18 +78,20 @@ def out_l1_bytes_per_core(output_buffer_type, out_num_pages, out_bank_page_bytes
     return _div_up(out_num_pages, num_l1_banks) * out_bank_page_bytes
 
 
-def split_units(grid, num_units):
-    """split_work_to_cores over the full grid (row_wise=True) plus each core's contiguous unit range,
-    cores walked row-major: (num_cores, all_cores, units_g1, units_g2, [(core, start, count)])."""
+def split_units(grid, num_units, row_wise=False):
+    """split_work_to_cores over the full grid plus each core's contiguous unit range, cores walked in
+    the fill order: (num_cores, all_cores, units_g1, units_g2, [(core, start, count)]).
+    Column-first is the default: a partly filled grid then starts its kernels ~300 ns closer
+    together (Qwen cells, 12 to 32 cores); full-grid regimes measure flat either way."""
     num_cores, all_cores, core_group_1, core_group_2, units_g1, units_g2 = ttnn.split_work_to_cores(
-        grid, num_units, row_wise=True
+        grid, num_units, row_wise=row_wise
     )
     assignment = []
     start = 0
     for group, per_core in ((core_group_1, units_g1), (core_group_2, units_g2)):
         if per_core == 0:
             continue
-        for core in ttnn.corerange_to_cores(group, None, True):
+        for core in ttnn.corerange_to_cores(group, None, row_wise):
             assignment.append((core, start, per_core))
             start += per_core
     assert start == num_units
