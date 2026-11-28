@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Row-block writer (BRISC / NoC1): store_block of R1 staged_reorder, packer_untilize and
-// sharded_in_place.
+// Row-block writer (BRISC / NoC1) of the untilize regimes (R1 staged_reorder, R3 packer_untilize,
+// R4 sharded_in_place): store_block.
 //
-// Per block: one cb_wait_front, one write per live row carrying the block's live bytes of that
-// row, one noc_async_writes_flushed, one cb_pop_front. The segment ends at the row's last live
-// byte, so stale stage bytes (padding columns, unread faces, untilized stale tiles) never leave L1.
-// The block's stage is one whole-block page (R1) or block_cols_tiles tile pages per tile-row as the
-// untilize helper packs them (tiled_stage); its layout is the same either way.
+// Per block: one cb_wait_front of the block's row-stage tile pages (block_cols_tiles per tile-row, as
+// the untilize packs them: 32 rows of block_cols_tiles * 64 B), one write per live row carrying the
+// block's live bytes of that row, one noc_async_writes_flushed, one cb_pop_front. The segment ends
+// at the row's last live byte, so stale stage bytes (padding columns, unread faces, untilized stale
+// tiles) never leave L1.
 // A bfloat8_b input (patch_bfp8_nans) also waits the block's cb_nan_marks page and stores the host's
 // NaN rendering over the marked datums before any row is written (g6_to_layout_bfp8_nan_marks.hpp).
 // Rows are addressed through get_noc_addr(page, offset): the RM page stride is the aligned
@@ -25,11 +25,10 @@ using namespace g6_to_layout;
 
 void kernel_main() {
     constexpr uint32_t cb_row_block = get_compile_time_arg_val(Geometry::next_ct_arg + 0);
-    constexpr bool tiled_stage = get_compile_time_arg_val(Geometry::next_ct_arg + 1) != 0;
-    constexpr bool sharded = get_compile_time_arg_val(Geometry::next_ct_arg + 2) != 0;
-    constexpr bool patch_bfp8_nans = get_compile_time_arg_val(Geometry::next_ct_arg + 3) != 0;
-    constexpr uint32_t cb_nan_marks = get_compile_time_arg_val(Geometry::next_ct_arg + 4);
-    constexpr auto output_args = TensorAccessorArgs<Geometry::next_ct_arg + 5>();
+    constexpr bool sharded = get_compile_time_arg_val(Geometry::next_ct_arg + 1) != 0;
+    constexpr bool patch_bfp8_nans = get_compile_time_arg_val(Geometry::next_ct_arg + 2) != 0;
+    constexpr uint32_t cb_nan_marks = get_compile_time_arg_val(Geometry::next_ct_arg + 3);
+    constexpr auto output_args = TensorAccessorArgs<Geometry::next_ct_arg + 4>();
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const auto output = TensorAccessor(output_args, output_addr);
@@ -38,7 +37,7 @@ void kernel_main() {
     CoreBlocks<sharded> blocks;
     Block block;
     while (blocks.next(block)) {
-        const uint32_t block_pages = tiled_stage ? moved_tile_rows<sharded>(block) * Geometry::block_cols_tiles : 1;
+        const uint32_t block_pages = moved_tile_rows<sharded>(block) * Geometry::block_cols_tiles;
         const uint32_t segment_offset = block.col * TILE_ROW_BYTES;
         const uint32_t segment_bytes = row_segment_bytes(block);
 

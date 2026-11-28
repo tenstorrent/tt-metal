@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Untilize compute of R3 packer_untilize and R4 sharded_in_place: untilize_block.
+// Untilize compute of the untilize regimes (R1 staged_reorder, R3 packer_untilize, R4
+// sharded_in_place): untilize_block.
 //
-// cb_tile_window (bfp8 tile pages, reader -> compute) -> unpack to bf16 -> pack-untilize ->
-// cb_row_block (bf16 tile pages, compute -> writer): per block, moved_tile_rows tile-rows of
-// block_cols_tiles tiles, each landing as 32 rows of block_cols_tiles * 64 B, the row stage the
-// shared row-block writer expects. The walk is the reader's and the writer's, so all three kernels
-// agree on every block's page count. Pack-untilize init/uninit run once per kernel.
+// cb_tile_window (tile pages, reader -> compute) -> unpack -> pack-untilize -> cb_row_block (tile
+// pages, compute -> writer): per block, moved_tile_rows tile-rows of block_cols_tiles tiles, each
+// landing as 32 rows of block_cols_tiles * 64 B, the row stage the shared row-block writer expects.
+// R3/R4 unpack bfp8 to bf16. R1's CBs are UInt16 views of bf16 bytes, so unpack, MOVA2D and pack move
+// 16-bit integers and every bf16 pattern comes out bit-identical (compute_kernel_hw_startup also keeps
+// the Src zero flag disabled for a UInt16 operand).
+// The walk is the reader's and the writer's, so all three kernels agree on every block's page count.
+// Pack-untilize init/uninit run once per kernel.
 
 #include <cstdint>
 
