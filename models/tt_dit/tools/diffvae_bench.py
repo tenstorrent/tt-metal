@@ -753,7 +753,7 @@ TRACE_REGION_SIZE = 200_000_000
 def open_mesh(shape=(4, 8), *, fabric: ttnn.FabricConfig | None = None, trace_region_size: int | None = None):
     """Open a mesh the way the ``mesh_device`` fixture does: fabric first, the same default device
     params, fabric disabled again on close."""
-    from tests.scripts.common import get_updated_device_params
+    from tt_py_test_utils_common.device_params import get_updated_device_params
 
     params = {}
     if trace_region_size is not None:

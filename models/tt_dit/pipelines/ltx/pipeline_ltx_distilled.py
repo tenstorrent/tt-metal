@@ -801,7 +801,8 @@ class LTXDistilledPipeline(LTXPipeline):
             # slice of warmup wall time.
             if not skip_scalar:
                 with walltime.timed("warmup", "stage1 build"):
-                    self._warm(self._denoise_no_guidance,
+                    self._warm(
+                        self._denoise_no_guidance,
                         v_p,
                         a_p,
                         num_frames=num_frames,
@@ -816,7 +817,8 @@ class LTXDistilledPipeline(LTXPipeline):
             if i2v_families:
                 logger.info(f"warmup stage 1 (per-token family): {s1_h}x{s1_w}, frame-0 pin")
                 with walltime.timed("warmup", "stage1_i2v build"):
-                    self._warm(self._denoise_no_guidance,
+                    self._warm(
+                        self._denoise_no_guidance,
                         v_p,
                         a_p,
                         num_frames=num_frames,
@@ -841,7 +843,8 @@ class LTXDistilledPipeline(LTXPipeline):
             dummy_ref_s1 = torch.zeros(1, self.in_channels, ref_lf, s1_lh, s1_lw)
             logger.info(f"warmup stage 1 (ref): {s1_h}x{s1_w} +{ref_lf} ref frames, σ={s1_sigmas}")
             with walltime.timed("warmup", "stage1_ref build"):
-                self._warm(self._denoise_no_guidance,
+                self._warm(
+                    self._denoise_no_guidance,
                     v_p,
                     a_p,
                     num_frames=num_frames,
@@ -881,7 +884,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 # warmup slice.
                 if not skip_scalar:
                     with walltime.timed("warmup", "stage2 build"):
-                        self._warm(self._denoise_no_guidance,
+                        self._warm(
+                            self._denoise_no_guidance,
                             v_p,
                             a_p,
                             num_frames=num_frames,
@@ -898,7 +902,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 if i2v_families:
                     logger.info(f"warmup stage 2 (per-token family): {height}x{width}, frame-0 pin")
                     with walltime.timed("warmup", "stage2_i2v build"):
-                        self._warm(self._denoise_no_guidance,
+                        self._warm(
+                            self._denoise_no_guidance,
                             v_p,
                             a_p,
                             num_frames=num_frames,
@@ -925,7 +930,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 dummy_ref_full = torch.zeros(1, self.in_channels, ref_lf, full_lh, full_lw)
                 logger.info(f"warmup stage 2 (ref): {height}x{width} +{ref_lf} ref frames, σ={s2_sigmas}")
                 with walltime.timed("warmup", "stage2_ref build"):
-                    self._warm(self._denoise_no_guidance,
+                    self._warm(
+                        self._denoise_no_guidance,
                         v_p,
                         a_p,
                         num_frames=num_frames,
@@ -946,7 +952,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 self._prepare_upsampler()
                 logger.info("warmup stage transition (traced, device-resident)")
                 with walltime.timed("warmup", "stage transition build"):
-                    self._warm(self._run_stage_transition,
+                    self._warm(
+                        self._run_stage_transition,
                         self._trace_state[self._trace_variant_key("s1", kf_per_token)].tt_video_lat,
                         num_frames=num_frames,
                         s1_height=height // 2,
@@ -979,6 +986,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
             else:
                 logger.info("warmup audio decode (on-device, eager)")
+
                 # Bounded: a stall with no kernel-build progress ends the worker for a restart instead of
                 # holding it forever (exabox job 137104); a raised fault is retried once in-process.
                 def _audio_warm():
@@ -1100,7 +1108,9 @@ class LTXDistilledPipeline(LTXPipeline):
             stages = w["stages"]
             families = []
             if not w.get("skip_scalar"):
-                families.append(("s1", "s2", w["kf_anchors"], self._device_resident(None) and not w["kf_anchors"], False))
+                families.append(
+                    ("s1", "s2", w["kf_anchors"], self._device_resident(None) and not w["kf_anchors"], False)
+                )
             if w["i2v_families"]:
                 families.append(("s1", "s2", [0], False, False))
             if "s1_ref" in stages or "s2_ref" in stages:
@@ -1283,6 +1293,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 parallel_config=self.parallel_config,
                 anchor_frames=anchor_frames,
                 ref_num_frames=ref_num_frames,
+                fps=self.fps,
             )
             # traced=True => ttnn.copy into the baked buffer, not a fresh allocation the captured trace
             # would never reference.
@@ -2793,7 +2804,9 @@ class LTXDistilledPipeline(LTXPipeline):
         if num_frames_out != num_frames:  # drop the tail-pad frame(s): (T,H*3/2,W) yuv planes or (B,3,F,H,W) float
             # by the decode's own type: the frame-return path (output_path None, output_type "yuv") decodes yuv
             # planes too, and trimming them as float cut the width (a 10 s portrait came back (249,1632,241))
-            video_pixels = video_pixels[:num_frames_out] if decode_type == "yuv" else video_pixels[:, :, :num_frames_out]
+            video_pixels = (
+                video_pixels[:num_frames_out] if decode_type == "yuv" else video_pixels[:, :, :num_frames_out]
+            )
         t_vae_decode = time.time() - t0
         _stats("video_pixels", video_pixels)
         timings.append(("VAE decode", t_vae_decode))
