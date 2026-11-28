@@ -53,6 +53,46 @@ def test_siglip_patch_embeddings(device, image_size_h, image_size_w, image_chann
     assert_with_pcc(torch_output, output[0], 0.9998)
 
 
+@pytest.mark.parametrize("image_size_h", [224])
+@pytest.mark.parametrize("image_size_w", [224])
+@pytest.mark.parametrize("image_channels", [3])
+def test_siglip_patch_embeddings_with_pos_embed(device, image_size_h, image_size_w, image_channels):
+    """Deterministic regression test comparing SigLIP patch embeddings + pos_embed with PyTorch reference."""
+    torch.manual_seed(0)
+
+    model = load_siglip_torch_model()
+
+    torch_pixel_values = torch_random((1, image_channels, image_size_h, image_size_w), -1, 1, dtype=torch.float32)
+    torch_patch, *_ = model.patch_embed(torch_pixel_values)
+    torch_output = torch_patch + model.pos_embed
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model.to(torch.bfloat16),
+        device=device,
+        custom_preprocessor=ttnn_siglip.custom_preprocessor_siglip,
+    )
+
+    pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
+    pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
+    pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    pos_embed_tt = ttnn.from_torch(
+        model.pos_embed.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    output = ttnn_siglip.siglip_patch_embeddings(
+        pixel_values,
+        parameters=parameters.patch_embed.patch_embeddings,
+        pos_embed=pos_embed_tt,
+    )
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output, output, 0.9998)
+
+
 class Attention(torch.nn.Module):
     def __init__(
         self,
