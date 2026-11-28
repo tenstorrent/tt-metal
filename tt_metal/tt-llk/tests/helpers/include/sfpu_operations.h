@@ -1458,7 +1458,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::identity)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        // Integer Dest takes the bit-exact vUInt copy, as the compute API's identity_tile_uint32 does.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32) || math_format == ckernel::to_underlying(DataFormat::UInt32))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::prelu)
     {
