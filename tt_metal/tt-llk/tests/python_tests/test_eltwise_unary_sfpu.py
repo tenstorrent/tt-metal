@@ -3,8 +3,11 @@
 
 
 import math
+import re
 import struct
+import subprocess
 from itertools import product
+from pathlib import Path
 
 import pytest
 import torch
@@ -72,6 +75,7 @@ from helpers.test_variant_parameters import (
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
+    MM_THROTTLE,
     NUM_FACES,
     SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MAX_THRESHOLD,
@@ -1380,7 +1384,35 @@ _QUIET_NAN_BITS = {
 }
 
 
-def _isinf_isnan_stimuli_spec():
+#: The words either side of each predicate's bound (max finite and min NaN, both signs, plus the
+#: max-payload +NaN for fp32), so an LSB slip in a bound flips a lane.
+_ISINF_ISNAN_EDGE_BITS_FP32 = (
+    0x7F7FFFFF,
+    0xFF7FFFFF,
+    0x7F800001,
+    0xFF800001,
+    0x7FFFFFFF,
+)
+_ISINF_ISNAN_EDGE_BITS_BF16 = (0x7F7F, 0xFF7F, 0x7F81, 0xFF81)
+_BF16_BITS = 16
+
+
+def _isinf_isnan_edge_bits(dtype, fp32_dest_keeps_all_bits):
+    """The edge words as *dtype*-width signed ints: the fp32 words only where a Float32 input
+    unpacks straight to a 32-bit Dest, else the bf16 words widened (all the SFPU sees there).
+    """
+    int_dtype = _QUIET_NAN_BITS[dtype][0]
+    width = torch.iinfo(int_dtype).bits
+    if width == 32 and fp32_dest_keeps_all_bits:
+        words = _ISINF_ISNAN_EDGE_BITS_FP32
+    else:
+        words = tuple(w << (width - _BF16_BITS) for w in _ISINF_ISNAN_EDGE_BITS_BF16)
+    return torch.tensor(
+        [w - (1 << width) if w >> (width - 1) else w for w in words], dtype=int_dtype
+    )
+
+
+def _isinf_isnan_stimuli_spec(fp32_dest_keeps_all_bits):
     def dist(size, dtype, generator):
         # Finite ramp in [-5, 5] with regular +inf / -inf / NaN injected so every
         # face carries all special classes plus finite values. The NaN lanes alternate
@@ -1395,6 +1427,10 @@ def _isinf_isnan_stimuli_spec():
         bits = x.view(int_dtype)
         bits[2::14] = positive_nan
         bits[9::14] = positive_nan - sign_bit  # the same pattern with the sign bit set
+        # Every face also carries each edge word, cycled through one lane in seven.
+        edge = _isinf_isnan_edge_bits(dtype, fp32_dest_keeps_all_bits)
+        edge_lanes = slice(3, None, 7)
+        bits[edge_lanes] = edge[torch.arange(bits[edge_lanes].numel()) % edge.numel()]
         return x
 
     return StimuliSpec(distribution=dist, seed=0)
@@ -1431,7 +1467,9 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         mathop,
         FastMode.No,
         input_dimensions,
-        spec_A=_isinf_isnan_stimuli_spec(),
+        spec_A=_isinf_isnan_stimuli_spec(
+            unpacks_to_dest(formats.input_format, dest_acc)
+        ),
         gate_on_step_budget=True,
     )
 
@@ -1551,6 +1589,94 @@ def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
     )
 
 
+@wormhole_only
+@pytest.mark.parametrize("mathop", ISINF_ISNAN_MATHOPS, ids=lambda op: op.name)
+def test_eltwise_unary_sfpu_isinf_isnan_mm_throttle(mathop: MathOperation):
+    """The MM_THROTTLE build (``dst_reg++`` body, ADDR_MOD_6 untouched) on the fp32 edge words,
+    with a hostile ADDR_MOD_6 between init and body. Its math ELF must keep every compiler
+    replay window below the FPU's replay slots."""
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [64, 64]
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_isinf_isnan_stimuli_spec(
+            unpacks_to_dest(formats.input_format, dest_acc)
+        ),
+        mm_throttle=1,
+    )
+
+    tile_cnt_A, tile_cnt_B, _ = calculate_tile_and_face_counts(
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
+    )
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        input_dimensions,
+        None,
+        None,
+        tile_cnt_A,
+        tile_cnt_B,
+        mm_throttle=1,
+    )
+    _assert_replay_below_fpu_slots(configuration)
+
+
+# ckernel::math::replay_buf_offset on Wormhole: replay slots from here up hold a throttled
+# matmul's MOP body, so SFPU code built with MM_THROTTLE must not record over them.
+WH_REPLAY_BUF_OFFSET = 16
+
+
+def _assert_replay_below_fpu_slots(configuration):
+    """Every ``ttreplay start,len`` in the variant's math ELF ends at or below
+    WH_REPLAY_BUF_OFFSET. sfpi places unrolled loop bodies in the replay buffer from slot 0
+    on its own, so only the built ELF shows how far they reach."""
+    configuration.generate_variant_hash()
+    artefacts = Path(TestConfig.ARTEFACTS_DIR).resolve()
+    elf = (
+        artefacts
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+        / "math.elf"
+    ).resolve()
+    objdump = Path(TestConfig.OBJDUMP).resolve()
+    # Both paths come from the harness; refuse anything outside the artefacts tree or not an objdump binary.
+    assert (
+        elf.is_relative_to(artefacts) and elf.is_file()
+    ), f"unexpected math ELF path {elf}"
+    assert objdump.is_file() and objdump.name.endswith(
+        "objdump"
+    ), f"unexpected objdump {objdump}"
+    dump = subprocess.run(
+        [str(objdump), "-d", "--no-show-raw-insn", "--", str(elf)],
+        shell=False,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    windows = [
+        (int(m.group(1)), int(m.group(2)))
+        for m in re.finditer(r"\bttreplay\s+(\d+),\s*(\d+),", dump)
+    ]
+    overlapping = sorted({(s, n) for s, n in windows if s + n > WH_REPLAY_BUF_OFFSET})
+    assert not overlapping, (
+        f"replay windows (start, len) {overlapping} in {elf} reach the FPU replay slots "
+        f"[{WH_REPLAY_BUF_OFFSET}, 32)"
+    )
+
+
 # Ops whose behaviour turns on a comparison against a fixed scalar. A random float sweep
 # reaches such a scalar with probability ~0, so the tie -- the one input where a `>` / `>=`
 # slip is visible -- never gets driven. The 0/1 ops are here because their output would
@@ -1660,6 +1786,7 @@ def eltwise_unary_sfpu(
     return_golden=False,
     custom_atol=None,
     custom_rtol=None,
+    mm_throttle=None,
 ):
     """Shared unary SFPU runner for functional, perf, and accuracy.
 
@@ -1679,6 +1806,8 @@ def eltwise_unary_sfpu(
 
     *custom_atol* / *custom_rtol* replace the contract's gate for a caller whose stimulus
     needs a tolerance the op's registry row does not describe (the polygamma order sweep).
+
+    *mm_throttle* defines ``MM_THROTTLE`` to that level in the kernel build.
     """
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1788,6 +1917,7 @@ def eltwise_unary_sfpu(
         unpack_to_dest=unpack_to_dest,
         is_perf=is_perf,
         run_types=run_types,
+        mm_throttle=mm_throttle,
     )
 
     if is_perf and not collect_result:
@@ -1869,6 +1999,7 @@ def build_eltwise_unary_sfpu_config(
     unpack_to_dest=None,
     is_perf=False,
     run_types=None,
+    mm_throttle=None,
 ):
     """The templates, runtimes and stimuli the shared unary kernel reads, as one config.
 
@@ -1924,6 +2055,7 @@ def build_eltwise_unary_sfpu_config(
                     )
                 ]
             ),
+            *([] if mm_throttle is None else [MM_THROTTLE(mm_throttle)]),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

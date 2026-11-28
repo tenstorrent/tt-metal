@@ -133,6 +133,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             DataFormat::Invalid /* TYPECAST_IN */,
             DataFormat::Invalid /* TYPECAST_OUT */,
             FUSED_SORT>(formats.math);
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+        // A throttled matmul reprograms ADDR_MOD_6 between the op's init and its body; a hostile value here
+        // breaks any body that still advances Dest through it.
+        ckernel::addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0, .clr = 1}}.set(ADDR_MOD_6);
+#endif
         PROFILER_SYNC();
     }
     {
