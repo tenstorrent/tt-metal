@@ -249,3 +249,104 @@
   - `test_g6_permute_blocks_rm.py`: `test_plan_reports_gather_regime`, `test_forced_coalesced_bit_exact` (8), `test_coalesced_in_l1_bit_exact` (2), `test_forced_write_groups_bit_exact` (7), `test_write_groups_need_j_dividing_banks`.
   - `test_g6_permute_blocks_rm_perf.py`: coalesced, batch, staging, write-group and L1 block variants.
   - `test_g6_permute_blocks_rm_ablation_debug.py`: copy and gather ablation arms.
+
+## Perf 1
+- Date: 2026-11-27. Blackhole p150b (chip 3 of bh-lb-18), 110 worker cores, 1350 MHz. Every time is `DEVICE KERNEL DURATION [ns]`, the median of launches 2–12 of the case bench (`generated/meta/g6_permute/bench/bench_cases.py`), profiled plain (no sum zones) unless noted. `SUPPORTED` is unchanged.
+- Goal (operator): no production case (LOOSE_CASES 0–11) slower than stock `ttnn.permute`. The ideas went to Panoptic p44 (A, 3.46× slower than stock) and the Qwen cases (B). FLUX_74, the flagged case, already beat stock 12.5× and stayed a guard cell. It was not re-ablated this round; Refinement 5 left it bound by its DRAM reads (32 MiB of 64 B slots).
+
+### Measured breakdown (p44, `nhwc_rm_transpose`, before this round)
+- Zones per core (BRISC median, cycles): RISC-V transpose 61.7k (45.7 µs), wait for the first 256-page block 10.0k (7.4 µs), write issue 6.8k for 160 writes of 128 B (42 cycles a write). Reader (NCRISC): issue 12.0k for ~298 pages (~37 cycles a page), barrier 0.5k.
+- Cumulative ablation (payloads stubbed, CB handshakes kept; `tests/.../perf1/test_ablation_p44.py`):
+
+  | Arm | ns |
+  |---|---|
+  | full | 59,253 |
+  | − transpose | 13,499 |
+  | − transpose − writes | 10,223 |
+  | − transpose − writes − reads (sync floor) | 957 |
+  | − reads only | 51,971 |
+  | − writes only | 55,007 |
+
+- Ranked: transpose 45.8 µs (77 %), reads 9.3 µs (issue-bound, not NoC-bound: the L1 floor of p44 is 3.99 µs), writes 3.3 µs.
+- Disagreement with the operator's inference: the writes cost ~3.3 µs (42 cycles each), not ~22 µs at ~137 ns. The transpose is 45.8 µs, not ~37 µs.
+- Qwen (B): the operator's start-skew diagnosis held. `first2last` was 390–463 ns row-first on 12–32 cores, and 87–213 ns column-first.
+
+### Portfolio and verdicts
+| Idea | Verdict | p44 L1 before → after (ns) | Domain / notes |
+|---|---|---|---|
+| operator candidate 1: column-first core fill | **WIN, graduated** | Qwen, see the guard table | Applies to every regime. Carve-out `nhwc_tile_bfp8_transpose`: column-first measured p53 8,179 → 10,637 (+30 %). FLUX and p44 flat. |
+| `tensix_transpose` (operator candidate 2): tilize → transpose → pack-untilize on the Tensix engine | **WIN, graduated** | 59,244 → 11,613 (subagent); 11,820 in the op | Bit-exact only with **UInt16** CBs. Float16_b broke 509 of 65,536 bf16 patterns: denormals → 0, NaN payloads lost (0xff98 → 0xff80), −0 → +0. Correct for every shape tried (C 1–128, W tails, whole rows, DRAM/L1). |
+| `tensix_transpose` variant `fused_d2b` (one pass, raw MOVD2B/TRNSPSRCB) | not graduated | 11,613 vs 11,687 for `two_pass` | End to end −0.6 %, inside noise; it only wins compute-only (1.9 vs 3.4 µs). Raw LLK, Blackhole-only. |
+| `riscv_transpose`: faster RISC-V code + transpose on the three TRISCs + read split | WIN, superseded | 59,247 → 12,425 | Conflicts with `tensix_transpose` on the same stage and loses to it. Its sync uses CB stream registers as counters. Measured menu: pair_batch 8 → 48.3 µs; new store order 34.6 µs; DM-only split 24.5 µs; TRISCs 14.6 µs. |
+| `rm_issue_cost`: bank-cursor read/write issue, unit pushes, trid pipeline, DRAM coalesced reads | **WIN, partly graduated** | full op 59,249 → 51,587; transpose-stubbed 13,507 → 7,379 | Read issue 37.5 → 22.7 cycles a page (18.2 with two command buffers); write issue 42.6 → 27 (21.5). Unit pushes and the trid pipeline were already in `tensix_transpose`'s reader. Graduated: single-buffer cursor reads (L1) and writes. Not integrated: the two-buffer form, and DRAM coalesced reads (measured only on the old design, DRAM full op 87.1 → 60.8 µs; no production case of this regime is in DRAM). |
+| standing idea: read once, multicast to the group | not applicable | — | No core re-reads an operand: each input page is read by exactly one core. |
+
+### What graduated
+1. **Column-first fill** (`split_units(row_wise=False)` default; commit "fill cores column-first ..."). Kernels unchanged.
+2. **Tensix transpose** (commit "transpose nhwc_rm_transpose on the Tensix engine"). The RISC-V transpose writer is deleted; `g6_permute_rm_transpose.hpp` now serves only FLUX's writer.
+   - Domain: every `nhwc_rm_transpose` shape. Unit width is a multiple of 8 values, at most 8 w-tiles, or the whole row. `_choose_block_w` models busiest-core time plus one unit's fill/drain; the max-only model put C=128 on whole rows (17.7 µs against 14.4 µs).
+   - Reader by placement, measured both ways:
+     - L1: own page-order reader, one push per w-tile on a transaction-id pipeline. The shared reader measured 13.0 µs against 11.6, and its slots are not tilize rows when C % 32 ≠ 0 in L1.
+     - DRAM: the shared bank-major / 2-NoC reader, one unit per block. The page-order reader measured 63.9 µs against 41.9.
+3. **Cursor issue** (commit "issue nhwc_rm_transpose reads and writes from a bank cursor"). The cursor is the default, with two measured carve-outs that keep `noc_async_read/write` (via `InterleavedAddrGen`):
+   - Pages and rows above 128 B: at the cursor's rate 110 cores demand ~1.2 KB/cycle and delivered NoC throughput collapses. C=128 L1: 14,413 → 18,846 (+31 %); the reader's first unit went from 5.0k to 9.6k cycles. Marginal pairs on C=128: cursor reads alone 17,836, cursor writes alone 15,006, both plain 13,676.
+   - DRAM-output writes: cursor writes crowd the reader's requests at the DRAM ports. [1,256,512,32] DRAM: 185.7k / 186.3k plain against 192.5k / 193.0k cursor, alternating runs (+3.6 %). p44 DRAM −0.6 % and C=64 DRAM −2.5 % were flat.
+- Instrumentation:
+  - Each RISC has a scoped zone around its first unit (the fill) plus sum zones over every unit: `PERM-RD-ISSUE/BARRIER`, `PERM-CP-TILIZE/TRANSPOSE`, `PERM-WR-WAIT/ISSUE`.
+  - Sum zones record only under `TT_METAL_PROFILER_SUM=1` and compile out otherwise. Scoped zones per w-tile cost 767 ns on p44 (12,439 vs 11,672); the new set costs 148 ns.
+- p44 L1 critical path after the Tensix transpose (sum zones, cycles per core): reader issue 12.1k of the reader's 13.8k (~38 cycles a page); writer issue 6.8k + wait 8.5k. The cursor then took the kernel from 11,820 to 8,006.
+- Domain sweep (`tests/.../perf1/test_perf1_shapes.py`, ns). The subagent measured the old op on the same shapes; p44 is this round's own baseline.
+
+  | Shape | Old op | Tensix | + cursor (shipped) |
+  |---|---|---|---|
+  | p44 L1 | 59,243 | 11,824 | **8,007** |
+  | p44 DRAM | 87,164 | 43,673 | 43,396 |
+  | [1,64,256,64] L1 | 60,979 | 10,410 | 7,394 |
+  | [1,64,256,64] DRAM | 79,162 | 29,250 | 28,095 |
+  | [1,64,256,128] L1 | 120,193 | 14,421 | 13,567 |
+  | [1,128,256,24] L1 | 46,884 | 11,603 | 7,898 |
+  | [1,128,256,3] L1 | 17,267 | 10,971 | 7,516 |
+  | [1,8,1000,32] L1 | 15,904 | 6,213 | 4,395 |
+  | [1,256,100,32] L1 | 50,153 | 11,559 | 8,598 |
+  | [1,256,512,32] DRAM | 277,981 | 161k–186k (two sessions) | 191k |
+  | [2,7,5,32] L1 | 3,174 | 2,335 | 1,861 |
+  | [1,3,100,3] DRAM | 2,300 | 2,294 | 2,260 |
+
+  [1,256,512,32] DRAM is session-noisy: the same Tensix commit measured 161,146 and 185,516. Against the second session it ends +3 %, the cost of the same DRAM-bound reader.
+
+### Guard set: every production case, same session (ns; stock = `ttnn.permute` through the same bench)
+| Case | Stock | Before | After | After vs stock |
+|---|---|---|---|---|
+| f74 FLUX_74 | 1,040,312 | 82,584 | 82,899 | 12.5× faster |
+| f73 FLUX_73 | 267,122 | 25,557 | 25,552 | 10.5× |
+| p53 PANOPTIC_53 | 39,326 (3 programs) | 8,160 | 8,150 | 4.8× |
+| **p44 PANOPTIC_44** | 17,135 | 59,243 | **8,015** | **2.14×** (was 0.29×) |
+| q301 | 2,217 | 1,801 | 1,814 | 1.22× |
+| q302 | 1,418 | 1,367 | 1,133 | 1.25× |
+| q303 | 2,317 | 2,184 | 1,892 | 1.22× |
+| q304 | 1,718 | 1,670 | 1,423 | 1.21× |
+| q305 | 1,632 | 1,333 | 1,338 | 1.22× |
+| q306 | 1,269 | 1,306 | 1,027 | 1.24× |
+| q307 | 1,729 | 1,704 | 1,411 | 1.23× |
+| q308 | 1,627 | 1,609 | 1,313 | 1.24× |
+
+- No case is slower than stock. FLUX, p53, q301 and q305 are unchanged within noise.
+- Golden: 39 / 39 pass (`eval/golden_tests/g6_permute/`). Unit suites: 132 / 132. The nhwc suite also passes under `--dev`, with a new test that moves all 65,536 bf16 patterns in L1 and DRAM, and new forced plans for 8 w-tiles, a partial last w-tile and one rows page.
+
+### Operator candidates
+- operator candidate 1: graduated — column-first fill in every regime but `nhwc_tile_bfp8_transpose` (p53 +30 % column-first, measured). Before → after: q306 1,306 → 1,027; q308 1,609 → 1,313; q307 1,704 → 1,411; q302 1,367 → 1,133; q304 1,670 → 1,423; q303 2,184 → 1,892; q301 1,801 → 1,814 and q305 1,333 → 1,338 (2 cores, flat).
+- operator candidate 2: graduated — Tensix transpose on UInt16 CBs (Float16_b is not bit-exact). p44 59,243 → 11,820, then 8,006 with the cursor issue.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::tilize` | capability | Waits for and pops its input one tile-row block at a time, and cannot tilize a tile-row at an offset inside a CB page that holds several. The DRAM reader pushes one page per unit of kw w-tiles, so w-tile wt must be addressed at `wt * ct` from the read pointer (`tilize_block` with an input offset). | n/a (not expressible with the unit-page CB) | 11,820 (p44, whole op) | `g6_permute_nhwc_rm_compute.cpp:49` |
+| no helper covers this (transpose family) | capability | kernel_lib has no transpose helper, and its untilize helper has no transposing unpack, so transpose-then-untilize-pack (`transpose_tile` + `pack_untilize_dest`) has no helper form | n/a | 11,820 (p44, whole op) | `g6_permute_nhwc_rm_compute.cpp:66` |
+| `noc_async_read` + address generator (dataflow API) | capability | No stateful read issue that takes a per-transaction NoC coordinate: `*_one_packet_set_state/with_state` fix the coordinate. A stream of same-length reads to rotating banks therefore re-programs length and control and recomputes bank, offset and XY per page. | 10,686 (`InterleavedAddrGen` reads, cursor writes) | 8,011 | `g6_permute_nhwc_rm_reader.cpp:50` |
+| `noc_async_write` + address generator (dataflow API) | capability | Same gap for writes: no with_state write with a per-transaction coordinate, so each partial row pays the full issue | 8,402 (cursor reads, `InterleavedAddrGen` writes) | 8,011 | `g6_permute_nhwc_rm_writer.cpp:90` |
+
+Each site carries its justification in the kernel-head comment.
+
+### Artifacts
+- `perf_experiments/{ablation,tensix_transpose,riscv_transpose,rm_issue_cost}/` and `tests/ttnn/unit_tests/operations/g6_permute/perf1/`. The ablation test is skipped: it ablates the pre-Perf-1 kernels.
+- Bench scripts in `generated/meta/g6_permute/bench/`: `run_perf1.sh`, `run_shapes.sh`, `arm_medians.py`.
