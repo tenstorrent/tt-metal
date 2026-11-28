@@ -8,7 +8,11 @@ user_invocable: true
 
 Wraps `.claude/scripts/run_test.sh`, which serialises simulator and silicon access (flock), sets `TT_UMD_SIMULATOR_PATH`, and exposes `count` / `compile` / `simulate` / `run` subcommands. Agents and Claude must never call `pytest` directly for tests that build kernels or use a device or simulator, functional or perf.
 
-Host-only work is outside this rule: `tests/run_hardware_free.sh` for the hardware-free suite, and `compare_test_and_perf.py`, which only reads `@parametrize`.
+Exceptions are explicit: use `tests/run_hardware_free.sh` for the host-only
+suite and `compare_test_and_perf.py` for static coverage comparison. SFPU ULP
+and accuracy workflows must follow the documented raw commands in
+`tests/SFPU_ULP.md` and `docs/tests/accuracy_tests.md`; this runner does not
+expose `--ulp-emit`, `--ulp-measure`, or accuracy `--mode`.
 
 ## Usage
 
@@ -18,6 +22,7 @@ Host-only work is outside this rule: `tests/run_hardware_free.sh` for the hardwa
 
 Examples:
 ```
+/run-test test_eltwise_binary_quasar.py --arch quasar --count
 /run-test test_eltwise_binary_quasar.py --arch quasar
 /run-test test_sfpu_square_quasar.py --arch quasar --k Float16
 /run-test test_eltwise_binary_quasar.py --arch quasar --rerun
@@ -34,6 +39,16 @@ Examples:
 
 - `<test_file>` — required, e.g. `test_sfpu_square_quasar.py`
 - `--arch <arch>` — `quasar`, `blackhole`, `wormhole`. Required unless inferable (see below)
+- `--count` — collect the selected variants through the runner without
+  compiling or opening a device. Reports compile-producer and consumer pytest
+  item counts; stdout remains the producer integer for scripts. For normal
+  functional tests these are the deduplicated ELF and full runtime-variant
+  counts. Under `--perf`, each item expands over its `run_types`, so actual ELF
+  builds and launches are the reported item counts multiplied by the number
+  of run types.
+  Mutually exclusive with `--compile-only`, `--rerun`, and `--no-split`. It
+  counts the whole module; `--perf` and `--op` apply, but `--k` and `--test-id`
+  do not narrow count
 - `--k <expr>` — pytest `-k` filter (applied to both compile-producer and consumer so the two phases stay aligned)
 - `--test-id <id>` — single parametrize ID (single-quotes/brackets safe)
 - `--op <op>` — with `--perf`, keep only SFPU sweep variants for that `MathOperation` name (repeatable; applied to count, compile and consumer)
@@ -62,6 +77,7 @@ If `--arch` is not provided, infer in this order:
 1. **Parse** the test file, arch (or infer), and options.
 
 2. **Pick a subcommand** for the script:
+   - `--count` → `count`
    - `--compile-only` → `compile`
    - `--rerun` → `simulate`
    - `--no-split` → `run --no-split` (combined invocation)
@@ -82,7 +98,13 @@ If `--arch` is not provided, infer in this order:
                    --perf-counters / --dump-perf-counters / --keep-asserts}
    ```
 
-4. **Relay** the agent's verdict to the user. For `--perf`, include the report directory; a PASS says nothing about whether the numbers are plausible, so hand off to `perf-report` validation. On FAIL or COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the agent's diagnosis and stop — don't auto-retry (the same hang will reappear, and env errors need a human fix).
+4. **Relay** both labeled ELF and runtime totals for `--count`; no PASS verdict
+   or device run is expected. Otherwise relay the agent's verdict. For `--perf`,
+   include the report directory; a PASS says nothing about whether the numbers
+   are plausible, so hand off to `perf-report` validation. On FAIL or
+   COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the
+   agent's diagnosis and stop — don't auto-retry (the same hang will reappear,
+   and env errors need a human fix).
 
 ## LLK Triage on Hang
 
