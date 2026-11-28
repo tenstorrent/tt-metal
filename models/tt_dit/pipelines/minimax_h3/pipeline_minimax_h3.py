@@ -3062,7 +3062,7 @@ class MiniMaxH3Pipeline:
         else:
             self._force_pad_to = rung
         # With Sol-Attn on, run a second step (three schedule points), which `_is_sol_dense_step` makes a sparse one:
-        # a sparse step must run untraced, and then be captured, here, because `run_blocks` captures a new trace key
+        # a sparse step must run untraced, and then be captured, here, because `block_stack` captures a new trace key
         # without a prep run.
         steps = 2 if self._requested_sol_schedule() is None else 3
         try:
