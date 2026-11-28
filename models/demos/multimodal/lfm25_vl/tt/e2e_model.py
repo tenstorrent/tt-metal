@@ -119,8 +119,19 @@ class TtLfm25VlModel(Transformer):
             )
         raise TypeError(f"vision_embeddings must be Tensor or sequence of Tensors, got {type(vision_embeddings)}")
 
-    def _fuse_vision_into_text_embeddings(self, pt_tokens, tokens_embd, image_features: torch.Tensor):
+    def _fuse_vision_into_text_embeddings(
+        self, pt_tokens, tokens_embd, image_features: torch.Tensor, check_counts: bool = True
+    ):
         special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
+        if check_counts:
+            # Only valid when pt_tokens is the whole prompt: a cached-prefix or later chunk holds a subset
+            # of the placeholders while the vision features cover the whole prompt.
+            n_tokens = int(special_image_mask.sum())
+            n_features = image_features.numel() // image_features.shape[-1]
+            if n_tokens != n_features:
+                raise ValueError(
+                    f"Image features and image tokens do not match: tokens: {n_tokens}, features {n_features}"
+                )
         special_image_mask = special_image_mask.expand_as(tokens_embd)
         image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
         return tokens_embd.masked_scatter(special_image_mask, image_features)
@@ -167,7 +178,9 @@ class TtLfm25VlModel(Transformer):
         if vision_embeddings is not None:
             vision_embeddings = self._vision_embeddings_to_tensor(vision_embeddings, batch_rows)
             if vision_embeddings is not None:
-                tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
+                tokens_embd = self._fuse_vision_into_text_embeddings(
+                    pt_tokens, tokens_embd, vision_embeddings, check_counts=(start_pos == 0)
+                )
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(tokens_embd)
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
