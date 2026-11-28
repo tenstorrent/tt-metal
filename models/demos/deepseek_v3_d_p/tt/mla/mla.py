@@ -23,6 +23,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_AGMM_CONFIG, MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
+    KVD_LANES_PER_LINK,
+    KVD_PLANNERS,
     SAME_CHUNK_NEXT_LAYER,
     PushStep,
     SparseKvPushPart,
@@ -42,6 +44,66 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
+
+
+_SCRATCH_SECTIONS: dict = {}
+
+
+def _scratch_mark(mesh_device, name, t_prev):
+    """SCRATCH (SCRATCH_TIME_SECTIONS=1, untraced only): synchronize and add the time since t_prev to `name`."""
+    import time
+
+    if not os.environ.get("SCRATCH_TIME_SECTIONS"):
+        return t_prev
+    global _SCRATCH_LAST
+    ttnn.synchronize_device(mesh_device)
+    t = time.perf_counter()
+    if t_prev is not None and name is not None:
+        _SCRATCH_SECTIONS.setdefault(name, []).append((t - t_prev) * 1e6)
+    _SCRATCH_LAST = t
+    return t
+
+
+_SCRATCH_LAST = None
+
+
+def _sec(mesh_device, name):
+    """SCRATCH: one section of the forward, since the previous mark (None: start the chain)."""
+    _scratch_mark(mesh_device, name, _SCRATCH_LAST if name is not None else None)
+
+
+def _kvd_skip_exchange(plan) -> bool:
+    """SPIKE: whether this dispatch may skip the slice exchange (an earlier call on the same plan build did it; the
+    caller marks the plan exchanged once the call is enqueued). SPARSE_MLA_KVD_SPIKE_XCHG_ONCE=0: every call."""
+    return os.environ.get("SPARSE_MLA_KVD_SPIKE_XCHG_ONCE", "1") == "1" and plan.exchanged
+
+
+def _kvd_replay(plan, skip_exchange: bool) -> dict:
+    """SPIKE (plan once, dispatch many): the first dispatch on a plan build records its planners' routing, later ones
+    (which skip the exchange) replay it. SPARSE_MLA_KVD_REPLAY=0 (read at plan build and at each call): route."""
+    if plan.replay_buffer is None or os.environ.get("SPARSE_MLA_KVD_REPLAY", "1") != "1":
+        return {}
+    gen = plan.generation & 0xFFFFFFFF
+    if plan.recorded and skip_exchange:
+        return {"replay": 2, "replay_buffer": plan.replay_buffer, "replay_generation": gen}
+    return {"replay": 1, "replay_buffer": plan.replay_buffer, "replay_generation": gen}
+
+
+def _kvd_spike_compact() -> bool:
+    """SPIKE: compact landing (the default): rows land in the push's compact buffers, read with the compact indices."""
+    return _kvd_spike() and os.environ.get("SPARSE_MLA_KVD_COMPACT", "1") == "1"
+
+
+def _kvd_spike() -> bool:
+    """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): shared layers' rows go through sparse_kv_dispatch with
+    global landing instead of sparse_kv_push."""
+    return os.environ.get("SPARSE_MLA_KVD_SPIKE", "0") == "1"
+
+
+# SPIKE: planners of a dispatch on the pre-send grid (pre-send and rest): 4, as fewer DRAM readers beside SDPA cost
+# attention less (16: up to +4% on the 4x4 carve) and replayed routing needs little planning
+def _kvd_spike_planners() -> int:
+    return int(os.environ.get("SPARSE_MLA_KVD_SPIKE_PRESEND_PLANNERS", "4"))
 
 
 class ttMLA:
@@ -808,9 +870,16 @@ class ttMLA:
         self._push = None
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
-        if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
-            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2], self.ccl_num_links
-        ):
+        if (
+            self._sparse_kv_gather_buffer is not None
+            and (
+                sparse_kv_push_supported(
+                    mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2], self.ccl_num_links
+                )
+                or _kvd_spike()  # SPIKE: the dispatch routes any 2D fabric
+            )
+            and not os.environ.get("SCRATCH_FORCE_GATHER")
+        ):  # SCRATCH: shared layers gather (today's non-push path)
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
             # The cache's row page as the push reads it: the row, padded to the DRAM alignment.
@@ -824,7 +893,7 @@ class ttMLA:
             # The dense buffer is idle in shared layers, so when the push buffer fits in it, it serves as one parity.
             # The push buffers are created on the first push (the warm pass, before any trace capture), so models
             # whose layers all compute their own top-k never allocate one.
-            self._push_reuses_dense = self._push_rows <= dense.shape[2]
+            self._push_reuses_dense = self._push_rows <= dense.shape[2] or (_kvd_spike() and not _kvd_spike_compact())
             # Which buffer a layer reads depends only on the config, so pick it once for this layer and the next (whose
             # prefix this layer pushes).
             self._push_buffer_parity = {layer: self._push_parity(layer) for layer in (layer_idx, layer_idx + 1)}
@@ -2231,6 +2300,7 @@ class ttMLA:
 
         # Preserve profiler region labels without duplicating them through Python logging.
         ttnn.tracy_message("`TT_SIGNPOST: MLA_START`")
+        _sec(self.mesh_device, None)
 
         # q-norm output uses the tuned activation memory_config in every mode (dense and sparse);
         # the next op (q_b_proj) is the same matmul regardless of attention path.
@@ -2263,6 +2333,7 @@ class ttMLA:
         # null-indexer), so no separate warm-up write is needed.
         # GLM-5.3 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
         # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
+        _sec(self.mesh_device, "q_a+norm")
         selection_state = None
         # New indices in the shared buffer drop the cached push plan: this layer's indexer rewrites it, and a pipeline
         # stage's first layer receives it from the previous stage. (Sending the plan along with the indices would let
@@ -2303,12 +2374,14 @@ class ttMLA:
                 **indexer_qr_kwargs,
             )
 
+        _sec(self.mesh_device, "indexer_score")
         if qr_local is not None:
             qr = self._gather_tp_rows(qr_local, seq_len_local)
             ttnn.deallocate(qr_local)
         tt_q = self._q_stem(
             qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata, qr_borrowed=self._is_q_gather_buffer(qr)
         )
+        _sec(self.mesh_device, "q_stem")
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
             rope_tensors,
@@ -2319,6 +2392,7 @@ class ttMLA:
             metadata=metadata,
             kv_a=kv_a,
         )
+        _sec(self.mesh_device, "kv_stem")
 
         attention_kwargs = dict(
             tt_q=tt_q,
@@ -2343,7 +2417,9 @@ class ttMLA:
         else:
             attn_out = self._attention(**attention_kwargs)
 
+        _sec(self.mesh_device, None if selection_state is None else "attention(+presend)+wkv_b2")
         out = self._o_proj_epilogue(attn_out, seq_len_local, hidden_states=hidden_states)
+        _sec(self.mesh_device, "o_proj")
         ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
         # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
         # for a "full" layer to hand to downstream "shared" layers (GLM-5.3 reuse).
@@ -2499,6 +2575,7 @@ class ttMLA:
     ):
         """Sparse attention over only the KV rows `indices` reference, pushed by their owners into a compact buffer.
         Trace-safe on the metadata path: the KV write, chunk start and pushed slot are all read on device."""
+        _t = _scratch_mark(self.mesh_device, None, None)
         cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
             tt_kvpe=tt_kvpe,
             kvpe_cache=kvpe_cache,
@@ -2514,7 +2591,9 @@ class ttMLA:
         expected_shape = self.indexer_indices_shape()
         if tuple(indices.shape) != expected_shape:
             raise ValueError(f"pushed attention needs this chip's top-k {expected_shape}, got {tuple(indices.shape)}")
+        _t = _scratch_mark(self.mesh_device, "prepare_kv", _t)
         plan = self._sparse_push_plan(indices, kv_actual_isl, metadata)
+        _t = _scratch_mark(self.mesh_device, "plan", _t)
         storage = kvpe_cache.storage
         # If the previous attention step pushed this step's prefix beside its attention, for these same indices (the
         # same cached plan), push only the rest into that buffer; otherwise push every needed row.
@@ -2523,23 +2602,35 @@ class ttMLA:
         parity = entry[1] if prefetched else self._push_buffer_parity[self.layer_idx]
         part = SparseKvPushPart.REST if prefetched else SparseKvPushPart.ALL
         self._push.pushes[part.name] += 1
-        compact = ttnn.experimental.sparse_kv_push(
+        _h0 = __import__("time").perf_counter()
+        compact = self._kv_send(
             storage,
-            output_tensor=self._push_buffer(parity),
-            table=plan.table,
-            stripe_chunk=plan.stripe_chunk,
-            max_rows=plan.max_rows,
-            part=part,
-            num_links=self.ccl_num_links,
-            sp_axis=self.sp_axis,
-            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
-            ready_semaphore=self._push.ready_semaphore,
-            done_semaphore=self._push.done_semaphore,
+            self._push_buffer(parity),
+            plan,
+            part,
+            self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
+            # SPIKE: the dispatch's rest (replayed: little planning) on the pre-send's grid too (one small program; the
+            # whole chip's 48 planners cost ~70 us a launch untraced). ALL (no pre-send: routes every row) keeps the
+            # whole chip. SPARSE_MLA_KVD_SPIKE_REST_FULL=1: the rest on the whole chip too.
+            **(
+                {"core_grid": self._push_prefetch_grids[1]}
+                if _kvd_spike()
+                and prefetched
+                and self._push_prefetch_grids is not None
+                and os.environ.get("SPARSE_MLA_KVD_SPIKE_REST_FULL", "0") != "1"
+                else {}
+            ),
         )
-        return self._finish_sparse_chunked_attn(
+        if os.environ.get("SCRATCH_TIME_SECTIONS"):  # host enqueue only (before the sync)
+            _SCRATCH_SECTIONS.setdefault(f"host_{part.name}", []).append(
+                (__import__("time").perf_counter() - _h0) * 1e6
+            )
+        _t = _scratch_mark(self.mesh_device, f"send_{part.name}", _t)
+        spike = _kvd_spike() and not _kvd_spike_compact()  # SPIKE global landing: read with the natural indices
+        _ret = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
-            indices=plan.compact_indices,
+            indices=indices if spike else plan.compact_indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
             prefetch=self._presend(
@@ -2553,8 +2644,10 @@ class ttMLA:
                 kv_actual_isl=kv_actual_isl,
                 metadata=metadata,
             ),
-            compact=True,
+            compact=not spike,
         )
+        _scratch_mark(self.mesh_device, "attention+wkv_b2", _t)
+        return _ret
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured
@@ -2599,6 +2692,7 @@ class ttMLA:
             max_rows=self._sparse_kv_gather_buffer.shape[2],
             chunk_start=kv_actual_isl or 0,
             chunk_start_tensor=metadata[1] if metadata is not None else None,
+            owner_major=_kvd_spike(),
         )
 
     def _other_push_parity(self, parity):
@@ -2652,6 +2746,8 @@ class ttMLA:
         target_layer_idx = cache_layer_idx + next_step.layer_offset
         if target_layer_idx >= self.layer_num:
             raise ValueError(f"layer {self.layer_idx} pre-sends for cache layer {target_layer_idx} of {self.layer_num}")
+        if os.environ.get("SCRATCH_PRESEND_NOOP"):  # SCRATCH: the sub-device split beside attention, no pre-send
+            return lambda: None
         indices = own_indices if next_step.indices is None else next_step.indices
         plan = self._sparse_push_plan(indices, next_step.kv_actual_isl, next_step.metadata)
         self._push.prefetched[self.layer_idx + next_step.layer_offset] = (plan, parity)
@@ -2662,20 +2758,70 @@ class ttMLA:
             storage, self._cache_batch_idx(next_step.cache_user_id, target_layer_idx), next_step.metadata
         )
         _, push_grid = self._push_prefetch_grids
-        return lambda: ttnn.experimental.sparse_kv_push(
+        return lambda: self._kv_send(storage, output, plan, SparseKvPushPart.PREFIX, slot, core_grid=push_grid)
+
+    def _kv_send(self, storage, output, plan, part, slot, core_grid=None):
+        """Moves the rows of `plan`'s `part` into `output`: sparse_kv_push (compact layout), or, in the Phase 0 spike
+        (SPARSE_MLA_KVD_SPIKE=1), sparse_kv_dispatch with global landing (owner-major pages of a full-size buffer)."""
+        if not _kvd_spike():
+            return ttnn.experimental.sparse_kv_push(
+                storage,
+                output_tensor=output,
+                table=plan.table,
+                stripe_chunk=plan.stripe_chunk,
+                max_rows=plan.max_rows,
+                part=part,
+                num_links=self.ccl_num_links,
+                sp_axis=self.sp_axis,
+                **slot,
+                ready_semaphore=self._push.ready_semaphore,
+                done_semaphore=self._push.done_semaphore,
+                **({"core_grid": core_grid} if core_grid is not None else {}),
+            )
+        assert plan.inbox is not None, "SPIKE: the dispatch needs an owner-major plan"
+        planners = KVD_PLANNERS if core_grid is None else _kvd_spike_planners()
+        # (one program variant a key: planners, grid and placement; the rest's single program puts its TX cores
+        # elsewhere than the pre-send's per-chip placement, so their fence words must differ)
+        single_program = part == SparseKvPushPart.REST and core_grid is not None
+        sems, scratch = self._push.dispatch_resources(
+            plan.max_rows,
+            plan.stripe_chunk,
+            planners,
+            grid_key=None if core_grid is None else (str(core_grid), single_program),
+        )
+        self._push.kvd_calls[part.name] += 1
+        skip_exchange = _kvd_skip_exchange(plan)
+        replay = _kvd_replay(plan, skip_exchange)
+        out = ttnn.experimental.sparse_kv_dispatch(
             storage,
             output_tensor=output,
             table=plan.table,
+            inbox=plan.inbox,
+            scratch=scratch,
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
-            part=SparseKvPushPart.PREFIX,
+            fence_semaphore=sems[0],
+            arrived_semaphore=sems[1],
+            credit_semaphore=sems[2],
+            inbox_semaphore=sems[3],
             num_links=self.ccl_num_links,
-            sp_axis=self.sp_axis,
+            planners=planners,
+            lanes_per_link=KVD_LANES_PER_LINK,
             **slot,
-            ready_semaphore=self._push.ready_semaphore,
-            done_semaphore=self._push.done_semaphore,
-            core_grid=push_grid,
+            **({"core_grid": core_grid} if core_grid is not None else {}),
+            part=int(part.value),
+            skip_exchange=skip_exchange,
+            rank_table=plan.rank_table,
+            sp_axis=self.sp_axis,
+            # the rest on the pre-send grid: one program (its ports need little bandwidth; per-chip programs cost
+            # ~80 us more host time a call on 8x4); the pre-send keeps per-chip placement (its bandwidth beside SDPA)
+            single_program=single_program,
+            **replay,
         )
+        # (marked only once the call is enqueued: a call that raised leaves the plan to exchange and record again)
+        plan.exchanged = True
+        plan.recorded = plan.recorded or bool(replay)
+        return out
 
     @contextlib.contextmanager
     def _sub_device_manager(self, manager_id):
@@ -2696,7 +2842,13 @@ class ttMLA:
     def _beside_prefetch(self, prefetch, attention):
         """Runs attention on sub-device 0 while prefetch pushes on sub-device 1; clearing the manager joins both."""
         with self._sub_device_manager(self._push_prefetch_manager):
-            # The push first: it waits on its start fence with the other chips, attention needs no one.
+            # The push first: it waits on its start fence with the other chips, attention needs no one. The dispatch
+            # (SPIKE) after attention: its pre-send's enqueue (per-chip programs on 8x4) would delay attention, and it
+            # contends less with SDPA's start (8x4 / carve real data: 1-6% faster; the push: 0-3% slower that way).
+            if _kvd_spike():
+                out = attention()
+                prefetch()
+                return out
             prefetch()
             return attention()
 
@@ -2859,6 +3011,7 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
+        _sec(self.mesh_device, "prepare_kv")
         indices, kvpe_dev = self._select_and_gather_overlapped(
             selection_state=selection_state,
             kvpe_cache=kvpe_cache,
@@ -2867,6 +3020,7 @@ class ttMLA:
             seq_len_local=seq_len_local,
             metadata=metadata,
         )
+        _sec(self.mesh_device, "topk||gather")
         # This full layer reads the dense gather buffer (parity None).
         prefetch = self._presend(
             next_step,

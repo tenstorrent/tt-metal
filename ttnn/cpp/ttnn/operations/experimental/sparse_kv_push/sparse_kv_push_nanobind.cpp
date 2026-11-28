@@ -11,6 +11,7 @@
 
 #include "plan/sparse_push_plan.hpp"
 #include "push/sparse_kv_push.hpp"
+#include "dispatch/sparse_kv_dispatch.hpp"
 #include "common/sparse_kv_push_common.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
@@ -142,7 +143,9 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("max_rows"),
         nb::arg("page_bytes"),
         nb::arg("chunk_start") = nb::none(),
-        nb::arg("chunk_start_tensor") = nb::none());
+        nb::arg("chunk_start_tensor") = nb::none(),
+        nb::arg("owner_major") = false,
+        nb::arg("rank_table") = false);
 
     ttnn::bind_function<"sparse_kv_push", "ttnn.experimental.">(
         mod,
@@ -215,6 +218,108 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("core_grid") = nb::none(),
         nb::arg("sp_axis") = 0);
+
+    ttnn::bind_function<"sparse_kv_dispatch", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Sends the KV rows every chip's top-k needs over sparse_dispatch_2d-style trees (one copy per tree edge,
+            store-and-forward through relay chips) into ``output_tensor``, the full-size gather buffer, at the rows'
+            owner-major pages: the layout high_bw_all_gather writes and sparse_sdpa's block-cyclic remap reads. See
+            models/demos/deepseek_v3_d_p/tests/sparse_mla/push_experiment/KV_DISPATCH_2D_PLAN.md.
+
+            Args:
+                input_tensor: The KVPE cache, sharded over its rows (dim 2) across every chip.
+                output_tensor: [1, 1, rows, width], rows >= max_rows and a multiple of the chip count, replicated
+                    interleaved DRAM with the input's row page.
+                table: This chip's owner-major ``sparse_push_plan`` table (owner_major=True).
+                inbox: One inbox slot per chip, as ``sparse_kv_push``'s inbox.
+                scratch: A tensor of ``sparse_kv_dispatch_scratch_spec``.
+                stripe_chunk, max_rows: As the plan's; max_rows a whole number of slabs.
+                fence_semaphore, arrived_semaphore, credit_semaphore, inbox_semaphore: Distinct global semaphores
+                    on the core grid, zero-initialised; the op leaves them at zero.
+                num_links: 1 or 2.
+                rows_per_packet: Rows per hop packet (0: as many as the fabric payload fits).
+                landing_slots: Packets each port can have in flight to its neighbour.
+                planners: Cores that turn the slices into destination masks.
+                lanes_per_link: Independent sender/unpacker core pairs per direction and link (rows dealt by hash);
+                    more than 1 shares each link through a fabric mux core.
+                batch_index, batch_index_tensor, batch_slot_num_layers, batch_slot_layer_idx: The cache slot, as
+                    ``sparse_kv_push``'s.
+                plan_indices, plan_chunk_start, plan_chunk_start_tensor: Experimental (KVD_DESIGN=3): this chip's
+                    top-k indices; the op then builds ``table`` itself first (the dispatch-only plan, fused).
+                replay, replay_buffer: Plan once, dispatch many (KVD_DESIGN=3): 1 records the planners' routing of
+                    this plan build (every part) into ``replay_buffer`` (``sparse_kv_dispatch_replay_spec``), 2 replays
+                    it (with ``skip_exchange``): no slice reads and no routing. 0: off. replay_generation: the plan
+                    build's number: replay=1 records it, replay=2 routes instead (exact) when the record's differs.
+                    Give each plan build sharing a record buffer its own number, after its slices are exchanged.
+                single_program: KVD_DESIGN=3: one program for the mesh even when the chips' port cores do not fit
+                    one program's grid (the same cores on every chip) rather than a program per chip: less host
+                    time on a large mesh, slower ports on some chips.
+                core_grid: At least 4 x lanes port cores (lanes = num_links x lanes_per_link), then 4 x num_links
+                    mux cores when lanes_per_link > 1, then the planners: 72 with the defaults.
+        )doc",
+        &sparse_kv_dispatch,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("output_tensor").noconvert(),
+        nb::arg("table").noconvert(),
+        nb::arg("inbox").noconvert(),
+        nb::arg("scratch").noconvert(),
+        nb::arg("stripe_chunk"),
+        nb::arg("max_rows"),
+        nb::arg("fence_semaphore"),
+        nb::arg("arrived_semaphore"),
+        nb::arg("credit_semaphore"),
+        nb::arg("inbox_semaphore"),
+        nb::arg("num_links") = 2,
+        nb::arg("rows_per_packet") = 0,
+        nb::arg("landing_slots") = 16,
+        nb::arg("planners") = 48,
+        nb::arg("batch_index") = 0,
+        nb::arg("batch_index_tensor") = nb::none(),
+        nb::arg("batch_slot_num_layers") = 1,
+        nb::arg("batch_slot_layer_idx") = 0,
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("lanes_per_link") = 2,
+        nb::arg("plan_indices") = nb::none(),
+        nb::arg("plan_chunk_start") = nb::none(),
+        nb::arg("plan_chunk_start_tensor") = nb::none(),
+        nb::arg("part") = 0,
+        nb::arg("skip_exchange") = false,
+        nb::arg("rank_table") = nb::none(),
+        nb::arg("sp_axis") = 0,
+        nb::arg("replay") = 0,
+        nb::arg("replay_buffer") = nb::none(),
+        nb::arg("replay_generation") = 0,
+        nb::arg("single_program") = false);
+
+    ttnn::bind_function<"sparse_kv_dispatch_scratch_spec", "ttnn.experimental.">(
+        mod,
+        R"doc(The spec of ``sparse_kv_dispatch``'s scratch tensor for this mesh, cache and planner count.)doc",
+        &sparse_kv_dispatch_scratch_spec,
+        nb::arg("mesh_device"),
+        nb::arg("max_rows"),
+        nb::arg("stripe_chunk"),
+        nb::arg("planners") = 48,
+        nb::arg("num_links") = 2,
+        nb::arg("lanes_per_link") = 2);
+
+    ttnn::bind_function<"sparse_kv_dispatch_replay_spec", "ttnn.experimental.">(
+        mod,
+        R"doc(The spec of ``sparse_kv_dispatch``'s routing record (``replay_buffer``) for this mesh and cache.)doc",
+        &sparse_kv_dispatch_replay_spec,
+        nb::arg("mesh_device"),
+        nb::arg("max_rows"),
+        nb::arg("stripe_chunk"));
+
+    mod.def(
+        "sparse_kv_push_inbox_slot_bytes",
+        [](uint32_t max_rows, uint32_t stripe_chunk, uint32_t num_devices) {
+            return inbox_slot_bytes(max_rows, stripe_chunk, num_devices);
+        },
+        nb::arg("max_rows"),
+        nb::arg("stripe_chunk"),
+        nb::arg("num_devices"));
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push::detail

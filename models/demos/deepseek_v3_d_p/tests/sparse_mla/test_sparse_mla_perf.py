@@ -34,6 +34,7 @@ import os
 import time
 
 import pytest
+import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
@@ -207,12 +208,22 @@ def _measure_and_gate(
     samples = {}
     eager_repeat, traced_repeat = [], []
     samples["untraced"], eager_out = _time_untraced(mesh_device, case, cache, eager_repeat)
+    if os.environ.get("SCRATCH_TIME_SECTIONS"):  # SCRATCH: per-section medians of the untraced forwards
+        from models.demos.deepseek_v3_d_p.tt.mla import mla as _mla_mod
+
+        for k, v in _mla_mod._SCRATCH_SECTIONS.items():
+            print(f"SECTION {label} {k}: median {sorted(v)[len(v) // 2]:.0f} us over {len(v)}")
+        _mla_mod._SCRATCH_SECTIONS.clear()
     samples["traced"], traced_out = _time_traced(mesh_device, case, cache, traced_repeat)
 
     def min_pcc(xs, ys):
         return min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(xs, ys))
 
     trace_pcc = min_pcc(eager_out, traced_out)
+    if os.environ.get("SCRATCH_DUMP_OUT"):  # SCRATCH (Phase 0): the eager output per chip, to compare transports
+        dump_dir = os.environ["SCRATCH_DUMP_OUT"]
+        os.makedirs(dump_dir, exist_ok=True)
+        torch.save(eager_out, os.path.join(dump_dir, f"{label.replace(' ', '_')}.pt"))
     results = {}
     for mode in MODES:
         measured, target = min(samples[mode]), PERF_TARGETS_MS.get((case_name, box, scenario, mode))

@@ -44,6 +44,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start = std::nullopt,
-    const std::optional<Tensor>& chunk_start_tensor = std::nullopt);
+    const std::optional<Tensor>& chunk_start_tensor = std::nullopt,
+    bool owner_major = false,
+    bool rank_table = false);
 
 }  // namespace ttnn::prim
