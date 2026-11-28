@@ -89,8 +89,6 @@ inline void calculate_erfc() {
     }
 }
 
-inline void init_erfc_bf16();
-
 template <bool APPROXIMATION_MODE>
 void erfc_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);

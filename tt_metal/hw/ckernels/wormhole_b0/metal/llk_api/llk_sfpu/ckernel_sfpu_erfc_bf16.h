@@ -5,21 +5,6 @@
 #include <cstdint>
 #include <array>
 namespace ckernel::sfpu {
-struct ErfcBf16Config {
-    struct TtDomainActionRecord {
-        float bound;
-        uint8_t direction;
-        uint8_t inclusive;
-        uint8_t action_kind;   // 0=constant, 1=identity, 2=affine, 3=class, 4=signed-inf
-        uint8_t return_class;  // 0=NaN, 1=+Inf, 2=-Inf, 3=+0, 4=-0
-        float value;
-        float scale;
-        float bias;
-    };
-};
-}  // namespace ckernel::sfpu
-
-namespace ckernel::sfpu {
 
 // The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
 // Float16_b and the block formats sharing its exponent.
@@ -40,6 +25,7 @@ inline void calculate_erfc_bf16_scheduled() {
 // A loop, not unrolled: the body stays in the instruction cache.
 #pragma GCC unroll 1
     for (int pass = 0; pass < 32; ++pass) {
+        asm volatile("" : "+r"(pass));
         TTI_SFPLOAD(2, 0, 3, 0);
         TTI_SFPSETSGN(0, 2, 3, 1);
         TTI_SFPLOADI(0, 0, 0x4114);
@@ -97,41 +83,30 @@ inline void calculate_erfc_bf16_scheduled() {
         TTI_SFPMUL(3, 1, 9, 1, 0);
         TTI_SFPSETEXP(0, 4, 0, 0);
         TTI_SFPMUL(0, 1, 9, 0, 0);
-        TTI_SFPLOADI(1, 0, 0x4118);
+        TTI_SFPLOAD(1, 6, 3, 0);
         TTI_SFPMOV(0, 0, 3, 1);
         TTI_SFPSETCC(0, 2, 0, 0);
         TTI_SFPMOV(0, 3, 0, 0);
+        TTI_SFPMOV(0, 1, 2, 2);
         TTI_SFPADDI(0x4000, 0, 0);
         TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPMAD(11, 1, 2, 1, 0);
-        TTI_SFPLOADI(3, 0, 0xc0a0);
-        TTI_SFPSETCC(0, 1, 0, 4);
-        TTI_SFPMOV(0, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPMAD(11, 3, 2, 1, 0);
-        TTI_SFPLOADI(3, 0, 0x4000);
-        TTI_SFPLOAD(2, 6, 3, 0);
-        TTI_SFPSETCC(0, 1, 0, 0);
-        TTI_SFPMOV(0, 2, 1, 2);
-        TTI_SFPMOV(0, 3, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
         TTI_SFPLOADI(3, 2, 0xff);
-        TTI_SFPXOR(0, 3, 1, 0);
-        TTI_SFPAND(0, 7, 1, 0);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPMOV(0, 2, 1, 2);
+        TTI_SFPXOR(0, 3, 2, 0);
+        TTI_SFPAND(0, 7, 2, 0);
+        TTI_SFPSETCC(0, 2, 0, 6);
+        TTI_SFPMOV(0, 1, 2, 2);
         TTI_SFPLOADI(0, 0, 0x2c4e);
         TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPXOR(0, 7, 1, 0);
-        TTI_SFPAND(0, 7, 1, 0);
-        TTI_SFPSETCC(0, 1, 0, 6);
+        TTI_SFPXOR(0, 7, 2, 0);
+        TTI_SFPAND(0, 7, 2, 0);
+        TTI_SFPSETCC(0, 2, 0, 6);
         TTI_SFPLOADI(3, 2, 0x7f00);
-        TTI_SFPMOV(0, 2, 1, 2);
-        TTI_SFPAND(0, 3, 1, 0);
-        TTI_SFPSETCC(0, 1, 0, 2);
+        TTI_SFPMOV(0, 1, 2, 2);
+        TTI_SFPAND(0, 3, 2, 0);
+        TTI_SFPSETCC(0, 2, 0, 2);
         TTI_SFPLOADI(0, 0, 0x7f80);
         TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPIADD(0xf01, 2, 1, 5);
+        TTI_SFPIADD(0xf01, 1, 1, 5);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPMOV(0, 9, 0, 0);
         TTI_SFPENCC(3, 0, 0, 0xa);

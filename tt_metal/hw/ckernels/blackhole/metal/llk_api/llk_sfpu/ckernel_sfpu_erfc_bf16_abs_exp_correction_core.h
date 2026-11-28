@@ -8,7 +8,6 @@ namespace ckernel::sfpu::ttpoly::erfc {
 using ::sfpi::as;
 using ::sfpi::convert;
 using ::sfpi::DataLayout;
-using ::sfpi::dst_reg;
 using ::sfpi::exexp;
 using ::sfpi::exman;
 using ::sfpi::ExponentMode;
@@ -19,19 +18,9 @@ using ::sfpi::setsgn;
 using ::sfpi::SFPMAD_MOD1_OFFSET_NONE;
 using ::sfpi::shft;
 using ::sfpi::ShiftMode;
-using ::sfpi::vConstFloatPrgm1;
-using ::sfpi::vConstFloatPrgm2;
 using ::sfpi::vFloat;
 using ::sfpi::vInt;
 using ::sfpi::vMag;
-constexpr float correction_exp_scale(int degree) {
-    float scale = 1.0f;
-    for (int i = 0; i < degree; i++) {
-        scale *= 0x1p-23f;
-    }
-    return scale;
-}
-
 template <
     uint32_t DEG,
     bool SquareStore,
@@ -56,12 +45,6 @@ __attribute__((always_inline)) inline vFloat correction_exp_leaf(vFloat x, Mult 
 
     // Full-range safety clamp: keep xlog2 in [0, 255] so the implicit float->int
     // conversion below cannot wrap (TTNN does this in its non-unsafe path).
-    vFloat thr_lo = 0.0f;
-    vFloat thr_hi = 255.0f;
-    if constexpr (!SkipClamp) {
-        ordered_min_max(thr_lo, xlog2);  // xlog2 = max(0, xlog2)
-        ordered_min_max(xlog2, thr_hi);  // xlog2 = min(xlog2, 255)
-    }
 
     // Branch-free float->int: shift mantissa left by (exp - bias) bits.
     vInt e = exexp(xlog2);
@@ -73,56 +56,18 @@ __attribute__((always_inline)) inline vFloat correction_exp_leaf(vFloat x, Mult 
     vMag fm = exman(z);                        // fraction * 2^23
     // Normalize the exman 2^23-scaled fraction back to a float f in [0,1).
     vFloat f;
-    if constexpr (SquareFold || ResidualFold) {
-        f = convert<vFloat>(fm, RoundMode::Nearest);
-    } else {
-        f = convert<vFloat>(fm, RoundMode::Nearest) * 0x1p-23f;
-    }
+    f = convert<vFloat>(fm, RoundMode::Nearest) * 0x1p-23f;
 
     // Plain degree-N Horner for 2^f over the natural [0,1) coeffs.
 
     vFloat p;
-    if constexpr (SquareStore) {
-        p = dst_reg[64 + DEG].mode<DataLayout::F32>();
-    } else if constexpr (SquareFold) {
-        p = c[DEG] * correction_exp_scale(DEG);
-    } else if constexpr (false) {
-        p = ResidualFold ? c[DEG] * correction_exp_scale(DEG) : c[DEG];
-    } else if constexpr (ResidualPool) {
-        p = vConstFloatPrgm1;
-    } else {
-        p = c[DEG];
-    }
+    p = c[DEG];
 #pragma GCC unroll 16
     for (int k = (int)DEG - 1; k >= 0; k--) {
-        if constexpr (SquareStore) {
-            if (k == 0) {
-                p = p * f + c[0];
-            } else {
-                p = p * f + vFloat(dst_reg[64 + k].mode<DataLayout::F32>());
-            }
-        } else if constexpr (SquareFold) {
-            p = p * f + c[k] * correction_exp_scale(k);
-        } else if constexpr (false) {
-            if (k == (int)DEG - 1) {
-                p = p * f + (ResidualFold ? c[k] * correction_exp_scale(k) : c[k]);
-            } else {
-                p = p * f + c[k];
-            }
-        } else if constexpr (ResidualPool) {
-            if (k == (int)DEG - 1) {
-                p = p * f + vConstFloatPrgm2;
-            } else {
-                p = p * f + c[k];
-            }
-        } else {
-            p = p * f + c[k];
-        }
+        p = p * f + c[k];
     }
 
-    if constexpr (SquareFold || ResidualFold) {
-        return setexp(p, ep);
-    } else {
+    {
         vInt pe = exexp(p, ExponentMode::Biased);
         return setexp(p, ep + pe - 127);
     }
