@@ -34,6 +34,7 @@ class StateTensor:
 
     def __init__(self) -> None:
         self._data: ttnn.Tensor | None = None
+        self._bound_before_traces = False
 
     @property
     def data(self) -> ttnn.Tensor | None:
@@ -42,6 +43,15 @@ class StateTensor:
     @property
     def value(self) -> ttnn.Tensor | None:
         return self._data
+
+    @property
+    def keeps_value(self) -> bool:
+        """Whether the buffer still holds what the last ``update`` wrote.
+
+        A trace replay may overwrite any buffer allocated after that trace's capture, so only a buffer
+        bound while no trace was live is trusted; a caller that skips an ``update`` checks this first.
+        """
+        return self._data is not None and self._bound_before_traces
 
     def update(
         self,
@@ -66,6 +76,7 @@ class StateTensor:
             value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
         if self._data is None or not traced:
             self._data = value
+            self._bound_before_traces = not any(Tracer._traces_live.values())
         else:
             ttnn.copy(value, self._data)
 
