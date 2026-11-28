@@ -1,6 +1,6 @@
 ---
-# Runs the Shadow PR Gate on every merge-queue entry. Its checks are not
-# required.
+# Runs the Shadow PR Gate and Shadow Merge Gate on every merge-queue entry.
+# Their checks are not required.
 triggers:
   - id: shadow-pr-gate-merge-queue
     kind: automatic
@@ -17,4 +17,4 @@ triggers:
     priority: 64
     targets:
       jobs: []
-      dashboards: [shadow-pr-gate]
+      dashboards: [shadow-pr-gate, shadow-merge-gate]

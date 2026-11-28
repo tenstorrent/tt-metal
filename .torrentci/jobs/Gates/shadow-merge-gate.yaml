@@ -1,0 +1,28 @@
+---
+# Non-required shadow of the Merge Gate. Only the merge-queue trigger runs it
+# (triggers/merge-queue.yaml). Each member's `when` is its merge-gate.yaml
+# condition over .torrentci/path-groups.yaml, so the shadow runs exactly when
+# the gate it measures against does.
+dashboards:
+  - id: shadow-merge-gate
+    name: Shadow Merge Gate
+    description: "Shadow Merge Gate: a non-blocking shadow of the Merge Gate, run on each merge-queue entry; its checks are not required"
+    report:
+      check: true
+    member-conditions:
+      evaluate-on: [pull-request, merge-queue]
+    members:
+      # runtime-basic-tests, one card per SKU.
+      - job: runtime-basic-n150-asan
+        when:
+          changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]
+      - job: runtime-basic-p150b-asan
+        when:
+          changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]
+      # ttnn-basic-tests, one card per SKU.
+      - job: ttnn-basic-n150-asan
+        when:
+          changed: [cmake, tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, image]
+      - job: ttnn-basic-p150b-asan
+        when:
+          changed: [cmake, tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, image]
