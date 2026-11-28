@@ -156,3 +156,28 @@ def test_kept_host_planes_take_the_next_read(monkeypatch, fake_device, expect_er
     with expect_error(RuntimeError, "taken once"):
         third.result()  # its host tensors are the next read's by now
     assert [len(free) for free in kept.values()] == [2]
+
+
+def test_h3_vae_decode_drops_the_kept_host_planes(expect_error):
+    """Alive at the mesh device's close they abort the process, so no decode leaves them behind."""
+    from models.tt_dit.models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae
+
+    vae = MiniMaxH3Vae.__new__(MiniMaxH3Vae)
+    vae.readback_uint8, vae.device_stitch, vae.pixel_denorm = False, True, object()
+    vae._host_planes = kept = {}
+
+    def _decode(latents, output_type, on_frames):
+        if vae._host_planes is not None:
+            vae._host_planes["a canvas shape"] = [["host tensors"]]
+        if latents is None:
+            raise RuntimeError("decode failed")
+        return "frames"
+
+    vae._decode = _decode
+    assert vae.decode(object(), output_type="yuv420") == "frames"
+    assert kept == {}
+    with expect_error(RuntimeError, "decode failed"):
+        vae.decode(None, output_type="yuv420")
+    assert kept == {} and vae._host_planes is kept
+    vae._host_planes = None  # every canvas reads into new memory
+    assert vae.decode(object(), output_type="yuv420") == "frames"

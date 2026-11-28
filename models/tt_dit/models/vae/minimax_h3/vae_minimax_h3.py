@@ -307,9 +307,10 @@ class MiniMaxH3Vae:
         self._weight_loader = weight_loader
         self._stitcher = None
         self._yuv_pool = None
-        # The yuv readback's host tensors, kept from one canvas to the next and from clip to clip: without
-        # them every canvas reads into new host memory, zeroed and page-faulted first.
-        self._host_planes: dict = {}
+        # The yuv readback's host tensors, kept from one canvas of a decode to the next: without them every
+        # canvas reads into new host memory, zeroed and page-faulted first. `decode` drops them at its end;
+        # None reads every canvas into new memory.
+        self._host_planes: dict | None = {}
         self._blender = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
@@ -1646,6 +1647,11 @@ class MiniMaxH3Vae:
             return self._decode(z_BCTHW, output_type, on_frames)
         finally:
             torch.set_num_threads(previous_threads)
+            if self._host_planes:
+                # Not kept from clip to clip: a host tensor of a non-blocking read that is still alive when
+                # the mesh device closes aborts the process there (its pin waits on the read's event once
+                # more, after the command queues are gone).
+                self._host_planes.clear()
 
     def reserve_decode_output(self, latent_frames: int, latent_height: int, latent_width: int) -> None:
         """Map the host buffer the yuv420 clip assembly of a decode this size will take, in the background.

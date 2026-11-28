@@ -114,7 +114,8 @@ def _read_planes(planes, mesh_device, kept: dict | None):
     overwrites it. A caller that reads the same shapes over and over passes a dict it holds on to as
     ``kept``: the read then lands in host tensors an earlier read handed back, and the second value
     is the list to append them to once their bytes are copied out. As many sets stay allocated per
-    shape as reads were in flight at once.
+    shape as reads were in flight at once. The caller empties the dict before the mesh device closes:
+    a host tensor of a non-blocking read that is alive at the close aborts the process there.
     """
     if kept is None:
         return [plane.cpu(blocking=False) for plane in planes], None
