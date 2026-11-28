@@ -10,7 +10,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_zeros_program_descriptor import create_program_descriptor, make_plan
+from .g6_zeros_program_descriptor import create_program_descriptor, make_plan, num_dram_banks
 
 
 # ---------------------------------------------------------------------------
@@ -99,19 +99,31 @@ def validate(shape, *, dtype, layout, device, memory_config):
 _DESCRIPTOR_CACHE = {}
 
 
+def _plan_inputs(shape, dtype, device):
+    """Host derivation of the plan inputs: N (tile pages), aps (tile bytes), grid, B.
+
+    The single source the plan report and the dispatch path share; on a descriptor-cache miss the
+    dispatch path cross-checks N and aps against the allocated buffer (the allocator stays the
+    source of truth)."""
+    d0, d1, d2, d3 = shape
+    num_pages = d0 * d1 * (d2 // ttnn.TILE_SIZE) * (d3 // ttnn.TILE_SIZE)
+    grid = device.compute_with_storage_grid_size()
+    return num_pages, ttnn.tile_size(dtype), grid.x, grid.y, num_dram_banks(device)
+
+
 def g6_zeros_plan(shape, dtype, device):
-    """Report the selected plan (BB-08): regime R1, cores_per_bank, cores used, burst_pages, B."""
-    out_spec_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
-    plan = make_plan(out_spec_tensor.buffer_num_pages(), out_spec_tensor.buffer_aligned_page_size(), device)
-    ttnn.deallocate(out_spec_tensor)
+    """Report the selected plan (BB-08): regime R1, cores_per_bank, cores used, burst_pages, B.
+
+    Pure host computation: allocates nothing on the device."""
+    num_pages, aps, _, _, _ = _plan_inputs(shape, dtype, device)
+    plan = make_plan(num_pages, aps, device)
     return {
         "regime": "R1_bank_affine_coalesced_runs",
         "num_pages": plan.num_pages,
         "num_banks": plan.num_banks,
         "cores_per_bank": plan.cores_per_bank,
         "cores_used": plan.num_cores,
+        "core_ranges": str(plan.core_range_set()),
         "burst_pages": plan.burst_pages,
         "zero_source_bytes": plan.zero_source_bytes,
     }
@@ -122,17 +134,17 @@ def g6_zeros(shape, *, dtype, layout, device, memory_config):
 
     output = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, memory_config)
 
-    num_pages = output.buffer_num_pages()
-    aps = output.buffer_aligned_page_size()
-    grid = device.compute_with_storage_grid_size()
-    key = (id(device), num_pages, str(dtype), aps, grid.x, grid.y)
-
+    key = (str(dtype),) + _plan_inputs(shape, dtype, device)
     desc = _DESCRIPTOR_CACHE.get(key)
     if desc is None:
+        num_pages, aps = key[1], key[2]
+        assert num_pages == output.buffer_num_pages(), (num_pages, output.buffer_num_pages())
+        assert aps == output.buffer_aligned_page_size(), (aps, output.buffer_aligned_page_size())
         plan = make_plan(num_pages, aps, device)
         desc = create_program_descriptor(output, plan)
         _DESCRIPTOR_CACHE[key] = desc
     else:
+        # Only the buffer address changes between calls of one key (common RT arg 0).
         writer = desc.kernels[0]
         writer.common_runtime_args = [output.buffer_address()]
         desc.kernels = [writer]

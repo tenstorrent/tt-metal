@@ -1,132 +1,114 @@
 # Verification Report: g6_zeros
 
-Phase 0 state: one writer kernel (BRISC, NoC1), no reader and no compute kernel, regime `bank_run`.
-- Writers: 104 cores, 13 per DRAM bank, 2 row-wise rectangles.
-- Each core fills a 16 KiB `cb_zero_source` from `MEM_ZEROS_BASE` by L1 loopback.
-- Each core then streams one contiguous same-bank slot run as ≤ 16 KiB `noc_async_write`s, ending with one write barrier.
-- SUPPORTED: dtype [float32], layout [TILE].
+Phase 0 state: regime R1, bank-affine coalesced zero runs.
+- **Kernels**: one writer kernel (BRISC, NoC1). No reader and no compute kernel: the op has no input and does no math.
+- **Cores**: 104 = 8 DRAM banks × `cores_per_bank` 13, the first 104 cores in row-major order (2 rectangles).
+- **Per core**: fill a `burst_pages·aps` (≤16 KiB) `cb_zero_source` once by NoC loopback from `MEM_ZEROS_BASE`. Then write one contiguous run of bank-rows of bank `k % 8` as ≤16 KiB `noc_async_write`s, with no barrier inside the run. End with one `noc_async_write_barrier`.
+- **SUPPORTED**: dtype [float32], layout [TILE].
 
 ## Code Review
 
 Fixed in this pass:
 
-1. **One plan derivation (DRY, BB-08).** `describe_plan()` and the dispatch path had separate page-count and page-stride derivations. Both now call `_plan_for(shape, dtype, device)`. On a plan-cache miss the dispatch path asserts that the host values equal `output.buffer_num_pages()` and `output.buffer_aligned_page_size()`, so the allocator stays the source of truth.
-2. **Knobs single-sourced at call time and keyed (BB-07).** `plan_bank_runs` read `WRITERS_PER_BANK`, `ZERO_SOURCE_BYTES` and `ZERO_SOURCE_REGIONS` as default arguments, which froze them at import. They now resolve from the module constants at call time. `knob_values()` is part of the host plan-cache key, so turning a knob can never replay a stale descriptor.
-3. **Every piece of work in a named zone (BB-21).** The max-run scan that sizes the fill moved into `G6Z-FILL`. The `TensorAccessor` construction, its stride `ASSERT` and the zero-source address moved into `G6Z-STORE`, the only place they are used. Only two argument reads remain outside a zone.
-4. **Cache-hit address re-patch test.** `test_g6_zeros_cache_hit_new_address` was added. The first output stays alive and the second call lands on a poisoned range, so a stale common runtime arg would zero the wrong buffer and fail. The p2 dirty-destination case already covers cross-shape cache hits: it runs after p3 on the shared program, over poisoned memory.
-5. **Stale tests removed.** `test_g6_zeros_debug.py`, `test_g6_zeros_bank_run_debug.py`, `test_g6_zeros_perf_knobs.py` and `test_g6_zeros_bank_run_perf.py` targeted the APIs of two superseded rebuilds: `Knobs`/`get_program`, `CORE_ORDER`, `WRITER_CORES_PER_BANK`. They no longer match the module. `test_g6_zeros_perf.py` is the current knob-sweep harness.
-6. **Precision baseline bounded.** It accumulates every metric over leading-dim slices. Before this, p1 (2.7e8 elements) would have built several GB of float64 temporaries once bfloat8_b enters SUPPORTED.
+1. **The plan report no longer allocates on the device.** `g6_zeros_plan()` used to allocate, and then free, a full output tensor just to read `buffer_num_pages()` and `buffer_aligned_page_size()`. For p1 that is 286 MB of DRAM. A new helper, `_plan_inputs(shape, dtype, device)`, derives `N = d0·d1·(d2/32)·(d3/32)`, `aps = ttnn.tile_size(dtype)`, the grid and `B` on the host, with no device work. The plan report and the dispatch path now share this one derivation (DRY, BB-08). On a descriptor-cache miss, the dispatch path asserts that `N` and `aps` equal the allocated buffer's values, so the allocator stays the source of truth. The report also returns the core ranges now.
+2. **The descriptor-cache key is the plan input itself.** It is now `(dtype, N, aps, gx, gy, B)`. The old key `(id(device), N, dtype, aps, gx, gy)` had two problems. It left out `B`, which the plan depends on. And `id()` of a Python object can be reused after a device closes. The descriptor holds nothing device-specific beyond those values, and only `common_runtime_args[0]` (the buffer address) is patched per call. `custom_program_hash` already covers dtype plus the full plan key.
+3. **The perf harness was rewritten.** `test_g6_zeros_perf.py` called `pdm.plan_bank_runs` and `grid_fill_writers_per_bank`, which do not exist in the current module, so it could not run. It now sweeps the real knob, `make_plan(..., cores_per_bank=…)`, over the four production cases. That sweep produced the numbers behind Refinement 2.
 
 Checked and clean, no change needed:
-- `kernel_main()` form, `api/dataflow/...` include paths, `TensorAccessor`, non-posted writes, and one `noc_async_write_barrier` before return (BB-03).
-- No CB handshake, and none is needed: `cb_zero_source` is a raw scratch region owned by one kernel.
-- **Helpers.** The fill uses `Noc::async_write_zeros` (CB overload) plus `write_zeros_l1_barrier`. The store is a custom block operation over raw `noc_async_write`, because the DRAM overload of `async_write_zeros` is capped at one page per call (`noc_zero_dram.inl:24`). That would force 262,648 packets on p1 instead of 17,472. No compute or mcast helper applies.
-- **Broadcast efficiency.** Nothing to broadcast. A per-core local fill is cheaper than any transfer.
+- **Kernel basics**: `void kernel_main()`, `api/dataflow/...` includes and a `TensorAccessor` for interleaved DRAM. There is one `noc_async_write_barrier` before return (BB-03), and a core with `run_pages == 0` issues no NoC transaction before returning.
+- **Dev-mode ASSERTs**: the bank stride check (`contiguous_page_stride() == B`) and the run contiguity check (`num_contiguous_pages`) are exercised under `--dev`. The acceptance suite passes there with watcher and NoC sanitizer on.
+- **Write bounds**: every write is `≤ burst_pages·aps = zero_source_bytes` by construction, so no write reads past the zeroed source.
+- **CB use**: `cb_zero_source` has no `reserve/push/wait/pop`, by design. It is single-thread scratch whose content never changes.
+- **Helpers**: the fill uses `Noc::async_write_zeros` (CB overload) plus `write_zeros_l1_barrier`. The store is a raw `noc_async_write` per burst, because the DRAM overload of `async_write_zeros` is limited to one page per call (`noc_zero_dram.inl:24`). Using it would mean 262,648 transactions on p1 instead of about 17.5 k. No mcast or compute helper applies, and there is nothing to broadcast.
 
-Deferred: none. The one material finding, write-stream geometry at 51 % of DRAM peak, is a measured perf refinement (Refinement 2), not a code defect.
+### Design conformance
+
+- **Algorithm and topology**: match `op_design.md` exactly (R1, a single writer, a single CB, the three block operations in named zones `fill_zero_source` / `store_zero_run` / `drain_writes`, BB-21).
+- **Work distribution**: as designed: `cores_per_bank = min(floor(G/B), ceil(N/B))`, core `k` → bank `k % B`, slot `k // B`, row-major order, 2 rectangles (BB-17). The host asserts `Σ run_pages == N`.
+- **Blocking-model fidelity**: `cores_per_bank`, `burst_pages` and `MAX_WRITE_BURST_BYTES` are each defined once, in `make_plan` and the module constant. Everything else is derived from them: the RT args `(first_page, run_pages)`, the core ranges, `zero_source_bytes` (the CB size) and the kernel's `burst_bytes`. `burst_pages`, `B` and `aps` reach the kernel as CT args, and no kernel loop bound is a literal.
+- **Expression**: the per-core block is the whole run, with no per-unit synchronization inside it.
+- **Placement** is the one design lamp that is not yet a knob: `core_coord` is fixed row-major. Refinement 2 turns it into a knob.
+- **Performance conformance**: the design's grid fill is honored (104 cores). The sweep shows that this default is *slower* than fewer writers per bank: 1 writer per bank is 1.20× faster on p1 and 1.16× on p2. This is the design's own grid-sync lamp measuring against its default. It is filed as Refinement 2, which is a knob-turn, not a defect.
 
 ## Prompt Rules (`eval/prompts/g6_zeros.txt` → `## Rules`)
 
 | Rule | Status |
 |------|--------|
-| Write every logical element with the all-zero pattern, never rely on a zeroed buffer, never -0.0 | ✓ Exercised by the dirty-destination cases (acceptance, golden loose and regression) on p2 and p3, and by probe_029 on p4 and p1. 0 non-zero bits. Only `0x00` bytes are ever written. |
-| Output newly allocated per call | ✓ `allocate_tensor_on_device` on every call. `test_g6_zeros_new_storage` and the golden `new_storage` case pass. |
-| Dispatch the op's own program; never delegate or transfer host values | ✓ One `ttnn.generic_op` over the op's descriptor. Nothing else runs. |
-| Output crosses DRAM once as a write; no DRAM read | ✓ Each page sits in exactly one core's run (plan check: runs tile `[0, slots_b)` per bank). Zero bytes come from core-local L1 loopback. |
-| Mesh: allocate and write on every device | ✓ by construction: mesh allocation plus `generic_op`'s SPMD path, and the common-arg address is the same on every chip. Only a single device is available here, so a 4-chip run is not verifiable on this board. |
-| No size/shape/rank axis, no extra tagger, no EXCLUSIONS refusing a production case | ✓ `INPUT_TAGGERS = {dtype, layout}` and `EXCLUSIONS = []`. |
-| OOM on a golden shape is a defect | ✓ None. L1 per core is 16,384 B on every shape. |
-| Core count is the blocking decision's choice, not a shape limit | ✓ 104 writers on every production shape, p4 included (128 pages). |
-| BB-01 one program / BB-02 no wrapping | ✓ |
-| BB-05 L1 ≤ 1,347,776 B per core | ✓ 16,384 B. The host asserts the bound. |
-| BB-06 bit-identical repeats | ✓ golden `test_repeat`. |
-| BB-07 no descriptor rebuild; complete cache key | ✓ Host plan cache keyed on (device, shape, dtype, knobs). `generic_op` hashes the structure. Golden `test_cache_order` (p3→p2→p3) adds no entry. |
-| BB-08 report the selected plan | ✓ `describe_plan()` returns regime, knobs, core ranges and a per-core role map. |
-| BB-16 trace | ✓ All allocation is the output itself, at capture time. The descriptor is built on the first call. |
-| BB-17 few rectangular core ranges | ✓ 2 rectangles: {(0,0)–(10,8), (0,9)–(4,9)}. |
-| BB-21 zones and role dump | ✓ after fix 3: `G6Z-FILL`, `G6Z-FILL-WAIT`, `G6Z-STORE`, `G6Z-DRAIN`. Roles come from `describe_plan`. |
-| BB-22 tests limited to production cases | ✓ Every test uses p1–p4 plus the argument-check cases. |
+| Every logical element written with +0.0 bits; never rely on a zeroed buffer; never -0.0 | ✓ The dirty-destination cases (acceptance, golden loose) pass on p2 and p3. probe_031 covers p4 bf16 and p1 bf8b on poisoned ranges with 0 wrong bits. Only `0x00` bytes are written. |
+| Output newly allocated per call | ✓ `allocate_tensor_on_device` runs on every call. The `new_storage` tests pass. |
+| Own program; no delegation or host transfer | ✓ One `ttnn.generic_op` over the op's own descriptor. |
+| Output crosses DRAM once; no DRAM read | ✓ Each page sits in exactly one run (host assert). The zero bytes come from core-local loopback. |
+| Mesh: write every device | ✓ by construction: one SPMD descriptor through `generic_op`, with the same address on every chip. This board has a single device, so a 4-chip run is not verifiable here. |
+| No size/shape/rank axis, no extra tagger, no refusing EXCLUSIONS | ✓ `INPUT_TAGGERS = {dtype, layout}` and `EXCLUSIONS = []`. |
+| OOM on a golden shape is a defect | ✓ None. L1 per core is ≤16,384 B on every shape. |
+| Core count is the blocking decision's choice | ✓ `cores_per_bank` is a plan knob, not a shape limit. |
+| BB-01 one program, BB-02 no wrapping, BB-03 drain | ✓ |
+| BB-05 L1 ≤ 1,347,776 B | ✓ 16,384 B maximum. |
+| BB-06 bit-identical repeats, BB-07 no rebuild + complete key | ✓ Acceptance `cache_order_and_repeat` and golden `then_shapes` (p3→p2→p3) add no program on the repeat. The key is fixed per item 2 above. |
+| BB-08 plan reporting | ✓ `g6_zeros_plan()` reports the plan on the host only (item 1). |
+| BB-16 trace | ✓ The only allocation is the output, at capture. The descriptor is built on the first call. |
+| BB-17 few rectangles | ✓ 2 ranges: `{(0,0)-(10,8), (0,9)-(4,9)}`. |
+| BB-21 zones | ✓ All three block operations are zoned. Roles come from `g6_zeros_plan`. |
+| BB-22 tests limited to production cases | ✓ Every test uses p1–p4 plus the argument checks. |
 
-No soft ("prefer / consider / avoid") rule is unfollowed.
+No soft ("prefer / consider / avoid") rule applies unfollowed.
 
 ## Registry Conformance
 
-- `INPUT_TAGGERS`: `tag_dtype(inputs, axes)` and `tag_layout(inputs, axes)` read `inputs[0]`. Both signatures are correct.
-- `SUPPORTED`: `{"dtype": [float32], "layout": [TILE_LAYOUT]}`. Every axis the kernel gates on is present.
-- `EXCLUSIONS`: `[]`.
-- `validate()`: argument checks (ValueError / RuntimeError) run first, then SUPPORTED per axis (`UnsupportedAxisValue`), then EXCLUSIONS (`ExcludedCell`). The order is correct, and it is the first line of `g6_zeros()`.
-- The op file does **not** declare `INVALID`.
-- No SUPPORTED auto-fix was needed: `xpass_drift = 0`.
-- **INVALID audit** (`eval/golden_tests/g6_zeros/feature_spec.py`): `INVALID = []`. That is correct.
-  - TARGET layout is `[TILE]` alone, so the canonical bf8b + ROW_MAJOR cell is outside the universe and needs no entry.
-  - There is no weight tensor, so there are no cross-tensor couplings and no canonicalization cells.
-
-## Design Conformance (`op_design.md`)
-
-| Dimension | Status |
-|-----------|--------|
-| Algorithm | ✓ `bank_run`: core-local zero source, contiguous same-bank runs, ≤ `zero_source_bytes` per write. |
-| Pipeline topology | ✓ Writer only, BRISC/NoC1. |
-| Work distribution | ✓ `writers_per_bank = max(1, min(grid // N, ceil(P / N)))` = 13, giving 104 cores. Bank `w mod N`, slot base/extra split, `first_page_id = b + first_slot·N`. This matches the design's table for p1–p4. |
-| Inter-core communication | ✓ None, as designed. |
-| Blocking-model fidelity | ✓ `writers_per_bank`, `zero_source_bytes` and `zero_source_regions` are each defined once and reach the kernel as CT args, the CB size and the plan. `num_blocks` is a runtime loop bound, so the multi-bank-per-core unlock is a knob-turn. No CB scales with an op dimension. The per-chunk loop inside `store_bank_run` is the `NOC_MAX_BURST_SIZE` mechanism cap, not a half-turned split. |
-| Expression | ✓ Inside a run, every write is issued back-to-back with no per-chunk barrier or handshake. There is one barrier per core per call. |
-| Performance conformance | The implementation fills the grid exactly as designed. Measured, that geometry reaches 259 GB/s on p1, 51 % of DRAM peak, because 13 NoC1 streams per bank converge from every grid row. The design flagged this as its grid-sync and core↔bank placement lamps. A measured knob-turn reaches 510.6 GB/s (below). It is filed as Refinement 2 (perf), not fixed in place: it moves off the design's Phase 0 values, regresses p4 unless handled by shape, and must be measured on bfloat8_b p1, which Refinement 1 unlocks. |
+- `INPUT_TAGGERS` has `{dtype, layout}`, both with the `(inputs, axes)` signature, reading the scenario dict. `SUPPORTED` has `{dtype: [float32], layout: [TILE]}`. `EXCLUSIONS = []`.
+- `validate()` runs the structural checks (`ValueError`), then the taggers, then SUPPORTED (`UnsupportedAxisValue`), then EXCLUSIONS (`ExcludedCell`). It is the first line of `g6_zeros`.
+- The op file declares no `INVALID`.
+- No auto-fix to SUPPORTED was needed: xpass_drift is 0. bf16 and bf8b are known to work past `validate()` (probe_031), but `validate()` refuses them, so they are xfail rather than XPASS. Adding them is Refinement 1.
+- **INVALID audit** (`feature_spec.py`): `INVALID = []`, which is correct. TARGET has TILE only, so the canonical bf8b+ROW_MAJOR entry has no layout to couple with. There is no weight tensor and no cross-tensor coupling.
 
 ## L1 Ledger Audit
 
-- **Ledger currency.** There is one CB, `cb_zero_source`, index 0, `total_size = zero_source_regions · zero_source_bytes = 16384`, `page_size = zero_source_bytes`, format = output dtype tag. The ledger row matches the code.
-- **Capacity vs live set.** The live set is `fill_bytes = min(zero_source_bytes, core_run_bytes)`. It is 16,384 B on p1/p2/p3. On p4 it is 2–4 KiB: capacity exceeds the live set there, and the ledger justifies it because the fill writes only the live prefix. *Under*: none. The buffer streams over `slot` (the run is walked in chunks) and spans no block axis.
-- **Page format vs DEST.** Not applicable, and recorded with a mechanism reason: a dataflow-only payload with no compute kernel and no DEST.
-- **Disjoint lifetime.** Single CB, nothing to pair.
-- **Bounds.** `zero_source_bytes` is bounded by the model L1 share and DRAM alignment, both host-asserted. No op dimension appears in a capacity expression.
-- **Total per core**: `L1 = zero_source_regions · zero_source_bytes = 16,384 B`. It scales only with the `zero_source_bytes` knob; shape, dtype, grid and mesh size do not affect it.
-- **Data-movement budget.** Present and consistent with the code: output written once, 0 B DRAM read, 0 B cross-core. The cheapest-traffic split (bank-major) is implemented.
-- **Block-size defaults.** Interleaved: the split spreads over 104 of 110 cores (13 × 8, equal streams per bank) at the coarsest block, the whole per-core share. The ledger ranks candidates on bytes and packet count. Measurement shows the binding cost is NoC-path convergence on each bank endpoint, which the ledger's transfer-shape lens does not see. The fix changes writer count and placement only, not any CB, so it needs no ledger change and is folded into Refinement 2.
+- **Currency**: one CB in the code, `cb_zero_source`, index 0, `total_size = page_size = burst_pages·aps`. It is one ledger row with the same expression. ✓
+- **Capacity vs live set**: the capacity is one burst's source, and the live set is the same, because every burst reads all of it. It spans `burst` and streams over `bank_row`, `bank` and `mesh`. Nothing is oversized or collapsed. ✓
+- **Page format vs DEST**: n/a. The payload is dataflow-only and never unpacked (the `dtype` label is cosmetic). ✓
+- **Disjoint lifetimes**: n/a. It is the only buffer, and its "why not removed" is justified: `MEM_ZEROS_BASE` is 512 B, so using it directly would mean 32× the write count. ✓
+- **Bounds**: `zero_source_bytes ≤ 16384`, closed form in `burst_pages` and `aps`. No op dimension appears in any capacity. ✓
+- **Traffic budget**: output 1 DRAM crossing (write), 0 reads, 0 cross-core traffic. This is consistent with the code. R1 is the cheapest-traffic split, so nothing is deferred. ✓
+- **Block-size defaults**: the interleaved default (full grid, coarsest block = whole run) held as designed. The measurement says fewer cores are faster for this write-only, bank-bound op. That departure is folded into Refinement 2, which must record it in the ledger. It gets no queue entry of its own.
+- **Per-core footprint**: `burst_pages·aps ≤ 16 KiB`. It scales only with `burst_pages` and with `dtype` through `aps`.
 
 ## Precision Baseline
 
-`tests/ttnn/unit_tests/operations/g6_zeros/test_g6_zeros_precision_baseline.py` was run under `--dev`. The reference is all zero, so PCC and relative RMS are degenerate: the reference std is 0, and `comp_pcc` falls back to allclose. The gate is bitwise: max ULP 0 and no -0.0. The got/true ratio is undefined, since every reference element is 0. The scale-bug triage does not apply: the op computes nothing.
+`test_g6_zeros_precision_baseline.py`. The reference is all zero, so relative RMS is undefined (the reference std is 0), and so is the got/true ratio (every reference element is zero). The real gate is the bit pattern: max ULP 0 and no -0.0.
 
-| Shape | dtype | PCC | Max Abs Err | Mean Abs Err | RMS Err | Relative RMS | Max ULP | -0.0 count |
-|-------|-------|-----|-------------|--------------|---------|--------------|---------|------------|
-| (8,12,128,128) | float32 | 1.0 | 0.0 | 0.0 | 0.0 | undefined (ref std 0) | 0 | 0 |
-| (16,12,128,128) | float32 | 1.0 | 0.0 | 0.0 | 0.0 | undefined (ref std 0) | 0 | 0 |
-| (1,4,256,128) | bfloat16 | xfail (outside SUPPORTED). Probe_029 past `validate()`: 0 / 131,072 non-zero bits | | | | | | |
-| (32831,1,32,256) | bfloat8_b | xfail (outside SUPPORTED). Probe_029 past `validate()`: 0 / 268,951,552 non-zero bits | | | | | | |
+| Shape | dtype | PCC | Max Abs Err | Mean Abs Err | RMS Err | Max ULP | -0.0 count |
+|-------|-------|-----|-------------|--------------|---------|---------|-----------|
+| (8,12,128,128) | float32 | 1.0 | 0.0 | 0.0 | 0.0 | 0 | 0 |
+| (16,12,128,128) | float32 | 1.0 | 0.0 | 0.0 | 0.0 | 0 | 0 |
+| (1,4,256,128) | bfloat16 | xfail (outside SUPPORTED); probe_031: 0 non-zero bits / 131,072 | | | | | |
+| (32831,1,32,256) | bfloat8_b | xfail (outside SUPPORTED); probe_031: 0 non-zero bits / 268,951,552 | | | | | |
 
-**Assessment**: exact. Every element is the +0.0 bit pattern, including on poisoned ranges.
-**Recommended tolerances**: exact for every dtype. `helpers.TOLERANCES` already holds `("exact", None)`, so the defaults hold.
+**Assessment**: exact. The op writes `0x00` bytes and computes nothing.
+**Recommended tolerances**: exact for every dtype (`helpers.TOLERANCES`). The scale-versus-precision triage is n/a: there are no failures, and the reference is all zero.
 
 ## Verifier CLI Summary
 
-From `verifier_results/verifier_report.json`, golden run 13/19 passed, 0 failed, 0 hangs:
+`ttnn/ttnn/operations/g6_zeros/verifier_results/verifier_report.json`, re-run after the fixes:
 - supported_pass: 13
-- xfail_expected: 6. All are bfloat16 / bfloat8_b cells, queued as Refinement 1.
-- invalid_skipped: 0 (INVALID is empty)
+- xfail_expected: 6. These are the p4 bf16 ×3 and p1 bf8b ×3 cells, which go to Refinement 1.
+- invalid_skipped: 0
 - supported_fail: 0
 - xpass_drift: 0
 - xfail_wrong_mode: 0
 
-Unit tests (`tests/ttnn/unit_tests/operations/g6_zeros/`, `--dev`): 40 passed, 6 xfailed. The xfails are the same bf16/bf8b refusals.
+## Device time (Blackhole, `test_g6_zeros_perf.py`, device kernel duration, ns)
 
-## Perf Baseline (device kernel duration, Blackhole, 11×10 grid, 8 DRAM banks)
+| case | default (cpb 13, 104 cores) | cpb 8 | cpb 4 | cpb 2 | cpb 1 (8 cores) |
+|------|----|----|----|----|----|
+| p1 bf8b (286 MB) | 1,092,860 | 1,047,264 | 942,677 | 971,191 | 906,971 |
+| p2 fp32 (12.6 MB) | 47,114 | 44,731 | 41,344 | 44,024 | 40,619 |
+| p3 fp32 (6.3 MB) | 24,271 | 22,514 | 21,830 | 22,205 | 20,781 |
+| p4 bf16 (0.26 MB) | 1,807 | 1,799 | 1,874 | 1,875 | 1,757 |
 
-| plan | p1 bf8b 285.8 MB | p2 fp32 12.6 MB | p3 fp32 6.3 MB | p4 bf16 0.26 MB |
-|------|------------------|-----------------|----------------|-----------------|
-| Phase 0 (13/bank, row-wise, 104 cores) | 1,102,674 ns (259 GB/s) | 48,693 | 24,827 | 1,603 |
-| 1/bank on its NoC1-optimal worker (8 cores) | 559,640 ns (510.6 GB/s) | 25,807 | 13,471 | 1,775 |
-
-p1 target: ≤ 837,190 ns. The full writers-per-bank sweep is in `op_requirements.md` → Refinement 2. Every variant was checked over a poisoned range.
+The p1 target is ≤ 837.19 µs (Refinement 2).
 
 ## Recommendations
 
-- **Order.** Refinement 1 (dtypes) comes first, because it lands the perf-flagged p1 contract. Then Refinement 2 (perf on p1). TARGET − SUPPORTED is exactly `dtype ∈ {bfloat16, bfloat8_b}`, so the queue holds one generality refinement, and the cadence runs straight into perf.
-- **No third refinement.** The probe puts p1 at 510.6 GB/s once Refinement 2 lands. That is at the 512 GB/s nominal DRAM peak and below the lead's 620.14 µs roofline. The remaining design lamps have no device-ns headroom on the flagged shape, so none is filed:
-  - stateful `noc_async_write_one_packet_with_state`
-  - an NCRISC/NoC0 split of each run
-  - `zero_source_bytes` 8 KiB / 32 KiB
-
-  If Refinement 2 lands short of about 510 GB/s, its partial-tick follow-up is where these belong.
-- **Host time on p4**, the most-called case. `custom_program_hash` is unset, so every untraced call hashes the descriptor. This is host time, not device ns, and traced replay skips it. It is not a queue item. Measure untraced host time on p4 if host dispatch shows up in the model.
-- **p4 is launch-dominated**: 1.6 µs for 256 KiB. Any p1-driven placement change must keep p4 in its guard set (see Refinement 2's notes).
+- **Queue coverage**: `TARGET − SUPPORTED = {dtype: bfloat16, bfloat8_b}`. Refinement 1 covers both values. `layout` is complete, and there are no INVALID or INVALID_FOR_ARCH values.
+- **Perf**: one perf refinement is filed (Refinement 2, p1, writer count plus bank-near placement). A second perf slot is not filed yet. The perf flag requires every perf phase to target p1, and p1's remaining headroom after Refinement 2 is unknown: the roofline is 620 µs, and the levers left (`burst_pages`, a split BRISC+NCRISC writer per core per catalog `split_reader`) only pay if p1 is still issue-bound and not DRAM-bound. Re-measure after Refinement 2. If p1 is above about 1.1× the roofline, file a follow-up perf refinement on p1 with those levers.
+- **p4** (128 pages, about 1.8 µs) is dominated by per-call overhead. It is not a flagged shape, so it is a guard, not a target.

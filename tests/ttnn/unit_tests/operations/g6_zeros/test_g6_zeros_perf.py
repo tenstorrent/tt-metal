@@ -2,19 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-time harness for g6_zeros: the four production cases, shipped plan against Phase 0.
+"""Device-time harness for g6_zeros: the four production cases × the `cores_per_bank` knob.
 
-Measurement only; correctness is the acceptance suite's job. "shipped" calls the public entry
-point with the module's knob defaults. "phase0" dispatches the op's own descriptor with the Phase 0
-knob values (13 writers per bank, row-wise, 16 KiB zero source) for an A/B in the same session.
-Run under `scripts/run_safe_pytest.sh --profile --no-py-zones`; one ops-CSV row per test, in
-collection order (cases outer, plans inner).
+Measurement only; correctness is the acceptance suite's job. "default" is the knob value
+`make_plan` picks; the others turn `cores_per_bank` (the grid-sync lamp of the Blocking Model)
+for an A/B in the same session. The descriptor is dispatched directly so the harness can also
+time dtypes not yet in SUPPORTED (no validate()). Run under
+`scripts/run_safe_pytest.sh --profile --no-py-zones`; one ops-CSV row per test, in collection
+order (cases outer, knob inner).
 """
 
 import pytest
 import ttnn
 
-from ttnn.operations.g6_zeros import g6_zeros
 from ttnn.operations.g6_zeros import g6_zeros_program_descriptor as pdm
 
 CASES = [
@@ -24,36 +24,16 @@ CASES = [
     pytest.param((1, 4, 256, 128), ttnn.bfloat16, id="p4"),
 ]
 
-PHASE0_ZERO_SOURCE_BYTES = 16384
 
-
-def _phase0(shape, dtype, device):
+@pytest.mark.parametrize("cores_per_bank", [None, 1, 2, 4, 8], ids=lambda v: f"cpb_{v or 'default'}")
+@pytest.mark.parametrize("shape, dtype", CASES)
+def test_g6_zeros_device_time(shape, dtype, cores_per_bank, device):
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-    num_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
-    grid = device.compute_with_storage_grid_size()
-    num_pages = output.buffer_num_pages()
-    plan = pdm.plan_bank_runs(
-        num_pages,
-        num_banks,
-        output.buffer_aligned_page_size(),
-        grid,
-        writers_per_bank=pdm.grid_fill_writers_per_bank(num_pages, num_banks, grid.x * grid.y),
-        placement="row_wise",
-        zero_source_bytes=PHASE0_ZERO_SOURCE_BYTES,
+    plan = pdm.make_plan(
+        output.buffer_num_pages(), output.buffer_aligned_page_size(), device, cores_per_bank=cores_per_bank
     )
-    return ttnn.generic_op([output], pdm.create_program_descriptor(output, plan))
-
-
-@pytest.mark.parametrize("plan", ["shipped", "phase0"])
-@pytest.mark.parametrize("shape, dtype", CASES)
-def test_g6_zeros_device_time(shape, dtype, plan, device):
-    if plan == "shipped":
-        output = g6_zeros(
-            shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-    else:
-        output = _phase0(shape, dtype, device)
+    ttnn.generic_op([output], pdm.create_program_descriptor(output, plan))
     ttnn.synchronize_device(device)
     ttnn.deallocate(output)
