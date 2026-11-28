@@ -7,41 +7,35 @@
 #include "../isin_common.hpp"
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt_stl/assert.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
 
-enum class IsInCB : std::underlying_type_t<tt::CBIndex> {
-    ELEMENTS = tt::CBIndex::c_0,
-    TEST_ELEMENTS = tt::CBIndex::c_1,
-    OUTPUT = tt::CBIndex::c_2
-};
-
-static CBDescriptor make_cb(
-    const DataType& dtype,
-    const IsInCB& is_in_cb,
-    const CoreRangeSet& core_range_set,
-    const uint32_t& page_size_bytes) {
-    const uint32_t cb_id{static_cast<uint32_t>(is_in_cb)};
-    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    return CBDescriptor{
-        .total_size = page_size_bytes,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_id),
-            .data_format = cb_data_format,
-            .page_size = page_size_bytes,
-        }}},
+static DataflowBufferSpec make_dfb(
+    const DFBSpecName& dfb_name, const DataType& dtype, const uint32_t& page_size_bytes) {
+    return DataflowBufferSpec{
+        .unique_id = dfb_name,
+        .entry_size = page_size_bytes,
+        .num_entries = 1,
+        .data_format_metadata = datatype_to_dataformat_converter(dtype),
     };
 }
 
-ProgramDescriptor IsInProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts IsInProgramFactory::create_program_artifacts(
     const IsinParams& args, const IsinInputs& tensor_args, Tensor& output_tensor) {
-    ProgramDescriptor desc;
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName ELEMENTS_DFB{"elements"};
+    const DFBSpecName TEST_ELEMENTS_DFB{"test_elements"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const TensorParamName ELEMENTS{"elements"};
+    const TensorParamName TEST_ELEMENTS{"test_elements"};
+    const TensorParamName OUTPUT{"output"};
 
     const auto& elements_tensor = tensor_args.elements_tensor;
     const auto& test_elements_tensor = tensor_args.test_elements_tensor;
@@ -59,6 +53,10 @@ ProgramDescriptor IsInProgramFactory::create_descriptor(
     TT_FATAL(test_elements_buffer != nullptr, "Test elements tensor's buffer is null");
     TT_FATAL(output_buffer != nullptr, "Output tensor's buffer is null");
 
+    const auto& elements_mesh_tensor = elements_tensor.mesh_tensor();
+    const auto& test_elements_mesh_tensor = test_elements_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
+
     // input dtype byte sizes
     const uint32_t& elements_datum_size = elements_tensor.element_size();
     const uint32_t& test_elements_datum_size = test_elements_tensor.element_size();
@@ -72,24 +70,15 @@ ProgramDescriptor IsInProgramFactory::create_descriptor(
     auto* device = elements_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    // Slots 0-2 stay unused so TensorAccessorArgs remains at index 11.
-    // IsInCTAs does not decode them; kernels read addresses from runtime args.
-    std::vector<uint32_t> compile_time_args{
-        0u,
-        0u,
-        0u,
-        static_cast<uint32_t>(IsInCB::ELEMENTS),
-        static_cast<uint32_t>(IsInCB::TEST_ELEMENTS),
-        static_cast<uint32_t>(IsInCB::OUTPUT),
-        elements_tensor.logical_volume(),
-        test_elements_tensor.logical_volume(),
-        single_fetch_subchunk_size,
-        static_cast<uint32_t>(invert),
-        elements_tensor.element_size(),
-        output_datum_size};
-    tt::tt_metal::TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
+    // Both kernels get the full set; the shared decoder in isin_common.hpp reads all of them.
+    const KernelSpec::CompileTimeArgs compile_time_args{
+        {"elements_size", elements_tensor.logical_volume()},
+        {"test_elements_size", test_elements_tensor.logical_volume()},
+        {"single_fetch_subchunk_size", single_fetch_subchunk_size},
+        {"invert", static_cast<uint32_t>(invert)},
+        {"elements_tensor_datum_size", elements_tensor.element_size()},
+        {"output_tensor_datum_size", output_datum_size},
+    };
 
     // The final tensor to be dealt with by the isin device operation is flattened to 1D and the number of subchunks
     // (each of elements, test_elements and output) that they have to be split into depends on the L1 available size per
@@ -105,29 +94,101 @@ ProgramDescriptor IsInProgramFactory::create_descriptor(
          num_subchunks_per_core_group_1,  // Number of subchunks each core in the primary group processes
          num_subchunks_per_core_group_2   // Number of subchunks each core in the secondary group processes
     ] = split_work_to_cores(compute_with_storage_grid_size, subchunks_num);
-    desc.cbs.push_back(make_cb(elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes));
-    desc.cbs.push_back(
-        make_cb(test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes));
-    desc.cbs.push_back(make_cb(OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes));
+
+    // Each DFB holds one subchunk. The reader loads elements and test_elements into their DFBs and reads them back
+    // itself, so it is both producer and consumer of those two.
+    ProgramSpec spec{
+        .name = "isin",
+        .dataflow_buffers =
+            {
+                make_dfb(ELEMENTS_DFB, elements_dtype, elements_subchunk_size_bytes),
+                make_dfb(TEST_ELEMENTS_DFB, test_elements_dtype, test_elements_subchunk_size_bytes),
+                make_dfb(OUTPUT_DFB, OUTPUT_TENSOR_DATA_TYPE, output_subchunk_size_bytes),
+            },
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = ELEMENTS, .spec = elements_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = TEST_ELEMENTS, .spec = test_elements_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "isin",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
 
     constexpr const char* READER_KERNEL_PATH =
         "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_reader.cpp";
     constexpr const char* WRITER_KERNEL_PATH =
         "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_writer.cpp";
 
-    KernelDescriptor reader_kernel;
-    reader_kernel.kernel_source = READER_KERNEL_PATH;
-    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel.core_ranges = all_cores;
-    reader_kernel.compile_time_args = compile_time_args;
-    reader_kernel.config = ReaderConfigDescriptor{};
+    KernelSpec reader_kernel{
+        .unique_id = READER,
+        .source = READER_KERNEL_PATH,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = ELEMENTS_DFB,
+                    .accessor_name = "elements",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = ELEMENTS_DFB,
+                    .accessor_name = "elements",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = TEST_ELEMENTS_DFB,
+                    .accessor_name = "test_elements",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = TEST_ELEMENTS_DFB,
+                    .accessor_name = "test_elements",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = ELEMENTS, .accessor_name = "elements"},
+                TensorBinding{.tensor_parameter_name = TEST_ELEMENTS, .accessor_name = "test_elements"},
+            },
+        .compile_time_args = compile_time_args,
+        .runtime_arg_schema = {.runtime_arg_names = {"subchunks_per_core", "subchunks_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    KernelDescriptor writer_kernel;
-    writer_kernel.kernel_source = WRITER_KERNEL_PATH;
-    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel.core_ranges = all_cores;
-    writer_kernel.compile_time_args = std::move(compile_time_args);
-    writer_kernel.config = WriterConfigDescriptor{};
+    KernelSpec writer_kernel{
+        .unique_id = WRITER,
+        .source = WRITER_KERNEL_PATH,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+            },
+        .compile_time_args = compile_time_args,
+        .runtime_arg_schema = {.runtime_arg_names = {"subchunks_per_core", "subchunks_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     const auto cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, num_cores_y);
@@ -142,15 +203,33 @@ ProgramDescriptor IsInProgramFactory::create_descriptor(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        reader_kernel.emplace_runtime_args(
-            core, {elements_buffer, test_elements_buffer, subchunks_per_core, subchunks_offset});
-        writer_kernel.emplace_runtime_args(core, {output_buffer, subchunks_per_core, subchunks_offset});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"subchunks_per_core", subchunks_per_core}, {"subchunks_offset", subchunks_offset}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"subchunks_per_core", subchunks_per_core}, {"subchunks_offset", subchunks_offset}});
 
         subchunks_offset += subchunks_per_core;
     });
 
-    desc.kernels.push_back(std::move(reader_kernel));
-    desc.kernels.push_back(std::move(writer_kernel));
-    return desc;
+    spec.kernels = {std::move(reader_kernel), std::move(writer_kernel)};
+
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)},
+        .tensor_args =
+            {
+                {ELEMENTS, elements_mesh_tensor},
+                {TEST_ELEMENTS, test_elements_mesh_tensor},
+                {OUTPUT, output_mesh_tensor},
+            },
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 }  // namespace ttnn::experimental::prim
