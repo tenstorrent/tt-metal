@@ -3,7 +3,14 @@
 
 import ttnn
 from typing import List
-from models.experimental.retinanet.tt.tt_regression_head import Conv2dNormActivation
+from models.experimental.retinanet.tt.utils import (
+    Conv2dNormActivation,
+    activation_memory_config,
+    conv2d_with_level_weights,
+    cls_logits_slice_config,
+    group_norm_grid,
+    head_conv_config,
+)
 from dataclasses import dataclass
 
 
@@ -113,15 +120,15 @@ def ttnn_retinanet_classification_head(
     model_config: dict = None,
     optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
-    """
-    TTNN implementation of RetinaNet classification head.
-    """
+    """The classification head on ``feature_maps``, the five pyramid levels as NHWC TILE tensors.
+    ``parameters`` come from preprocess_classification_head_parameters for the same device; the
+    head runs as many conv blocks as they hold. Returns the class logits, [1, anchors, 91]."""
     if input_shapes is None:
         input_shapes = [(fm.shape[1], fm.shape[2]) for fm in feature_maps]
 
     opt_config = retinanet_classification_head_optimizations[optimization_profile]
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    grid_size = group_norm_grid(device)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -137,11 +144,11 @@ def ttnn_retinanet_classification_head(
         fpn_conv_config_dict = getattr(opt_config, f"fpn{fpn_idx}_conv_blocks")
         fpn_final_config_dict = getattr(opt_config, f"fpn{fpn_idx}_final_conv")
 
-        fpn_conv_config = ttnn.Conv2dConfig(**fpn_conv_config_dict) if fpn_conv_config_dict else None
-        fpn_final_config = ttnn.Conv2dConfig(**fpn_final_config_dict) if fpn_final_config_dict else None
+        fpn_conv_config = head_conv_config(device, fpn_conv_config_dict)
+        fpn_final_config = head_conv_config(device, fpn_final_config_dict)
 
         x = feature_map
-        for conv_idx in range(4):
+        for conv_idx in range(len(parameters["conv"])):
             conv_block = Conv2dNormActivation(
                 parameters=parameters["conv"][conv_idx],
                 device=device,
@@ -152,19 +159,16 @@ def ttnn_retinanet_classification_head(
                 padding=(1, 1),
                 num_groups=32,
                 grid_size=grid_size,
-                model_config=model_config,
                 compute_config=compute_config,
                 conv_config=fpn_conv_config,
             )
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            x = conv_block(
-                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
-            )
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W, level=fpn_idx)
 
-        cls_logits = ttnn.conv2d(
+        cls_logits, _, _ = conv2d_with_level_weights(
+            parameters["cls_logits"],
+            fpn_idx,
             input_tensor=x,
-            weight_tensor=parameters["cls_logits"]["weight"],
-            bias_tensor=parameters["cls_logits"]["bias"],
             in_channels=in_channels,
             out_channels=num_anchors * num_classes,
             device=device,
@@ -176,8 +180,8 @@ def ttnn_retinanet_classification_head(
             input_width=W,
             compute_config=compute_config,
             conv_config=fpn_final_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            memory_config=activation_memory_config(device),
+            slice_config=cls_logits_slice_config(device),
         )
 
         N, H_out, W_out, _ = cls_logits.shape

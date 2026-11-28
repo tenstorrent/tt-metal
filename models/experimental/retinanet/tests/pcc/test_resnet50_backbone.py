@@ -8,10 +8,11 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
-from PIL import Image
-from torchvision import transforms
+
+from models.experimental.retinanet.num_layers import load_reduced
 from models.experimental.retinanet.tt.tt_backbone import TTBackbone
 from models.experimental.retinanet.tt.custom_preprocessor import create_custom_mesh_preprocessor
+from models.experimental.retinanet.tests.pcc.synthetic_input import synthetic_image
 
 
 class BackboneTestInfra:
@@ -34,21 +35,12 @@ class BackboneTestInfra:
         # Load RetinaNet model to extract backbone
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         retinanet.eval()
+        load_reduced(retinanet)
 
         # Store only backbone
         self.torch_backbone = retinanet.backbone
 
-        # Torch input preprocessing
-        preprocess = transforms.Compose(
-            [
-                transforms.CenterCrop((512, 512)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]
-        )
-
-        img = Image.open("models/experimental/retinanet/resources/dog_800x800.jpg").convert("RGB")
-        self.torch_input_tensor = preprocess(img).unsqueeze(0)
+        self.torch_input_tensor = synthetic_image()
 
         # Get backbone features
         backbone_features = self.torch_backbone(self.torch_input_tensor)
