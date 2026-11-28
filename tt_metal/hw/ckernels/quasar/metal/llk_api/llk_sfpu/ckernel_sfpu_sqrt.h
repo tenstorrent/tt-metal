@@ -42,6 +42,9 @@ inline void _calculate_sqrt_() {
     }
 }
 
+// Whether BF16 DEST runs the generated sqrt kernel as one call over the whole tile.
+inline constexpr bool sqrt_bf16_whole_tile = false;
+
 template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,
