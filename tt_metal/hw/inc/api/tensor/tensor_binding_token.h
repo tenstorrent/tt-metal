@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "internal/llk_metadata.h"
+#include "internal/token_with_llk_metadata.h"
 #include "api/tensor/tensor_accessor_args.h"
 
 namespace tensor_accessor {
@@ -41,7 +41,7 @@ namespace tensor_accessor {
 // TensorAccessorArgs nominally supports.
 //
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken {
+struct TensorBindingToken : public binding_details::TokenWithLLKMetadata {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
@@ -49,71 +49,8 @@ struct TensorBindingToken {
     // Construct a TensorBindingToken with LLK metadata.
     // Read these metadata with get_dataformat(token) / get_face_r_dim(token) / ...,
     // or construct an operand with LLKOperandFrom<token>.
-    explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
-
-private:
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token);
-
-    binding_details::LLKMetadata llk_metadata_;
+    explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : TokenWithLLKMetadata(llk) {}
 };
-
-/**
- * Extract DataFormat metadata associated with a `TensorBindingToken`.
- * This metadata describes the data format of the `MeshTensor` that this token represents.
- * Missing metadata fails constant evaluation regardless of device assertion settings.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
-    return static_cast<DataFormat>(token.llk_metadata_.format);
-}
-
-/**
- * Extract the face height (in elements) associated with a `TensorBindingToken`.
- * This metadata describes the tile layout of the `MeshTensor` that this token represents.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_r_dim;
-}
-
-/**
- * Extract the face width (in elements) associated with a `TensorBindingToken`.
- * This metadata describes the tile layout of the `MeshTensor` that this token represents.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_c_dim;
-}
-
-/**
- * Extract the number of faces along the tile's row dimension associated with a `TensorBindingToken`.
- * This metadata describes the tile layout of the `MeshTensor` that this token represents.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_r_dim;
-}
-
-/**
- * Extract the number of faces along the tile's column dimension associated with a `TensorBindingToken`.
- * This metadata describes the tile layout of the `MeshTensor` that this token represents.
- */
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_c_dim;
-}
 
 // PerNodeTensorBindingToken: the binding token for a per-node tensor.
 //
@@ -125,52 +62,28 @@ constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token
 //  auto a = LocalTensorAccessor<T>(tensor::my_host_declared_accessor_name); // OK
 //  auto b = TensorAccessor(tensor::my_host_declared_accessor_name);         // compile error
 template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
-struct PerNodeTensorBindingToken {
+struct PerNodeTensorBindingToken : public binding_details::TokenWithLLKMetadata {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_rta_offset = ADDR_RTA_OFFSET;  // in bytes
 
-    explicit constexpr PerNodeTensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
-
-private:
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr DataFormat get_dataformat(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_face_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-    template <uint32_t Cta, uint32_t Addr>
-    friend constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token);
-
-    binding_details::LLKMetadata llk_metadata_;
+    explicit constexpr PerNodeTensorBindingToken(binding_details::LLKMetadata llk) noexcept :
+        TokenWithLLKMetadata(llk) {}
 };
 
-// LLK metadata getters for PerNodeTensorBindingToken, as for TensorBindingToken above.
-template <uint32_t Cta, uint32_t Addr>
-constexpr DataFormat get_dataformat(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
-    return static_cast<DataFormat>(token.llk_metadata_.format);
-}
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_face_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_r_dim;
-}
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_face_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.face_c_dim;
-}
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_num_faces_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_r_dim;
-}
-template <uint32_t Cta, uint32_t Addr>
-constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
-    return token.llk_metadata_.num_faces_c_dim;
-}
+// Metadata getters for tensor binding tokens; see internal/token_with_llk_metadata.h.
+using ::get_dataformat;
+using ::get_face_c_dim;
+using ::get_face_r_dim;
+using ::get_narrow_tile;
+using ::get_num_faces_c_dim;
+using ::get_num_faces_r_dim;
+using ::get_partial_face;
+using ::get_tile_c_dim;
+using ::get_tile_hw;
+using ::get_tile_num_faces;
+using ::get_tile_r_dim;
+using ::get_tile_size;
 
 // NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
 //

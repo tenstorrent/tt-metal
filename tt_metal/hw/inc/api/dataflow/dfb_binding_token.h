@@ -8,7 +8,7 @@
 
 #include "api/dataflow/dfb_access.h"
 #include "internal/debug/node_range.h"
-#include "internal/llk_metadata.h"
+#include "internal/token_with_llk_metadata.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -33,7 +33,7 @@
 // `DataflowBuffer dfb(dfb::name)`. A plain `DFBBindingToken t{id}` is <UNKNOWN, UNKNOWN>; a
 // function parameter must spell `DFBBindingToken<P, C>` (or take the id).
 template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
-struct DFBBindingToken {
+struct DFBBindingToken : public binding_details::TokenWithLLKMetadata {
     // node_ranges: Watcher builds only, the rectangles the DFB exists on, so multicasts into it can be checked against
     // them. Either nullptr with num_node_ranges 0, or num_node_ranges ranges that outlive the token; the generated
     // bindings header passes a constexpr array.
@@ -53,7 +53,7 @@ struct DFBBindingToken {
         binding_details::LLKMetadata llk,
         const DebugNodeRange* node_ranges = nullptr,
         uint32_t num_node_ranges = 0) noexcept :
-        id_(id), llk_metadata_(llk), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
+        TokenWithLLKMetadata(llk), id_(id), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -69,83 +69,10 @@ struct DFBBindingToken {
     constexpr uint32_t num_node_ranges() const noexcept { return num_node_ranges_; }
 
 private:
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_face_r_dim(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_face_c_dim(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken<P, C>& token);
-    template <dfb::AccessPattern P, dfb::AccessPattern C>
-    friend constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token);
-
     uint16_t id_;
-    binding_details::LLKMetadata llk_metadata_{};
     const DebugNodeRange* node_ranges_ = nullptr;
     uint32_t num_node_ranges_ = 0;
 };
-
-/**
- * Extract DataFormat metadata associated with a `DFBBindingToken`.
- * This metadata is configured on the host.
- *
- * See: `DataflowBufferSpec::data_format_metadata` in the Metal host API for configuration.
- *
- * pre-condition: `DataflowBufferSpec::data_format_metadata` associated with this DFB has been set to a
- * non-empty value on the host. Missing metadata fails constant evaluation regardless of device assertion settings.
- */
-template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr DataFormat get_dataformat(const DFBBindingToken<P, C>& token) {
-    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
-        binding_details::data_format_metadata_not_set();
-    }
-    return static_cast<DataFormat>(token.llk_metadata_.format);
-}
-
-/**
- * Extract the face height (in elements) associated with a `DFBBindingToken`.
- * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
- *
- * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
- */
-template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr uint8_t get_face_r_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.face_r_dim;
-}
-
-/**
- * Extract the face width (in elements) associated with a `DFBBindingToken`.
- * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
- *
- * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
- */
-template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr uint8_t get_face_c_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.face_c_dim;
-}
-
-/**
- * Extract the number of faces along the tile's row dimension associated with a `DFBBindingToken`.
- * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
- *
- * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
- */
-template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.num_faces_r_dim;
-}
-
-/**
- * Extract the number of faces along the tile's column dimension associated with a `DFBBindingToken`.
- * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
- *
- * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
- */
-template <dfb::AccessPattern P, dfb::AccessPattern C>
-constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token) {
-    return token.llk_metadata_.num_faces_c_dim;
-}
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.
 // Distinct from DFBBindingToken so kernels cannot silently treat a normal DFB as a

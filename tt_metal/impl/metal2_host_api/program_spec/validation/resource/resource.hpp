@@ -37,6 +37,10 @@ void ValidateResourceSpecs(
 // Rules that need every kernel's bindings: shared use, endpoints, aliasing, unused declarations.
 void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch);
 
+// Checks that a resource's tile contains complete blocks for its data format.
+void ValidateResourceTileMetadata(
+    std::string_view resource_kind, std::string_view resource_name, DataFormat format, const Tile& tile);
+
 // ----------------------------------------------------------------------------
 // These are the individual validator
 // ----------------------------------------------------------------------------
@@ -98,6 +102,8 @@ void ValidateFabricConnectionBindings(const KernelSpec& kernel, tt::ARCH arch);
 void ValidateFabricConnectionsUsed(const ValidationContext& ctx);
 
 // tensor.cpp
+// Checks the storage geometry of a tensor parameter.
+void ValidateTensorParameterSpec(const TensorParameter& tensor_parameter);
 void ValidateTensorBindings(const KernelSpec& kernel);
 void ValidateTensorParametersUsed(const ValidationContext& ctx);
 void ValidatePerNodeTensorPlacement(const ValidationContext& ctx);

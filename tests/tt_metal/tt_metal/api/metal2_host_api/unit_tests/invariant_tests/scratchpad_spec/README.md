@@ -5,12 +5,17 @@ Invariants of `ScratchpadSpec` (`scratchpad_spec.hpp`) and its `ScratchpadAdvanc
 every scratchpad is bound and every binding names a declared spec are structural, and the rule of at most one
 binding kernel per node (unless multi-kernel binding is enabled) is local to `WorkUnitSpec`; both live in `../program_spec/`.
 
+The MX tile rule is covered by [resource tile metadata tests](../../resource_tile_metadata.cpp).
+
 ## Listed invariants
 
 `ScratchpadSpec` as declared in `scratchpad_spec.hpp`, with every field and only its invariants.
 
 ```cpp
 struct ScratchpadSpec {
+    // Invariant: For an MX data format, the effective tile contains a multiple of 32 elements.
+    // The effective tile is tile_format_metadata when set, or the default 32x32 tile otherwise.
+
     ScratchpadSpecName unique_id;
 
     // Invariant: Must be greater than 0.
